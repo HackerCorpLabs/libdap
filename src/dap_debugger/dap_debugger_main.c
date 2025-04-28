@@ -144,13 +144,26 @@ typedef enum {
     DAP_CLIENT_STATE_TERMINATED
 } DAPClientState;
 
-// Add debug logging function
+/**
+ * @brief Debug logging function for development and troubleshooting
+ * 
+ * This function is currently unused but kept for future debugging purposes.
+ * It will be used to implement detailed logging of debugger operations
+ * when debugging complex issues.
+ */
 static void debug_log_message(const char* prefix, const char* message) {
     if (g_client) {
         fprintf(stderr, "[DAP DEBUG] %s: %s\n", prefix, message);
     }
 }
 
+/**
+ * @brief Parse thread state from string to enum
+ * 
+ * This function is currently unused but kept for future thread state handling.
+ * It will be used to implement more sophisticated thread state management
+ * and validation in future versions.
+ */
 static DAPThreadState parse_thread_state(const char* state) {
     if (!state) return DAP_THREAD_STATE_STOPPED;
     
@@ -853,6 +866,9 @@ static int handle_shell_command(const char* command, const char* arg) {
         // Parse optional arguments
         const char* target_id = NULL;
         const char* granularity = NULL;
+        // single_thread is reserved for future use to support single-thread stepping
+        // Currently not implemented but will be used to control whether stepping affects
+        // only the current thread or all threads
         bool single_thread = false;
 
         if (arg) {

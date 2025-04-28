@@ -594,6 +594,13 @@ static int handle_restart(DAPResponse* response) {
     return 0;
 }
 
+/**
+ * @brief Handle execution control commands (continue, step, etc.)
+ * 
+ * This function is currently unused but kept for future execution control implementation.
+ * It will be used to centralize the handling of all execution control commands
+ * and provide consistent behavior across different execution modes.
+ */
 static int handle_execution_control(DAPCommandType command, cJSON* args, DAPResponse* response) {
     if (!mock_debugger.running || !mock_debugger.attached) {
         set_response_error(response, "Debugger is not running or not attached");

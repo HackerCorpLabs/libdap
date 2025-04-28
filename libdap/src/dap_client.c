@@ -1395,10 +1395,10 @@ int dap_client_get_threads(DAPClient* client, DAPThread** threads, int* count) {
                 (*threads)[i].state = DAP_THREAD_STATE_STOPPED;
             } else if (strcmp(state->valuestring, "terminated") == 0) {
                 (*threads)[i].state = DAP_THREAD_STATE_TERMINATED;
-            }
-            // Only warn for truly unknown states
-            if (strcmp(state->valuestring, "paused") != 0) {
+            } else {
+                // Only warn for truly unknown states
                 fprintf(stderr, "Warning: Unknown thread state '%s', defaulting to STOPPED\n", state->valuestring);
+                (*threads)[i].state = DAP_THREAD_STATE_STOPPED;
             }
         } else {
             // Missing state - use STOPPED as per DAP spec
@@ -1481,24 +1481,104 @@ int dap_client_get_stack_trace(DAPClient* client, int thread_id, DAPStackFrame**
 
 int dap_client_initialize(DAPClient* client) {
     if (!client) return DAP_ERROR_INVALID_ARG;
+    
+    // Create initialize arguments
     cJSON* args = cJSON_CreateObject();
     if (!args) return DAP_ERROR_MEMORY;
+    
+    // Required fields
     cJSON_AddStringToObject(args, "clientID", "nd100x-debugger");
     cJSON_AddStringToObject(args, "clientName", "ND100X Debugger");
     cJSON_AddStringToObject(args, "adapterID", "nd100x");
     cJSON_AddStringToObject(args, "pathFormat", "path");
     cJSON_AddBoolToObject(args, "linesStartAt1", true);
     cJSON_AddBoolToObject(args, "columnsStartAt1", true);
-    cJSON_AddBoolToObject(args, "supportsVariableType", true);
-    cJSON_AddBoolToObject(args, "supportsVariablePaging", true);
-    cJSON_AddBoolToObject(args, "supportsRunInTerminalRequest", false);
-    cJSON_AddBoolToObject(args, "supportsMemoryReferences", true);
-
+    
+    // Client capabilities
+    cJSON* capabilities = cJSON_CreateObject();
+    if (!capabilities) {
+        cJSON_Delete(args);
+        return DAP_ERROR_MEMORY;
+    }
+    
+    // Core capabilities
+    cJSON_AddBoolToObject(capabilities, "supportsConfigurationDoneRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsFunctionBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsConditionalBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsHitConditionalBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsEvaluateForHovers", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSetVariable", true);
+    cJSON_AddBoolToObject(capabilities, "supportsRestartFrame", true);
+    cJSON_AddBoolToObject(capabilities, "supportsGotoTargetsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsStepInTargetsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsCompletionsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsModulesRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsRestartRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionOptions", true);
+    cJSON_AddBoolToObject(capabilities, "supportsValueFormattingOptions", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionInfoRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsTerminateDebuggee", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSuspendDebuggee", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDelayedStackTraceLoading", true);
+    cJSON_AddBoolToObject(capabilities, "supportsLoadedSourcesRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsLogPoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsTerminateThreadsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSetExpression", true);
+    cJSON_AddBoolToObject(capabilities, "supportsTerminateRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDataBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsReadMemoryRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsWriteMemoryRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDisassembleRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsCancelRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsBreakpointLocationsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsClipboardContext", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSteppingGranularity", true);
+    cJSON_AddBoolToObject(capabilities, "supportsInstructionBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionFilters", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSingleThreadExecutionRequests", true);
+    
+    // Add capabilities to args
+    cJSON_AddItemToObject(args, "capabilities", capabilities);
+    
+    // Send initialize request
     char* response = NULL;
     int error = dap_client_send_request(client, DAP_CMD_INITIALIZE, args, &response);
     cJSON_Delete(args);
-    if (error != DAP_ERROR_NONE) return error;
-    if (response) free(response);
+    
+    if (error != DAP_ERROR_NONE) {
+        if (response) free(response);
+        return error;
+    }
+    
+    // Parse response
+    if (response) {
+        cJSON* json = cJSON_Parse(response);
+        if (json) {
+            cJSON* success = cJSON_GetObjectItem(json, "success");
+            if (success && cJSON_IsBool(success) && !success->valueint) {
+                cJSON* message = cJSON_GetObjectItem(json, "message");
+                if (message && cJSON_IsString(message)) {
+                    DAP_CLIENT_DEBUG_LOG("Initialize failed: %s", message->valuestring);
+                }
+                cJSON_Delete(json);
+                free(response);
+                return DAP_ERROR_REQUEST_FAILED;
+            }
+            
+            // Store server capabilities if needed
+            cJSON* body = cJSON_GetObjectItem(json, "body");
+            if (body) {
+                cJSON* server_capabilities = cJSON_GetObjectItem(body, "capabilities");
+                if (server_capabilities) {
+                    // TODO: Store server capabilities for later use
+                }
+            }
+            
+            cJSON_Delete(json);
+        }
+        free(response);
+    }
+    
     return DAP_ERROR_NONE;
 }
 
@@ -1889,7 +1969,7 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
                 }
             }
         }
-        return DAP_ERROR_INVALID_RESPONSE;
+        return DAP_ERROR_REQUEST_FAILED;
     }
 
     // Get body object first

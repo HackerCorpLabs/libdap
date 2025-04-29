@@ -8,7 +8,6 @@
 #include "dap_types.h"
 #include "dap_transport.h"
 #include "dap_protocol.h"
-#include "dap_debugger.h"
 #include <cjson/cJSON.h>
 
 #include <stdio.h>
@@ -20,12 +19,15 @@
 #include <stdint.h>
 #include <unistd.h>
 
+
+// Debug logging macro
 #define DAP_SERVER_DEBUG_LOG(...) do { \
     fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
     fprintf(stderr, __VA_ARGS__); \
     fprintf(stderr, "\n"); \
     fflush(stderr); \
 } while(0)
+
 
 #include "dap_types.h"
 #include <cjson/cJSON.h>

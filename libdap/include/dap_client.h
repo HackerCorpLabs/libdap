@@ -8,23 +8,40 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <cjson/cJSON.h>
 #include "dap_types.h"
 #include "dap_protocol.h"
 #include "dap_error.h"
+#include "dap_transport.h"
 
 /**
  * @brief DAP client structure
  */
-typedef struct DAPClient {
+typedef struct {
     char* host;              ///< Server hostname
     int port;                ///< Server port number
-    int fd;                  ///< Socket file descriptor
+    int fd;                  ///< Socket file descriptor (deprecated, kept for compatibility)
     bool connected;          ///< Connection state
-    int timeout_ms;          ///< Timeout in milliseconds
-    int seq;                 ///< Sequence number for requests
-    int thread_id;           ///< Current thread ID
+    uint32_t seq;            ///< Request sequence number
+    int timeout_ms;          ///< Timeout for requests in milliseconds
     bool debug_mode;         ///< Debug mode flag
+    char* program_path;      ///< Currently loaded program path
+    int thread_id;           ///< Current thread ID
+    DAPBreakpoint* breakpoints; ///< Array of breakpoints
+    int num_breakpoints;     ///< Number of breakpoints
+    DAPTransport* transport; ///< Transport layer for communications
+    
 } DAPClient;
+/**
+ * @brief Initialize the client structure
+ * 
+ * @param client Pointer to the client structure
+ * @param host Server hostname
+ * @param port Server port number
+ * @param timeout_ms Timeout in milliseconds
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_init(DAPClient* client, const char* host, int port, int timeout_ms);
 
 /**
  * @brief Create a new DAP client
@@ -105,6 +122,21 @@ int dap_client_set_breakpoints(DAPClient* client, const char* source_path,
                              DAPSetBreakpointsResult* result);
 
 /**
+ * @brief Set a breakpoint at a specific line
+ *
+ * This is a convenience function that wraps dap_client_set_breakpoints to set
+ * a single breakpoint at a given line in a source file.
+ *
+ * @param client Pointer to the client
+ * @param source_path Source file path
+ * @param line Line number to set breakpoint at
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_break(DAPClient* client, const char* source_path, int line, 
+                   DAPSetBreakpointsResult* result);
+
+/**
  * @brief Signal the end of configuration
  * 
  * @param client Pointer to the client
@@ -158,6 +190,24 @@ int dap_client_continue(DAPClient* client, int thread_id, bool single_thread,
  */
 int dap_client_step_in(DAPClient* client, int thread_id, const char* target_id,
                       const char* granularity, DAPStepInResult* result);
+
+/**
+ * @brief Step over (next)
+ * 
+ * Executes one step (of the specified granularity) in the current thread, stepping over
+ * function calls rather than stepping into them. The debug adapter will automatically
+ * continue until the next line of code is reached. This is commonly known as the
+ * "next" command in many debuggers.
+ *
+ * @param client Pointer to the client
+ * @param thread_id Thread ID to step
+ * @param granularity Step granularity (optional, one of "statement", "line", "instruction")
+ * @param single_thread Whether to continue only the specified thread
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_next(DAPClient* client, int thread_id, const char* granularity, 
+                   bool single_thread, DAPStepResult* result);
 
 /**
  * @brief Step out of the current function
@@ -370,6 +420,25 @@ int dap_client_write_memory(DAPClient* client, const char* memory_reference, uin
 int dap_client_disassemble(DAPClient* client, const char* memory_reference, uint64_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result);
 
 /**
+ * @brief Evaluate an expression in the debug target
+ * 
+ * @param client Pointer to the client
+ * @param expression Expression to evaluate
+ * @param frame_id Frame ID for context or 0 for global context
+ * @param context Context hint (e.g., "watch", "repl", "hover")
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_evaluate(DAPClient* client, const char* expression, int frame_id, const char* context, DAPEvaluateResult* result);
+
+/**
+ * @brief Clean up an evaluate result structure
+ * 
+ * @param result Pointer to the result structure to clean up
+ */
+void dap_evaluate_result_free(DAPEvaluateResult* result);
+
+/**
  * @brief Temporarily increase the timeout for a specific operation
  * 
  * @param client Pointer to the client
@@ -396,6 +465,44 @@ int dap_source_free(DAPSource* source);
  */
 DAPSource* dap_source_parse(cJSON* json);
 
+/**
+ * @brief Update breakpoints from server response
+ * 
+ * @param client Pointer to the client
+ * @param source_path Source file path
+ * @param server_breakpoints Array of breakpoints from server
+ * @param count Number of breakpoints
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_update_breakpoints(DAPClient* client, const char* source_path, 
+                               const DAPBreakpoint* server_breakpoints, int count);
+
+/**
+ * @brief Get a breakpoint by its ID
+ * 
+ * @param client Pointer to the client
+ * @param id Breakpoint ID to find
+ * @return DAPBreakpoint* Pointer to the found breakpoint, NULL if not found
+ */
+DAPBreakpoint* dap_client_get_breakpoint_by_id(DAPClient* client, int id);
+
+/**
+ * @brief Get breakpoints by source path
+ * 
+ * @param client Pointer to the client
+ * @param source_path Source file path
+ * @param count Pointer to store the number of breakpoints found
+ * @return DAPBreakpoint* Array of breakpoints (must be freed by caller), NULL on error
+ */
+DAPBreakpoint* dap_client_get_breakpoints_by_source(DAPClient* client, const char* source_path, int* count);
+
+/**
+ * @brief Free a DAP breakpoint structure
+ * 
+ * @param breakpoint Pointer to the breakpoint structure to free
+ */
+void dap_breakpoint_free(DAPBreakpoint* breakpoint);
+
 // Add these command types
 #define DAP_CMD_STOPPED "stopped"
 #define DAP_CMD_TERMINATED "terminated"
@@ -406,5 +513,7 @@ int dap_client_step(DAPClient* client, int thread_id, bool single_thread, DAPSte
 int dap_client_threads(DAPClient* client, DAPGetThreadsResult* result);
 int dap_client_receive_message(DAPClient* client, cJSON** message);
 int dap_client_stack_trace(DAPClient* client, int thread_id, DAPStackFrame** frames, size_t* frame_count);
+
+
 
 #endif /* DAP_CLIENT_H */ 

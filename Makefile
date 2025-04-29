@@ -29,7 +29,6 @@ LIBDAP_SOURCES = $(LIBDAP_SRC_DIR)/dap_protocol.c \
                  $(LIBDAP_SRC_DIR)/dap_error.c \
                  $(LIBDAP_SRC_DIR)/dap_transport.c \
                  $(LIBDAP_SRC_DIR)/dap_message.c \
-                 $(LIBDAP_SRC_DIR)/dap_validation.c \
 				$(LIBDAP_SRC_DIR)/dap_client.c
 
 LIBDAP_OBJECTS = $(patsubst $(LIBDAP_SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(filter $(LIBDAP_SRC_DIR)/%.c,$(LIBDAP_SOURCES)))

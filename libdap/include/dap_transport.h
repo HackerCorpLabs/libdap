@@ -8,6 +8,11 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/un.h>
+#include <netdb.h>
 
 /**
  * @brief Transport configuration
@@ -40,7 +45,8 @@ typedef struct DAPTransport {
     DAPTransportConfig config;
     int listen_fd;
     int client_fd;
-    bool is_server;
+    bool is_server;    
+    bool debuglog;
 } DAPTransport;
 
 /**
@@ -99,5 +105,13 @@ int dap_transport_receive(DAPTransport* transport, char** message);
  * @return int 0 on success, -1 on error
  */
 int dap_transport_accept(DAPTransport* transport);
+
+/**
+ * @brief Connect to a server (client-side function)
+ * 
+ * @param transport Transport instance
+ * @return int 0 on success, -1 on failure
+ */
+int dap_transport_connect(DAPTransport* transport);
 
 #endif /* ND100X_DAP_TRANSPORT_H */ 

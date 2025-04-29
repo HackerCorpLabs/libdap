@@ -7,6 +7,22 @@
 #include "../libdap/include/dap_types.h"
 #include "../libdap/include/dap_server.h"
 
+// Define MAX_BREAKPOINTS if not already defined
+#ifndef MAX_BREAKPOINTS
+#define MAX_BREAKPOINTS 100  // Maximum number of breakpoints supported
+#endif
+
+// Debug logging macro
+#define MOCK_SERVER_DEBUG_LOG(...) do { \
+    fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+    fflush(stderr); \
+} while(0)
+
+
+
+
 // Line mapping structure
 typedef struct {
     const char* file_path;
@@ -57,12 +73,19 @@ void dbg_mock_set_running(bool running);
 bool dbg_mock_is_attached(void);
 void dbg_mock_set_attached(bool attached);
 int dbg_mock_add_breakpoint(int line, int column);
+int dbg_mock_add_breakpoint_with_source(int line, int column, const char* source_path);
 int dbg_mock_remove_breakpoint(int line, int column);
 bool dbg_mock_has_breakpoint(int line, int column);
 int dbg_mock_get_breakpoint_count(void);
+
+
 DAPBreakpoint* dbg_mock_get_breakpoint(size_t index);
 
-// Command handler declarations
-int handle_pause(cJSON* args, DAPResponse* response);
+
+void cleanup_breakpoints(MockDebugger* debugger);
+void cleanup_line_maps(MockDebugger* debugger);
+void cleanup_breakpoints(MockDebugger* debugger);
+void send_launch_stopped_event(const char* program_path, cJSON* args);
+
 
 #endif // DBG_MOCK_H 

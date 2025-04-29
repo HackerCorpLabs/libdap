@@ -1,92 +1,18 @@
-#include "dap_debugger_help.h"
+
+#include "dap_debugger_types.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 
-const CommandHelpInfo command_help[] = {
-    {
-        "help",
-        "help [command]",
-        "Show help information. If a command is specified, show detailed help for that command.",
-        "N/A - This is a client-side command",
-        "N/A - This is a client-side command",
-        "N/A",
-        "help\nhelp initialize"
-    },
-    {
-        "initialize",
-        "initialize",
-        "Initialize the debug adapter. The client sends this request once as the first command to start a debug session.",
-        "Request: {\n"
-        "  \"clientID\": \"string\",\n"
-        "  \"clientName\": \"string\",\n"
-        "  \"adapterID\": \"string\",\n"
-        "  \"pathFormat\": \"path|uri\",\n"
-        "  \"linesStartAt1\": boolean,\n"
-        "  \"columnsStartAt1\": boolean,\n"
-        "  \"supportsVariableType\": boolean,\n"
-        "  \"supportsVariablePaging\": boolean,\n"
-        "  ... additional capabilities ...\n"
-        "}",
-        "Response: {\n"
-        "  \"success\": boolean,\n"
-        "  \"body\": {\n"
-        "    \"capabilities\": {\n"
-        "      \"supportsConfigurationDoneRequest\": boolean,\n"
-        "      \"supportsFunctionBreakpoints\": boolean,\n"
-        "      ... server capabilities ...\n"
-        "    }\n"
-        "  }\n"
-        "}",
-        "After Initialize:\n"
-        "- initialized: Sent by the debug adapter to the client after initialization",
-        "initialize"
-    },
-    // ... (copy all other entries from dap_debugger_main.c)
-    { .command_name = NULL }
-};
+extern const DebuggerCommand commands[];
 
-const CommandInfo commands[] = {
-    {"help", NULL, "Show this help message", CATEGORY_PROGRAM_CONTROL, true, false, NULL, NULL},
-    {"initialize", NULL, "Initialize debug session", CATEGORY_PROGRAM_CONTROL, true, false, NULL, NULL},
-    {"launch", NULL, "Launch program", CATEGORY_PROGRAM_CONTROL, true, true, "file,stop_at_entry", "Program file path,Stop at entry point"},
-    {"attach", NULL, "Attach to process", CATEGORY_PROGRAM_CONTROL, false, true, "pid,host,port", "Process ID,Host name,Port number"},
-    {"disconnect", NULL, "Disconnect from debugger", CATEGORY_PROGRAM_CONTROL, true, true, "restart,terminate", "Restart debuggee,Terminate debuggee"},
-    {"terminate", NULL, "Terminate program", CATEGORY_PROGRAM_CONTROL, true, true, "restart", "Restart debuggee"},
-    {"restart", NULL, "Restart program", CATEGORY_PROGRAM_CONTROL, true, false, NULL, NULL},
-    {"configuration-done", NULL, "Signal end of configuration", CATEGORY_PROGRAM_CONTROL, true, false, NULL, NULL},
-    {"continue", "c", "Continue execution", CATEGORY_EXECUTION_CONTROL, true, true, "thread", "Thread ID to continue"},
-    {"next", "n", "Step over", CATEGORY_EXECUTION_CONTROL, true, true, "thread,granularity", "Thread ID,Step granularity"},
-    {"step-in", "s", "Step into", CATEGORY_EXECUTION_CONTROL, true, true, "thread,target,granularity", "Thread ID,Target ID,Step granularity"},
-    {"step-out", "o", "Step out", CATEGORY_EXECUTION_CONTROL, true, true, "thread,granularity", "Thread ID,Step granularity"},
-    {"pause", NULL, "Pause execution", CATEGORY_EXECUTION_CONTROL, true, true, "thread", "Thread ID to pause"},
-    {"break", "b", "Set or list breakpoints", CATEGORY_BREAKPOINTS, true, true, "line,file,condition", "Line number,File path,Condition expression"},
-    {"clear", NULL, "Clear breakpoint at line", CATEGORY_BREAKPOINTS, true, true, "line,file", "Line number,File path"},
-    {"clear-all", NULL, "Clear all breakpoints", CATEGORY_BREAKPOINTS, true, true, "file", "File path"},
-    {"set-function-breakpoints", NULL, "Set function breakpoints", CATEGORY_BREAKPOINTS, false, true, "names", "Function names"},
-    {"set-exception-breakpoints", NULL, "Set exception breakpoints", CATEGORY_BREAKPOINTS, false, true, "filters", "Exception filters"},
-    {"stack", NULL, "Show stack trace", CATEGORY_STACK_AND_VARIABLES, true, true, "thread,start,levels", "Thread ID,Start frame,Number of levels"},
-    {"scopes", NULL, "Show scopes", CATEGORY_STACK_AND_VARIABLES, true, true, "frame", "Frame ID"},
-    {"variables", NULL, "Show variables in current scope", CATEGORY_STACK_AND_VARIABLES, true, true, "reference,start,count", "Variables reference,Start index,Count"},
-    {"set-variable", NULL, "Set variable value", CATEGORY_STACK_AND_VARIABLES, true, true, "reference,name,value", "Variables reference,Variable name,New value"},
-    {"source", NULL, "Show source code", CATEGORY_SOURCE, true, true, "path,reference", "Source path,Source reference"},
-    {"loaded-sources", NULL, "List loaded sources", CATEGORY_SOURCE, true, false, NULL, NULL},
-    {"threads", NULL, "List threads", CATEGORY_THREADS, true, false, NULL, NULL},
-    {"evaluate", NULL, "Evaluate expression", CATEGORY_EVALUATION, true, true, "expression,frame,context", "Expression to evaluate,Frame ID,Evaluation context"},
-    {"set-expression", NULL, "Set expression value", CATEGORY_EVALUATION, true, true, "expression,value,frame", "Expression to set,New value,Frame ID"},
-    {"read-memory", NULL, "Read memory at address", CATEGORY_MEMORY, true, true, "reference,offset,count", "Memory reference,Offset,Byte count"},
-    {"write-memory", NULL, "Write memory at address", CATEGORY_MEMORY, true, true, "reference,offset,data", "Memory reference,Offset,Data to write"},
-    {"disassemble", NULL, "Disassemble code at address", CATEGORY_DISASSEMBLY, true, true, "reference,offset,count", "Memory reference,Offset,Instruction count"},
-    {"read-registers", NULL, "Read register values", CATEGORY_REGISTERS, true, false, NULL, NULL},
-    {"write-registers", NULL, "Write register values", CATEGORY_REGISTERS, true, true, "registers", "Register values"},
-    {"quit", "q", "Exit debugger", CATEGORY_OTHER, true, false, NULL, NULL},
-    {NULL, NULL, NULL, CATEGORY_OTHER, false, false, NULL, NULL}
-};
-
+// Helper function to create a string of repeated characters
 char* str_repeat(char c, int count) {
-    static char buffer[256];
-    memset(buffer, c, count);
-    buffer[count] = '\0';
+    char* buffer = malloc(count + 1);
+    if (buffer) {
+        memset(buffer, c, count);
+        buffer[count] = '\0';
+    }
     return buffer;
 }
 
@@ -98,18 +24,31 @@ const char* category_to_text(CommandCategory category) {
         case CATEGORY_STACK_AND_VARIABLES: return "Stack and Variables";
         case CATEGORY_SOURCE: return "Source";
         case CATEGORY_THREADS: return "Threads";
-        case CATEGORY_EVALUATION: return "Evaluation";
-        case CATEGORY_MEMORY: return "Memory";
         case CATEGORY_DISASSEMBLY: return "Disassembly";
-        case CATEGORY_REGISTERS: return "Registers";
         case CATEGORY_OTHER: return "Other";
         default: return "Unknown";
     }
 }
 
 void print_shell_help(void) {
-    printf("\nDebugger Commands:\n");
-    printf("=================\n\n");
+    printf("\nDebugger Commands\n");
+    printf("================\n\n");
+    
+    // Print quick reference first
+    printf("Quick Reference:\n");
+    printf("---------------\n");
+    for (int i = 0; commands[i].name; i++) {
+        printf("  %-15s", commands[i].name);
+        if (commands[i].alias) {
+            printf("(%s)", commands[i].alias);
+        } else {
+            printf("    ");
+        }
+        printf(" %s\n", commands[i].description);
+    }
+    printf("\n");
+
+    // Print detailed command categories
     for (CommandCategory category = 0; category < CATEGORY_COUNT; category++) {
         bool has_commands = false;
         for (int i = 0; commands[i].name; i++) {
@@ -119,34 +58,133 @@ void print_shell_help(void) {
             }
         }
         if (!has_commands) continue;
+
         const char* category_name = category_to_text(category);
-        printf("%s:\n", category_name);
-        printf("%s\n", str_repeat('-', strlen(category_name) + 1));
+        printf("%s Commands:\n", category_name);
+        printf("%s\n", str_repeat('-', strlen(category_name) + 10));
+        
         for (int i = 0; commands[i].name; i++) {
             if (commands[i].category == category) {
-                printf("  %-25s %-5s %s %s\n",
-                       commands[i].name,
-                       commands[i].alias ? commands[i].alias : "",
-                       commands[i].implemented ? "✓" : " ",
-                       commands[i].description);
-                if (commands[i].has_options && commands[i].option_types) {
-                    printf("    Options:\n");
-                    char* types = strdup(commands[i].option_types);
-                    char* descs = strdup(commands[i].option_descriptions);
-                    char* type = strtok(types, ",");
-                    char* desc = strtok(descs, ",");
-                    while (type && desc) {
-                        printf("      %-15s %s\n", type, desc);
-                        type = strtok(NULL, ",");
-                        desc = strtok(NULL, ",");
-                    }
-                    free(types);
-                    free(descs);
+                printf("  %-15s", commands[i].name);
+                if (commands[i].alias) {
+                    printf("(%s)", commands[i].alias);
+                } else {
+                    printf("    ");
                 }
+                printf(" %s\n", commands[i].description);
             }
         }
         printf("\n");
     }
-    printf("Debugger status: (see main)\n");
-    printf("Note: Commands marked with ✓ are implemented\n");
+    
+    printf("Use 'help <command>' for detailed help on a specific command\n");
+}
+
+const DebuggerCommand* find_command(const char* name) {
+    if (!name) return NULL;
+    
+    // Try exact match first
+    for (int i = 0; commands[i].name; i++) {
+        if (strcasecmp(commands[i].name, name) == 0) {
+            return &commands[i];
+        }
+        if (commands[i].alias && strcasecmp(commands[i].alias, name) == 0) {
+            return &commands[i];
+        }
+    }
+    
+    // Try partial match
+    const DebuggerCommand* partial_match = NULL;
+    for (int i = 0; commands[i].name; i++) {
+        if (strncasecmp(commands[i].name, name, strlen(name)) == 0) {
+            if (!partial_match) {
+                partial_match = &commands[i];
+            } else {
+                // Multiple matches found
+                return NULL;
+            }
+        }
+        if (commands[i].alias && strncasecmp(commands[i].alias, name, strlen(name)) == 0) {
+            if (!partial_match) {
+                partial_match = &commands[i];
+            } else {
+                // Multiple matches found
+                return NULL;
+            }
+        }
+    }
+    
+    return partial_match;
+}
+
+void print_command_help(const char* command_name) {
+    const DebuggerCommand* cmd = find_command(command_name);
+    if (!cmd) {
+        printf("Unknown command: %s\n", command_name);
+        return;
+    }
+
+    // Print command name and alias
+    printf("\nCommand: %s", cmd->name);
+    if (cmd->alias) {
+        printf(" (alias: %s)", cmd->alias);
+    }
+    printf("\n");
+
+    // Print description
+    if (cmd->description) {
+        printf("Description: %s\n", cmd->description);
+    }
+
+    // Print syntax
+    if (cmd->syntax) {
+        printf("Syntax: %s\n", cmd->syntax);
+    }
+
+    // Print parameters if available
+    if (cmd->has_options && cmd->option_types && cmd->option_descriptions) {
+        char* types = strdup(cmd->option_types);
+        char* descs = strdup(cmd->option_descriptions);
+        char* type_token = strtok(types, "|");
+        char* desc_token = strtok(descs, "|");
+        
+        printf("\nParameters:\n");
+        while (type_token && desc_token) {
+            printf("  %-15s %s\n", type_token, desc_token);
+            type_token = strtok(NULL, "|");
+            desc_token = strtok(NULL, "|");
+        }
+        
+        free(types);
+        free(descs);
+    }
+
+    // Print examples if available
+    if (cmd->examples) {
+        char* examples = strdup(cmd->examples);
+        char* example = strtok(examples, "|");
+        char* description = strtok(NULL, "|");
+        
+        printf("\nExamples:\n");
+        while (example && description) {
+            printf("  %-30s # %s\n", example, description);
+            example = strtok(NULL, "|");
+            description = strtok(NULL, "|");
+        }
+        
+        free(examples);
+    }
+
+    // Print request/response format if available
+    if (cmd->request_format) {
+        printf("\nRequest Format:\n%s\n", cmd->request_format);
+    }
+    if (cmd->response_format) {
+        printf("\nResponse Format:\n%s\n", cmd->response_format);
+    }
+
+    // Print related events if available
+    if (cmd->events) {
+        printf("\nRelated Events:\n%s\n", cmd->events);
+    }
 } 

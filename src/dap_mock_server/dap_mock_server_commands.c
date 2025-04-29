@@ -1,0 +1,2288 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <stdarg.h>  // For va_list, va_start, va_end
+
+#include "dap_mock_server.h"
+#include "dap_mock_server_commands.h"
+
+
+
+
+
+
+#define DAP_EVENT_STOPPED DAP_EVENT_STOPPED
+#define DAP_EVENT_CONTINUED DAP_EVENT_OUTPUT
+#define DAP_EVENT_EXITED DAP_EVENT_EXITED
+#define DAP_EVENT_TERMINATED DAP_EVENT_TERMINATED
+#define DAP_EVENT_NONE DAP_EVENT_INVALID
+
+
+
+
+// Breakpoint structure
+typedef struct {
+    char* file_path;
+    int line;
+    bool verified;
+} Breakpoint;
+
+// Register structure and list
+typedef struct {
+    const char* name;
+    uint16_t value;
+    const char* type;
+    bool has_nested;  // Whether this register has nested variables (like status flags)
+    int nested_ref;   // Reference number for nested variables
+} Register;
+
+// Status flag structure
+typedef struct {
+    const char* name;
+    bool value;
+    const char* type;
+} StatusFlag;
+
+
+// Define status flags for the status register
+static StatusFlag status_flags[] = {
+    { "PTM",  false, "flag" },  // Page Table Flag
+    { "TG",   false, "flag" },  // Floating point rounding flag
+    { "K",    false, "flag" },  // Accumulator
+    { "Z",    false, "flag" },  // Error flag
+    { "Q",    false, "flag" },  // Dynamic overflow flag
+    { "O",    false, "flag" },  // Static overflow flag
+    { "C",    false, "flag" },  // Carry flag
+    { "M",    false, "flag" },  // Multi-shift link flag
+    { "PIL",  0,     "level" }, // Program Level (4 bits)
+    { "N100", true,  "flag" },  // ND-100 flag (always 1)
+    { "SEXI", false, "flag" },  // Memory management extended mode
+    { "PONI", false, "flag" },  // Memory management ON flag
+    { "IONI", false, "flag" }   // Interrupt system ON flag
+};
+
+#define NUM_STATUS_FLAGS (sizeof(status_flags) / sizeof(StatusFlag))
+
+// Define CPU registers for ND-100
+static Register cpu_registers[] = {
+    { "STS", 0x0000, "bitmask", true, 1001 },  // Status register with nested flags
+    { "D",   0x0000, "integer", false, 0 },    // Data register
+    { "P",   0x1000, "integer", false, 0 },    // Program counter
+    { "B",   0x0000, "integer", false, 0 },    // Base register
+    { "L",   0x0000, "integer", false, 0 },    // Link register
+    { "A",   0x0000, "integer", false, 0 },    // Accumulator
+    { "T",   0x0000, "integer", false, 0 },    // Temporary register
+    { "X",   0x0000, "integer", false, 0 }     // Index register
+};
+
+#define NUM_REGISTERS (sizeof(cpu_registers) / sizeof(Register))
+
+// Define internal registers for read
+static Register internal_read_registers[] = {
+    { "PANC", 0x0000, "octal", false, 0 },  // Panel control
+    { "STS",  0x0001, "octal", false, 0 },  // Status register
+    { "LMP",  0x0002, "octal", false, 0 },  // Panel data display buffer register
+    { "PCR",  0x0003, "octal", false, 0 },  // Paging control register
+    { "IIE",  0x0005, "octal", false, 0 },  // Internal interrupt enable register
+    { "PID",  0x0006, "octal", false, 0 },  // Priority interrupt detect register
+    { "PIE",  0x0007, "octal", false, 0 },  // Priority interrupt enable register
+    { "CCL",  0x0010, "octal", false, 0 },  // Cache clear register
+    { "LCIL", 0x0011, "octal", false, 0 },  // Lower cache inhibit limit register
+    { "UCIL", 0x0012, "octal", false, 0 },  // Upper cache inhibit limit register
+    { "CILP", 0x0013, "octal", false, 0 },  // Cache inhibit page register
+    { "ECCR", 0x0015, "octal", false, 0 },  // Error correction control register
+    { "CS",   0x0017, "octal", false, 0 }   // Control Store
+};
+
+#define NUM_INTERNAL_READ_REGISTERS (sizeof(internal_read_registers) / sizeof(Register))
+
+// Define internal registers for write
+static Register internal_write_registers[] = {
+    { "PANS", 0x0000, "octal", false, 0 },  // Panel status
+    { "STS",  0x0001, "octal", false, 0 },  // Status register
+    { "OPR",  0x0002, "octal", false, 0 },  // Operator's panel switch register
+    { "PSR",  0x0003, "octal", false, 0 },  // Paging status register
+    { "PVL",  0x0004, "octal", false, 0 },  // Previous level code register
+    { "IIC",  0x0005, "octal", false, 0 },  // Internal interrupt code register
+    { "PID",  0x0006, "octal", false, 0 },  // Priority interrupt detect register
+    { "PIE",  0x0007, "octal", false, 0 },  // Priority enable detect register
+    { "CSR",  0x0010, "octal", false, 0 },  // Cache status register
+    { "ACTL", 0x0011, "octal", false, 0 },  // Active level register
+    { "ALD",  0x0012, "octal", false, 0 },  // Automatic load descriptor
+    { "PES",  0x0013, "octal", false, 0 },  // Parity error status register
+    { "PGC",  0x0014, "octal", false, 0 },  // Paging control register
+    { "PEA",  0x0015, "octal", false, 0 },  // Parity error address register
+    { "CS",   0x0017, "octal", false, 0 }   // Control store
+};
+
+#define NUM_INTERNAL_WRITE_REGISTERS (sizeof(internal_write_registers) / sizeof(Register))
+
+
+
+// Implement missing functions
+// int handle_evaluate(cJSON* args, DAPResponse* response) { ... }
+// int handle_set_variable(cJSON* args, DAPResponse* response) { ... }
+// int handle_set_expression(cJSON* args, DAPResponse* response) { ... }
+// int handle_loaded_sources(cJSON* args, DAPResponse* response) { ... }
+// int handle_modules(cJSON* args, DAPResponse* response) { ... }
+// int handle_disassemble(cJSON* args, DAPResponse* response) { ... }
+// int handle_step_back(cJSON* args, DAPResponse* response) { ... }
+// int handle_set_instruction_breakpoints(cJSON* args, DAPResponse* response) { ... }
+// int handle_set_data_breakpoints(cJSON* args, DAPResponse* response) { ... }
+// int handle_exception_info(cJSON* args, DAPResponse* response) { ... }
+
+
+
+
+// Helper functions for response handling
+void set_response_error(DAPResponse* response, const char* error_message) {
+    if (response) {
+        response->success = false;
+        response->error_message = strdup(error_message);
+        response->data = NULL;
+        response->data_size = 0;
+    }
+}
+
+void set_response_success(DAPResponse* response, cJSON* body) {
+    if (response) {
+        response->success = true;
+        response->error_message = NULL;
+        if (body) {
+            response->data = cJSON_PrintUnformatted(body);
+            response->data_size = strlen(response->data);
+        } else {
+            response->data = NULL;
+            response->data_size = 0;
+        }
+    }
+}
+
+int handle_initialize(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+
+    if (!response) {
+        return -1;
+    }
+
+    cJSON* capabilities = cJSON_CreateObject();
+    if (!capabilities) {
+        set_response_error(response, "Failed to create capabilities object");
+        return -1;
+    }
+
+    // Set supported capabilities
+    cJSON_AddBoolToObject(capabilities, "supportsConfigurationDoneRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsFunctionBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsConditionalBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsHitConditionalBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsEvaluateForHovers", true);
+    cJSON_AddBoolToObject(capabilities, "supportsStepBack", false);
+    cJSON_AddBoolToObject(capabilities, "supportsSetVariable", true);
+    cJSON_AddBoolToObject(capabilities, "supportsRestartFrame", false);
+    cJSON_AddBoolToObject(capabilities, "supportsGotoTargetsRequest", false);
+    cJSON_AddBoolToObject(capabilities, "supportsStepInTargetsRequest", false);
+    cJSON_AddBoolToObject(capabilities, "supportsCompletionsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsModulesRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsRestartRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionOptions", true);
+    cJSON_AddBoolToObject(capabilities, "supportsValueFormattingOptions", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionInfoRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportTerminateDebuggee", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDelayedStackTraceLoading", true);
+    cJSON_AddBoolToObject(capabilities, "supportsLoadedSourcesRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsLogPoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsTerminateThreadsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSetExpression", true);
+    cJSON_AddBoolToObject(capabilities, "supportsTerminateRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDataBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsReadMemoryRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsWriteMemoryRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsDisassembleRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsCancelRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsBreakpointLocationsRequest", true);
+    cJSON_AddBoolToObject(capabilities, "supportsClipboardContext", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSteppingGranularity", true);
+    cJSON_AddBoolToObject(capabilities, "supportsInstructionBreakpoints", true);
+    cJSON_AddBoolToObject(capabilities, "supportsExceptionFilterOptions", true);
+    cJSON_AddBoolToObject(capabilities, "supportsSingleThreadExecutionRequests", true);
+
+    set_response_success(response, capabilities);
+    cJSON_Delete(capabilities);
+    return 0;
+}
+
+
+
+// Update add_breakpoint to use MockDebugger
+void add_breakpoint(const char* file_path, int line) {
+    // Check if breakpoint already exists
+    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
+        if (mock_debugger.breakpoints[i].source && 
+            strcmp(mock_debugger.breakpoints[i].source->path, file_path) == 0 && 
+            mock_debugger.breakpoints[i].line == line) {
+            return; // Breakpoint already exists
+        }
+    }
+
+    // Resize array if needed
+    if (mock_debugger.breakpoint_count >= MAX_BREAKPOINTS) {
+        return;
+    }
+
+    DAPBreakpoint* new_breakpoints = realloc(mock_debugger.breakpoints, 
+                                           (mock_debugger.breakpoint_count + 1) * sizeof(DAPBreakpoint));
+    if (!new_breakpoints) {
+        return;
+    }
+
+    mock_debugger.breakpoints = new_breakpoints;
+    mock_debugger.breakpoints[mock_debugger.breakpoint_count].line = line;
+    mock_debugger.breakpoints[mock_debugger.breakpoint_count].column = 0;
+    mock_debugger.breakpoints[mock_debugger.breakpoint_count].verified = true;
+    
+    // Set the source
+    DAPSource* bp_source = malloc(sizeof(DAPSource));
+    if (bp_source) {
+        bp_source->path = strdup(file_path);
+        mock_debugger.breakpoints[mock_debugger.breakpoint_count].source = bp_source;
+    }
+    
+    mock_debugger.breakpoint_count++;
+}
+
+// Update remove_breakpoints to use MockDebugger
+void remove_breakpoints(const char* file_path) {
+    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
+        if (mock_debugger.breakpoints[i].source && 
+            strcmp(mock_debugger.breakpoints[i].source->path, file_path) == 0) {
+            // Free the source
+            if (mock_debugger.breakpoints[i].source) {
+                free(mock_debugger.breakpoints[i].source->path);
+                free(mock_debugger.breakpoints[i].source);
+            }
+            
+            // Move last breakpoint to this position
+            if (i < mock_debugger.breakpoint_count - 1) {
+                mock_debugger.breakpoints[i] = mock_debugger.breakpoints[mock_debugger.breakpoint_count - 1];
+            }
+            mock_debugger.breakpoint_count--;
+            i--; // Check this position again
+        }
+    }
+}
+
+// Update get_breakpoints_for_file to use MockDebugger
+cJSON* get_breakpoints_for_file(const char* file_path) {
+    cJSON* breakpoints = cJSON_CreateArray();
+    if (!breakpoints) return NULL;
+
+    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
+        if (mock_debugger.breakpoints[i].source && 
+            strcmp(mock_debugger.breakpoints[i].source->path, file_path) == 0) {
+            cJSON* bp = cJSON_CreateObject();
+            if (bp) {
+                cJSON_AddNumberToObject(bp, "line", mock_debugger.breakpoints[i].line);
+                cJSON_AddBoolToObject(bp, "verified", mock_debugger.breakpoints[i].verified);
+                cJSON_AddItemToArray(breakpoints, bp);
+            }
+        }
+    }
+
+    return breakpoints;
+}
+
+// Add helper function for line mapping
+int get_line_for_address(uint32_t address) {
+    for (int i = 0; i < mock_debugger.line_map_count; i++) {
+        if (mock_debugger.line_maps[i].address == address) {
+            return mock_debugger.line_maps[i].line;
+        }
+    }
+    return -1;
+}
+
+// Fix pointer type in add_line_map
+void add_line_map(const char* file_path, int line, uint32_t address) {
+    if (mock_debugger.line_map_count >= mock_debugger.line_map_capacity) {
+        size_t new_capacity = mock_debugger.line_map_capacity == 0 ? 16 : mock_debugger.line_map_capacity * 2;
+        SourceLineMap* new_maps = realloc(mock_debugger.line_maps, new_capacity * sizeof(SourceLineMap));
+        if (!new_maps) {
+            return;
+        }
+        mock_debugger.line_maps = new_maps;
+        mock_debugger.line_map_capacity = new_capacity;
+    }
+
+    mock_debugger.line_maps[mock_debugger.line_map_count].file_path = strdup(file_path);
+    mock_debugger.line_maps[mock_debugger.line_map_count].line = line;
+    mock_debugger.line_maps[mock_debugger.line_map_count].address = address;
+    mock_debugger.line_map_count++;
+}
+
+int handle_launch(cJSON* args, DAPResponse* response) {
+    if (!response || !args) {
+        MOCK_SERVER_DEBUG_LOG("Error: Invalid arguments");
+        set_response_error(response, "Invalid arguments");
+        return 0;
+    }
+
+    MOCK_SERVER_DEBUG_LOG("Handling launch request");
+
+    // Get program path from arguments
+    cJSON* program = cJSON_GetObjectItem(args, "program");
+    if (!program || !cJSON_IsString(program)) {
+        MOCK_SERVER_DEBUG_LOG("Error: Missing or invalid program path");
+        set_response_error(response, "Missing or invalid program path");
+        return 0;
+    }
+
+    // Get working directory if specified
+    cJSON* cwd = cJSON_GetObjectItem(args, "cwd");
+    char* source_path = NULL;
+    char* executable_path = NULL;
+    
+    if (cwd && cJSON_IsString(cwd)) {
+        if (chdir(cwd->valuestring) != 0) {
+            MOCK_SERVER_DEBUG_LOG("Error: Failed to change working directory to %s: %s", 
+                cwd->valuestring, strerror(errno));
+            set_response_error(response, "Failed to change working directory");
+            return 0;
+        }
+        MOCK_SERVER_DEBUG_LOG("Changed working directory to %s", cwd->valuestring);
+    }
+
+    // Check if the provided path is a source file
+    const char* ext = strrchr(program->valuestring, '.');
+    bool is_source_file = (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 || 
+                                  strcmp(ext, ".h") == 0 || strcmp(ext, ".hpp") == 0 ||
+                                  strcmp(ext, ".cc") == 0 || strcmp(ext, ".hh") == 0));
+    
+    if (is_source_file) {
+        source_path = strdup(program->valuestring);
+        // In a real implementation, we would compile the source file
+        // For mock server, we'll just use the source file as the program
+        executable_path = strdup(program->valuestring);
+    } else {
+        executable_path = strdup(program->valuestring);
+        source_path = strdup(program->valuestring);
+    }
+    
+    if (!source_path || !executable_path) {
+        MOCK_SERVER_DEBUG_LOG("Error: Failed to allocate memory for paths");
+        set_response_error(response, "Failed to allocate memory for paths");
+        free(source_path);
+        free(executable_path);
+        return 0;
+    }
+    
+    // Check for stopAtEntry flag
+    bool shouldStopAtEntry = true;  // Default to stopping at entry
+    cJSON* stopAtEntry = cJSON_GetObjectItem(args, "stopOnEntry");
+    if (stopAtEntry && cJSON_IsBool(stopAtEntry)) {
+        shouldStopAtEntry = cJSON_IsTrue(stopAtEntry);
+    }
+    
+    // Get program arguments
+    cJSON* args_json = cJSON_GetObjectItem(args, "args");
+    cJSON* env = cJSON_GetObjectItem(args, "env");
+
+    // Create success response
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        MOCK_SERVER_DEBUG_LOG("Error: Failed to create response body");
+        set_response_error(response, "Failed to create response body");
+        free(source_path);
+        free(executable_path);
+        return 0;
+    }
+
+    cJSON_AddStringToObject(body, "program", executable_path);
+    cJSON_AddStringToObject(body, "source", source_path);
+    cJSON_AddBoolToObject(body, "stopAtEntry", shouldStopAtEntry);
+    
+    // Add optional arguments to response
+    if (args_json) cJSON_AddItemToObject(body, "args", cJSON_Duplicate(args_json, 1));
+    if (env) cJSON_AddItemToObject(body, "env", cJSON_Duplicate(env, 1));
+    if (cwd) cJSON_AddItemToObject(body, "cwd", cJSON_Duplicate(cwd, 1));
+
+    // Set debugger state
+    mock_debugger.running = true;
+    mock_debugger.attached = true;
+    mock_debugger.paused = true;
+    
+    if (mock_debugger.program_path) {
+        free((void*)mock_debugger.program_path);
+    }
+    
+    mock_debugger.program_path = strdup(executable_path);
+    if (!mock_debugger.program_path) {
+        MOCK_SERVER_DEBUG_LOG("Error: Failed to store program path");
+        set_response_error(response, "Failed to store program path");
+        cJSON_Delete(body);
+        free(source_path);
+        free(executable_path);
+        return 0;
+    }
+    
+    // Clean up old source info
+    if (mock_debugger.current_source) {
+        if (mock_debugger.current_source->path) {
+            free((void*)mock_debugger.current_source->path);
+        }
+        if (mock_debugger.current_source->name) {
+            free((void*)mock_debugger.current_source->name);
+        }
+        free((void*)mock_debugger.current_source);
+        mock_debugger.current_source = NULL;
+    }
+    
+    // Create and set current source information
+    DAPSource* source = malloc(sizeof(DAPSource));
+    if (source) {
+        memset(source, 0, sizeof(DAPSource));
+        source->path = strdup(source_path);
+        
+        // Extract filename from path
+        const char* filename = strrchr(source_path, '/');
+        if (filename) {
+            source->name = strdup(filename + 1);
+        } else {
+            source->name = strdup(source_path);
+        }
+        
+        source->presentation_hint = DAP_SOURCE_PRESENTATION_NORMAL;
+        source->origin = DAP_SOURCE_ORIGIN_UNKNOWN;
+        
+        mock_debugger.current_source = source;
+        mock_debugger.current_line = 1;  // Start at line 1
+        mock_debugger.current_column = 1;  // Start at column 1
+    }
+
+    // Set success response
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    
+    MOCK_SERVER_DEBUG_LOG("Launch response prepared for program: %s", executable_path);
+    MOCK_SERVER_DEBUG_LOG("Response success: %s, data: %s", 
+           response->success ? "true" : "false", 
+           response->data ? response->data : "null");
+
+    // Free allocated memory after it's no longer needed
+    free(source_path);
+    free(executable_path);
+
+    return 0;
+}
+
+
+int handle_attach(cJSON* args, DAPResponse* response) {
+    cJSON* pid = cJSON_GetObjectItem(args, "pid");
+    if (!pid || !cJSON_IsNumber(pid)) {
+        response->success = false;
+        response->error_message = strdup("Missing or invalid process ID");
+        return 0;
+    }
+
+    mock_debugger.running = true;
+    mock_debugger.attached = true;
+    mock_debugger.paused = true;
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+int handle_disconnect(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+
+    printf("Disconnecting from debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+int handle_terminate(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+
+    printf("Terminating debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+int handle_restart(cJSON* args,DAPResponse* response) {
+    (void)args;  // Mark as unused
+
+    printf("Restarting debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+/**
+ * @brief Handle execution control commands (continue, step, etc.)
+ * 
+ * This function is currently unused but kept for future execution control implementation.
+ * It will be used to centralize the handling of all execution control commands
+ * and provide consistent behavior across different execution modes.
+ */
+int handle_execution_control(DAPCommandType command, cJSON* args, DAPResponse* response) {
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        set_response_error(response, "Debugger is not running or not attached");
+        return -1;
+    }
+
+    // Parse thread ID and single_thread flag
+    int thread_id = 1;  // Default to thread 1
+    bool single_thread = false;
+
+    if (args) {
+        cJSON* thread_id_json = cJSON_GetObjectItem(args, "threadId");
+        if (thread_id_json && cJSON_IsNumber(thread_id_json)) {
+            thread_id = thread_id_json->valueint;
+        }
+
+        cJSON* single_thread_json = cJSON_GetObjectItem(args, "singleThread");
+        if (single_thread_json && cJSON_IsBool(single_thread_json)) {
+            single_thread = cJSON_IsTrue(single_thread_json);
+        }
+    }
+
+    // Validate thread ID
+    if (thread_id != 1) {
+        set_response_error(response, "Invalid thread ID - only thread 1 is supported");
+        return -1;
+    }
+
+    // Handle different commands
+    switch (command) {
+        case DAP_CMD_PAUSE:
+            if (!mock_debugger.paused) {
+                mock_debugger.paused = true;
+                // If single_thread is true, only pause the specified thread
+                if (single_thread && thread_id != mock_debugger.current_thread) {
+                    set_response_error(response, "Cannot pause non-current thread in single-thread mode");
+                    return -1;
+                }
+
+                // Create success response with thread information
+                cJSON* body = cJSON_CreateObject();
+                if (!body) {
+                    set_response_error(response, "Failed to create response body");
+                    return -1;
+                }
+
+                cJSON_AddNumberToObject(body, "threadId", thread_id);
+                cJSON_AddStringToObject(body, "reason", "pause");
+                cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+
+                set_response_success(response, body);
+                cJSON_Delete(body);
+
+                // Send stopped event according to DAP spec
+                DAPServer* server = (DAPServer*)mock_debugger.server;
+                if (server && server->config.callbacks.handle_event) {
+                    cJSON* event_body = cJSON_CreateObject();
+                    if (event_body) {
+                        cJSON_AddNumberToObject(event_body, "threadId", thread_id);
+                        cJSON_AddStringToObject(event_body, "reason", "pause");
+                        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+                        
+                        char* event_body_str = cJSON_PrintUnformatted(event_body);
+                        if (event_body_str) {
+                            server->config.callbacks.handle_event(server->config.user_data,
+                                                               DAP_EVENT_STOPPED,
+                                                               event_body_str);
+                            free(event_body_str);
+                        }
+                        cJSON_Delete(event_body);
+                    }
+                }
+                return 0;
+            }
+            set_response_error(response, "Debugger is already paused");
+            return -1;
+        
+        case DAP_CMD_CONTINUE:
+        case DAP_CMD_NEXT:
+        case DAP_CMD_STEP_IN:
+        case DAP_CMD_STEP_OUT:
+            if (mock_debugger.paused) {
+                // If single_thread is true, only continue the specified thread
+                if (single_thread && thread_id != mock_debugger.current_thread) {
+                    set_response_error(response, "Cannot continue non-current thread in single-thread mode");
+                    return -1;
+                }
+                mock_debugger.paused = false;
+                set_response_success(response, NULL);
+                return 0;
+            }
+            set_response_error(response, "Debugger is not paused");
+            return -1;
+
+        default:
+            set_response_error(response, "Unsupported execution control command");
+            return -1;
+    }
+}
+
+int handle_set_breakpoints(cJSON* args, DAPResponse* response) {
+    if (!args || !response) {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    // Get source file path
+    cJSON* source = cJSON_GetObjectItem(args, "source");
+    if (!source) {
+        set_response_error(response, "Missing source in arguments");
+        return -1;
+    }
+
+    cJSON* path = cJSON_GetObjectItem(source, "path");
+    if (!path || !cJSON_IsString(path)) {
+        set_response_error(response, "Invalid source path");
+        return -1;
+    }
+
+    const char* source_path = path->valuestring;
+    
+    // Get breakpoints array
+    cJSON* breakpoints = cJSON_GetObjectItem(args, "breakpoints");
+    if (!breakpoints || !cJSON_IsArray(breakpoints)) {
+        set_response_error(response, "Invalid breakpoints array");
+        return -1;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    cJSON* response_breakpoints = cJSON_CreateArray();
+    if (!response_breakpoints) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create breakpoints array");
+        return -1;
+    }
+
+    // First, clear all existing breakpoints for this source file
+    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
+        if (mock_debugger.breakpoints[i].source && 
+            mock_debugger.breakpoints[i].source->path &&
+            strcmp(mock_debugger.breakpoints[i].source->path, source_path) == 0) {
+            
+            // Free memory for the source
+            free(mock_debugger.breakpoints[i].source->path);
+            free(mock_debugger.breakpoints[i].source);
+            mock_debugger.breakpoints[i].source = NULL;
+            
+            // Mark for deletion (we'll handle actual deletion after the loop)
+            mock_debugger.breakpoints[i].id = 0;
+        }
+    }
+
+    // Remove marked breakpoints
+    int i = 0;
+    while (i < mock_debugger.breakpoint_count) {
+        if (mock_debugger.breakpoints[i].id == 0) {
+            // Move last breakpoint to this position
+            if (i < mock_debugger.breakpoint_count - 1) {
+                mock_debugger.breakpoints[i] = mock_debugger.breakpoints[mock_debugger.breakpoint_count - 1];
+            }
+            mock_debugger.breakpoint_count--;
+        } else {
+            i++;
+        }
+    }
+
+    // Process each breakpoint
+    int num_breakpoints = cJSON_GetArraySize(breakpoints);
+    for (int i = 0; i < num_breakpoints; i++) {
+        cJSON* bp = cJSON_GetArrayItem(breakpoints, i);
+        if (!bp) continue;
+
+        cJSON* line = cJSON_GetObjectItem(bp, "line");
+        if (!line || !cJSON_IsNumber(line)) continue;
+
+        int line_num = line->valueint;
+        if (line_num < 0) continue;
+
+        cJSON* column = cJSON_GetObjectItem(bp, "column");
+        int column_num = column && cJSON_IsNumber(column) ? column->valueint : 0;
+
+        cJSON* condition = cJSON_GetObjectItem(bp, "condition");
+        const char* condition_str = condition && cJSON_IsString(condition) ? condition->valuestring : NULL;
+
+        cJSON* hit_condition = cJSON_GetObjectItem(bp, "hitCondition");
+        const char* hit_condition_str = hit_condition && cJSON_IsString(hit_condition) ? hit_condition->valuestring : NULL;
+
+        cJSON* log_message = cJSON_GetObjectItem(bp, "logMessage");
+        const char* log_message_str = log_message && cJSON_IsString(log_message) ? log_message->valuestring : NULL;
+
+        // Allocate a new breakpoint
+        if (mock_debugger.breakpoint_count >= MAX_BREAKPOINTS) {
+            continue;
+        }
+
+        // Reallocate breakpoints array if needed
+        DAPBreakpoint* new_breakpoints = realloc(mock_debugger.breakpoints, 
+                                              (mock_debugger.breakpoint_count + 1) * sizeof(DAPBreakpoint));
+        if (!new_breakpoints) {
+            continue;
+        }
+
+        mock_debugger.breakpoints = new_breakpoints;
+        
+        // Initialize new breakpoint
+        int bp_idx = mock_debugger.breakpoint_count;
+        memset(&mock_debugger.breakpoints[bp_idx], 0, sizeof(DAPBreakpoint));
+        mock_debugger.breakpoints[bp_idx].id = bp_idx + 1;
+        mock_debugger.breakpoints[bp_idx].line = line_num;
+        mock_debugger.breakpoints[bp_idx].column = column_num;
+        mock_debugger.breakpoints[bp_idx].verified = true;
+        
+        // Set source
+        DAPSource* bp_source = malloc(sizeof(DAPSource));
+        if (bp_source) {
+            memset(bp_source, 0, sizeof(DAPSource));
+            bp_source->path = strdup(source_path);
+            
+            // Extract filename from path
+            const char* filename = strrchr(source_path, '/');
+            if (filename) {
+                bp_source->name = strdup(filename + 1);
+            } else {
+                bp_source->name = strdup(source_path);
+            }
+            
+            mock_debugger.breakpoints[bp_idx].source = bp_source;
+        }
+        
+        // Set condition if provided
+        if (condition_str) {
+            mock_debugger.breakpoints[bp_idx].condition = strdup(condition_str);
+        }
+        
+        // Set hit condition if provided
+        if (hit_condition_str) {
+            mock_debugger.breakpoints[bp_idx].hit_condition = strdup(hit_condition_str);
+        }
+        
+        // Set log message if provided
+        if (log_message_str) {
+            mock_debugger.breakpoints[bp_idx].log_message = strdup(log_message_str);
+        }
+        
+        mock_debugger.breakpoint_count++;
+
+        // Create response breakpoint
+        cJSON* response_bp = cJSON_CreateObject();
+        if (!response_bp) continue;
+
+        cJSON_AddNumberToObject(response_bp, "id", mock_debugger.breakpoints[bp_idx].id);
+        cJSON_AddBoolToObject(response_bp, "verified", true);
+        cJSON_AddNumberToObject(response_bp, "line", line_num);
+        
+        if (column_num > 0) {
+            cJSON_AddNumberToObject(response_bp, "column", column_num);
+        }
+
+        // Add source to response
+        cJSON* source_obj = cJSON_CreateObject();
+        if (source_obj) {
+            cJSON_AddStringToObject(source_obj, "path", source_path);
+            if (bp_source && bp_source->name) {
+                cJSON_AddStringToObject(source_obj, "name", bp_source->name);
+            }
+            cJSON_AddItemToObject(response_bp, "source", source_obj);
+        }
+
+        cJSON_AddItemToArray(response_breakpoints, response_bp);
+    }
+
+    cJSON_AddItemToObject(body, "breakpoints", response_breakpoints);
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+
+int handle_source(cJSON* args, DAPResponse* response) {
+    if (!args || !response) {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    cJSON* source = cJSON_GetObjectItem(args, "source");
+    if (!source) {
+        set_response_error(response, "No source specified");
+        return -1;
+    }
+
+    cJSON* path = cJSON_GetObjectItem(source, "path");
+    cJSON* sourceReference = cJSON_GetObjectItem(source, "sourceReference");
+    
+    // Check if we have a path or reference
+    if ((!path || !cJSON_IsString(path)) && 
+        (!sourceReference || !cJSON_IsNumber(sourceReference))) {
+        set_response_error(response, "Invalid source path or reference");
+        return -1;
+    }
+
+    // Create response body with source content
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Try to read source file if a path is provided
+    if (path && cJSON_IsString(path)) {
+        const char* file_path = path->valuestring;
+        
+        // Check if path is a directory
+        struct stat path_stat;
+        if (stat(file_path, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
+            cJSON_Delete(body);
+            set_response_error(response, "Cannot read directory as source file");
+            return -1;
+        }
+        
+        FILE* f = fopen(file_path, "r");
+        
+        if (f) {
+            // Get file size
+            fseek(f, 0, SEEK_END);
+            long file_size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            
+            // Validate file size to avoid allocation issues
+            if (file_size <= 0 || file_size > 10 * 1024 * 1024) { // Max 10MB for safety
+                fclose(f);
+                cJSON_Delete(body);
+                set_response_error(response, "Invalid file size or file too large");
+                return -1;
+            }
+            
+            // Read file content
+            char* content = malloc((size_t)file_size + 1);
+            if (content) {
+                size_t bytes_read = fread(content, 1, (size_t)file_size, f);
+                content[bytes_read] = '\0';  // Null-terminate
+                
+                // Add content to response
+                cJSON_AddStringToObject(body, "content", content);
+                cJSON_AddStringToObject(body, "mimeType", "text/plain");
+                
+                free(content);
+            } else {
+                cJSON_Delete(body);
+                fclose(f);
+                set_response_error(response, "Failed to allocate memory for file content");
+                return -1;
+            }
+            
+            fclose(f);
+        } else {
+            // File could not be opened, return an error
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), "Failed to open source file: %s", file_path);
+            cJSON_Delete(body);
+            set_response_error(response, error_msg);
+            return -1;
+        }
+    } 
+    // Handle source reference (in-memory source)
+    else if (sourceReference && cJSON_IsNumber(sourceReference)) {
+        int ref = sourceReference->valueint;
+        
+        // In a real implementation, this would look up source by reference ID
+        // For the mock, we'll return a placeholder
+        char source_content[256];
+        snprintf(source_content, sizeof(source_content), 
+                 "// Generated source for reference %d\n"
+                 "// This would be actual source code in a real implementation\n"
+                 "int main() {\n"
+                 "    return 0;\n"
+                 "}\n", ref);
+        
+        cJSON_AddStringToObject(body, "content", source_content);
+        cJSON_AddStringToObject(body, "mimeType", "text/plain");
+    }
+
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+
+int handle_scopes(cJSON* args, DAPResponse* response) {
+    if (!args || !response) {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    cJSON* frameId = cJSON_GetObjectItem(args, "frameId");
+    if (!frameId || !cJSON_IsNumber(frameId)) {
+        set_response_error(response, "Invalid frame ID");
+        return -1;
+    }
+
+    // Create response body with scopes
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Add scopes array
+    cJSON* scopes = cJSON_CreateArray();
+    if (!scopes) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create scopes array");
+        return -1;
+    }
+
+    // Add CPU Registers scope (always available, even at entry point)
+    cJSON* registersScope = cJSON_CreateObject();
+    if (registersScope) {
+        cJSON_AddStringToObject(registersScope, "name", "CPU Registers");
+        cJSON_AddNumberToObject(registersScope, "variablesReference", 1);
+        cJSON_AddNumberToObject(registersScope, "namedVariables", 8);  // Number of CPU registers
+        cJSON_AddBoolToObject(registersScope, "expensive", false);
+        cJSON_AddStringToObject(registersScope, "presentationHint", "registers");
+        cJSON_AddItemToArray(scopes, registersScope);
+    }
+
+    // Add CPU Flags scope (always available, even at entry point)
+    cJSON* flagsScope = cJSON_CreateObject();
+    if (flagsScope) {
+        cJSON_AddStringToObject(flagsScope, "name", "CPU Flags");
+        cJSON_AddNumberToObject(flagsScope, "variablesReference", 1001);
+        cJSON_AddNumberToObject(flagsScope, "namedVariables", 4);  // Number of CPU flags
+        cJSON_AddBoolToObject(flagsScope, "expensive", false);
+        cJSON_AddStringToObject(flagsScope, "presentationHint", "registers");
+        cJSON_AddItemToArray(scopes, flagsScope);
+    }
+
+    // Add Internal Registers scope (always available, even at entry point)
+    cJSON* internalScope = cJSON_CreateObject();
+    if (internalScope) {
+        cJSON_AddStringToObject(internalScope, "name", "Internal Registers");
+        cJSON_AddNumberToObject(internalScope, "variablesReference", 4);
+        cJSON_AddNumberToObject(internalScope, "namedVariables", 2);  // Number of internal registers
+        cJSON_AddBoolToObject(internalScope, "expensive", false);
+        cJSON_AddStringToObject(internalScope, "presentationHint", "registers");
+        cJSON_AddItemToArray(scopes, internalScope);
+    }
+
+    cJSON_AddItemToObject(body, "scopes", scopes);
+    set_response_success(response, body);
+    return 0;
+}
+
+int handle_variables(cJSON* args, DAPResponse* response) {
+    if (!args || !response) {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    cJSON* variablesReference = cJSON_GetObjectItem(args, "variablesReference");
+    if (!variablesReference || !cJSON_IsNumber(variablesReference)) {
+        set_response_error(response, "Invalid variables reference");
+        return -1;
+    }
+
+    // Create response body with variables
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Add variables array
+    cJSON* variables = cJSON_CreateArray();
+    if (!variables) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create variables array");
+        return -1;
+    }
+
+    int ref = variablesReference->valueint;
+    Register* reg_array = NULL;
+    size_t reg_count = 0;
+    cJSON* readScope = NULL;
+    cJSON* writeScope = NULL;
+
+    // Select appropriate register array based on reference
+    switch (ref) {
+        case 1:  // CPU Registers
+            reg_array = cpu_registers;
+            reg_count = NUM_REGISTERS;
+            break;
+        case 2:  // Internal Read Registers
+            reg_array = internal_read_registers;
+            reg_count = NUM_INTERNAL_READ_REGISTERS;
+            break;
+        case 3:  // Internal Write Registers
+            reg_array = internal_write_registers;
+            reg_count = NUM_INTERNAL_WRITE_REGISTERS;
+            break;
+        case 4:  // Internal Registers parent scope
+            // Add subscopes for internal registers with detailed information
+            readScope = cJSON_CreateObject();
+            if (readScope) {
+                cJSON_AddStringToObject(readScope, "name", "Read Registers");
+                cJSON_AddStringToObject(readScope, "value", "Read-only internal registers");
+                cJSON_AddStringToObject(readScope, "type", "scope");
+                cJSON_AddNumberToObject(readScope, "variablesReference", 2);
+                cJSON_AddNumberToObject(readScope, "namedVariables", NUM_INTERNAL_READ_REGISTERS);
+                cJSON_AddBoolToObject(readScope, "expensive", false);
+                cJSON_AddStringToObject(readScope, "presentationHint", "registers");
+                cJSON_AddItemToArray(variables, readScope);
+            }
+            writeScope = cJSON_CreateObject();
+            if (writeScope) {
+                cJSON_AddStringToObject(writeScope, "name", "Write Registers");
+                cJSON_AddStringToObject(writeScope, "value", "Write-only internal registers");
+                cJSON_AddStringToObject(writeScope, "type", "scope");
+                cJSON_AddNumberToObject(writeScope, "variablesReference", 3);
+                cJSON_AddNumberToObject(writeScope, "namedVariables", NUM_INTERNAL_WRITE_REGISTERS);
+                cJSON_AddBoolToObject(writeScope, "expensive", false);
+                cJSON_AddStringToObject(writeScope, "presentationHint", "registers");
+                cJSON_AddItemToArray(variables, writeScope);
+            }
+            break;
+        case 1001:  // Status Register Flags
+            // Add status flags as variables
+            for (size_t i = 0; i < NUM_STATUS_FLAGS; i++) {
+                cJSON* var = cJSON_CreateObject();
+                if (var) {
+                    cJSON_AddStringToObject(var, "name", status_flags[i].name);
+                    cJSON_AddStringToObject(var, "value", status_flags[i].value ? "1" : "0");
+                    cJSON_AddStringToObject(var, "type", status_flags[i].type);
+                    cJSON_AddNumberToObject(var, "variablesReference", 0);
+                    cJSON_AddItemToArray(variables, var);
+                }
+            }
+            break;
+        default: {
+            // Create error response
+            response->success = false;
+            
+            // Create error object with more user-friendly message
+            cJSON* error = cJSON_CreateObject();
+            if (error) {
+                cJSON_AddNumberToObject(error, "id", 1000);
+                cJSON_AddStringToObject(error, "format", "Invalid variables reference %d - no such variable group exists");
+                cJSON_AddNumberToObject(error, "variablesReference", ref);
+                cJSON_AddBoolToObject(error, "showUser", true);
+                
+                // Create response body with error
+                cJSON* body = cJSON_CreateObject();
+                if (body) {
+                    cJSON_AddItemToObject(body, "error", error);
+                    char* body_str = cJSON_PrintUnformatted(body);
+                    if (body_str) {
+                        response->data = body_str;
+                        response->data_size = strlen(body_str);
+                        cJSON_Delete(body);
+                        return 0;
+                    }
+                    cJSON_Delete(body);
+                }
+                cJSON_Delete(error);
+            }
+            set_response_error(response, "Failed to create error response");
+            return -1;
+        }
+    }
+
+    // Add registers as variables if not handling status flags or internal parent scope
+    if (ref != 1001 && ref != 4 && reg_array) {
+        for (size_t i = 0; i < reg_count; i++) {
+            cJSON* var = cJSON_CreateObject();
+            if (var) {
+                cJSON_AddStringToObject(var, "name", reg_array[i].name);
+                char value_str[32];
+                if (strcmp(reg_array[i].type, "octal") == 0) {
+                    snprintf(value_str, sizeof(value_str), "%o", reg_array[i].value);
+                } else {
+                    snprintf(value_str, sizeof(value_str), "0x%04x", reg_array[i].value);
+                }
+                cJSON_AddStringToObject(var, "value", value_str);
+                cJSON_AddStringToObject(var, "type", reg_array[i].type);
+                cJSON_AddNumberToObject(var, "variablesReference", reg_array[i].nested_ref);
+                cJSON_AddStringToObject(var, "presentationHint", "register");
+                cJSON_AddItemToArray(variables, var);
+            }
+        }
+    }
+
+    cJSON_AddItemToObject(body, "variables", variables);
+    set_response_success(response, body);
+    return 0;
+}
+
+/*
+ * Thread ID Implementation Notes:
+ * 
+ * The mock debugger implements a simplified thread model where:
+ * - Thread ID 1 is the only valid thread ID
+ * - This represents the main CPU thread in the ND-100 architecture
+ * - The mock debugger does not support multiple threads as the ND-100 is a single-threaded CPU
+ * - Thread ID 0 is not used to represent "all threads" as per DAP specification
+ * - Instead, the 'singleThread' flag is used to control thread-specific operations
+ * 
+ * This implementation aligns with the ND-100 architecture while maintaining DAP compliance:
+ * - All thread operations default to thread ID 1
+ * - Thread-specific operations require thread ID 1
+ * - The 'singleThread' flag is properly handled for thread control
+ */
+
+int handle_threads(cJSON* args, DAPResponse* response) {
+
+    (void)args;  // Mark as unused
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+    
+    // Create threads array
+    cJSON* threads = cJSON_CreateArray();
+    if (!threads) {
+        cJSON_Delete(body);
+        response->success = false;
+        response->error_message = strdup("Failed to create threads array");
+        return 0;
+    }
+    
+    // Create thread object
+    cJSON* thread = cJSON_CreateObject();
+    if (!thread) {
+        cJSON_Delete(body);
+        cJSON_Delete(threads);
+        response->success = false;
+        response->error_message = strdup("Failed to create thread object");
+        return 0;
+    }
+    
+    // Add thread properties
+    cJSON_AddNumberToObject(thread, "id", 1);  // Always use thread ID 1
+    cJSON_AddStringToObject(thread, "name", "CPU thread");
+
+    // Add thread state based on debugger state
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        cJSON_AddStringToObject(thread, "state", "stopped");
+    } else if (mock_debugger.paused) {
+        cJSON_AddStringToObject(thread, "state", "paused");
+    } else {
+        cJSON_AddStringToObject(thread, "state", "running");
+    }
+
+    // Add thread to array
+    cJSON_AddItemToArray(threads, thread);
+
+    // Add threads array to body
+    cJSON_AddItemToObject(body, "threads", threads);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+    
+    response->success = true;
+    response->data = body_str;
+    return 0;
+}
+
+/*
+ * Stack Trace Implementation Notes:
+ * 
+ * The mock debugger implements a simplified stack trace model where:
+ * - Only one stack frame is maintained (the current execution frame)
+ * - The frame represents the current program counter (PC) position
+ * - Source line information is included when available through line mappings
+ * - The stack frame includes:
+ *   - Frame ID (always 0 for the single frame)
+ *   - Function name (always "main" for the single frame)
+ *   - Current line and column from source mapping
+ *   - Source file information when available
+ * 
+ * This implementation reflects the ND-100's simple execution model:
+ * - No call stack (no function calls in the traditional sense)
+ * - Direct program counter-based execution
+ * - Source line mapping for debugging information
+ * - Single execution context
+ */
+
+int handle_stack_trace(cJSON* args, DAPResponse* response) {
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        set_response_error(response, "Debugger is not running or not attached");
+        return -1;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Parse arguments
+    int thread_id = 1;  // Default to thread 1
+    int start_frame = 0;
+    int levels = 1;
+    cJSON* format = NULL;
+
+    if (args) {
+        cJSON* thread_id_json = cJSON_GetObjectItem(args, "threadId");
+        if (thread_id_json && cJSON_IsNumber(thread_id_json)) {
+            thread_id = thread_id_json->valueint;
+        }
+
+        cJSON* start_frame_json = cJSON_GetObjectItem(args, "startFrame");
+        if (start_frame_json && cJSON_IsNumber(start_frame_json)) {
+            start_frame = start_frame_json->valueint;
+        }
+
+        cJSON* levels_json = cJSON_GetObjectItem(args, "levels");
+        if (levels_json && cJSON_IsNumber(levels_json)) {
+            levels = levels_json->valueint;
+        }
+
+        format = cJSON_GetObjectItem(args, "format");
+    }
+
+    // Validate thread ID
+    if (thread_id != 1) {
+        cJSON_Delete(body);
+        set_response_error(response, "Invalid thread ID - only thread 1 is supported");
+        return -1;
+    }
+
+    // Validate start_frame and levels
+    if (start_frame < 0 || levels < 1) {
+        cJSON_Delete(body);
+        set_response_error(response, "Invalid start_frame or levels parameter");
+        return -1;
+    }
+
+    // Create stack frames array
+    cJSON* frames = cJSON_CreateArray();
+    if (!frames) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create frames array");
+        return -1;
+    }
+
+    // Create current frame
+    cJSON* frame = cJSON_CreateObject();
+    if (!frame) {
+        cJSON_Delete(body);
+        cJSON_Delete(frames);
+        set_response_error(response, "Failed to create frame object");
+        return -1;
+    }
+
+    // Add frame properties
+    cJSON_AddNumberToObject(frame, "id", start_frame);
+    cJSON_AddStringToObject(frame, "name", "main");
+    cJSON_AddNumberToObject(frame, "line", mock_debugger.current_line);
+    cJSON_AddNumberToObject(frame, "column", mock_debugger.current_column);
+    
+    // Add source information if available
+    if (mock_debugger.current_source && mock_debugger.current_source->path) {
+        cJSON* source = cJSON_CreateObject();
+        if (source) {
+            cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+            if (mock_debugger.current_source->name) {
+                cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+            }
+            cJSON_AddItemToObject(frame, "source", source);
+        }
+    }
+
+    // Add presentation hint if format is specified
+    if (format) {
+        cJSON* presentation_hint = cJSON_CreateObject();
+        if (presentation_hint) {
+            cJSON* parameters = cJSON_GetObjectItem(format, "parameters");
+            if (parameters) {
+                cJSON* show_hidden = cJSON_GetObjectItem(parameters, "showHidden");
+                if (show_hidden && cJSON_IsBool(show_hidden)) {
+                    cJSON_AddBoolToObject(presentation_hint, "showHidden", cJSON_IsTrue(show_hidden));
+                }
+            }
+            cJSON_AddItemToObject(frame, "presentationHint", presentation_hint);
+        }
+    }
+    
+    // Add frame to array
+    cJSON_AddItemToArray(frames, frame);
+
+    // Add frames array to body
+    cJSON_AddItemToObject(body, "stackFrames", frames);
+
+    // Add total frames count (limited by levels parameter)
+    cJSON_AddNumberToObject(body, "totalFrames", levels > 1 ? levels : 1);
+
+    // Set response
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+
+
+
+/**
+ * @brief Handle disassemble command
+ * 
+ * @param args Command arguments
+ * @param response Response structure to fill
+ * @return int 0 on success, non-zero on failure
+ */
+int handle_disassemble(cJSON* args, DAPResponse* response) {
+    if (!args || !response) {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    // Parse required arguments
+    cJSON* memory_reference = cJSON_GetObjectItem(args, "memoryReference");
+    if (!memory_reference || !cJSON_IsString(memory_reference)) {
+        set_response_error(response, "Missing or invalid memoryReference");
+        return -1;
+    }
+
+    // Parse optional arguments with defaults
+    uint64_t offset = 0;
+    cJSON* offset_json = cJSON_GetObjectItem(args, "offset");
+    if (offset_json && cJSON_IsNumber(offset_json)) {
+        offset = (uint64_t)offset_json->valuedouble;
+    }
+
+    int instruction_offset = 0;
+    cJSON* instruction_offset_json = cJSON_GetObjectItem(args, "instructionOffset");
+    if (instruction_offset_json && cJSON_IsNumber(instruction_offset_json)) {
+        instruction_offset = (size_t)instruction_offset_json->valueint;
+    }
+
+    size_t instruction_count = 10; // Default to 10 instructions
+    cJSON* instruction_count_json = cJSON_GetObjectItem(args, "instructionCount");
+    if (instruction_count_json && cJSON_IsNumber(instruction_count_json)) {
+        instruction_count = (size_t)instruction_count_json->valueint;
+    }
+
+    bool resolve_symbols = false;
+    cJSON* resolve_symbols_json = cJSON_GetObjectItem(args, "resolveSymbols");
+    if (resolve_symbols_json && cJSON_IsBool(resolve_symbols_json)) {
+        resolve_symbols = cJSON_IsTrue(resolve_symbols_json);
+    }
+
+    // Convert memory reference to address
+    char* endptr = NULL;
+    uint32_t address = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
+    if (endptr == memory_reference->valuestring || *endptr != '\0') {
+        set_response_error(response, "Invalid memory reference format");
+        return -1;
+    }
+
+    // Apply offset to address
+    address += (uint32_t)offset;
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    cJSON* instructions = cJSON_CreateArray();
+    if (!instructions) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create instructions array");
+        return -1;
+    }
+
+    // Calculate total instructions to disassemble
+    size_t total_instructions = instruction_count + instruction_offset;
+    if (instruction_offset < 0) {
+        total_instructions = instruction_count;
+    }
+
+    // Allocate array for disassembly strings
+    char** disassembly = malloc(total_instructions * sizeof(char*));
+    if (!disassembly) {
+        cJSON_Delete(body);
+        cJSON_Delete(instructions);
+        set_response_error(response, "Failed to allocate memory for disassembly");
+        return -1;
+    }
+
+    // Mock disassembly - in a real implementation, this would use the machine debugger
+    for (size_t i = 0; i < total_instructions; i++) {
+        char* instr = malloc(32);
+        if (!instr) {
+            // Clean up previously allocated strings
+            for (size_t j = 0; j < i; j++) {
+                free(disassembly[j]);
+            }
+            free(disassembly);
+            cJSON_Delete(body);
+            cJSON_Delete(instructions);
+            set_response_error(response, "Failed to allocate memory for instruction");
+            return -1;
+        }
+        snprintf(instr, 32, "MOV R%d, R%d", (int)(i % 8), (int)((i + 1) % 8));
+        disassembly[i] = instr;
+    }
+
+    // Add instructions to response
+    for (size_t i = 0; i < instruction_count; i++) {
+        size_t idx = i + instruction_offset;
+        if (idx >= total_instructions || !disassembly[idx]) {
+            break;
+        }
+
+        cJSON* instruction = cJSON_CreateObject();
+        if (!instruction) {
+            // Clean up and return error
+            for (size_t j = 0; j < total_instructions; j++) {
+                free(disassembly[j]);
+            }
+            free(disassembly);
+            cJSON_Delete(body);
+            cJSON_Delete(instructions);
+            set_response_error(response, "Failed to create instruction object");
+            return -1;
+        }
+
+        // Format address as hexadecimal
+        char addr_str[16];
+        snprintf(addr_str, sizeof(addr_str), "0x%04x", address + (uint32_t)(i * 4));
+        cJSON_AddStringToObject(instruction, "address", addr_str);
+
+        // Add instruction text
+        cJSON_AddStringToObject(instruction, "instruction", disassembly[idx]);
+
+        // If resolve_symbols is true, try to resolve symbol names
+        if (resolve_symbols) {
+            // Mock symbol resolution
+            cJSON_AddStringToObject(instruction, "symbol", "");
+        }
+
+        cJSON_AddItemToArray(instructions, instruction);
+    }
+
+    // Clean up disassembly strings
+    for (size_t i = 0; i < total_instructions; i++) {
+        free(disassembly[i]);
+    }
+    free(disassembly);
+
+    // Add instructions array to body
+    cJSON_AddItemToObject(body, "instructions", instructions);
+
+    // Set response
+    response->success = true;
+    response->error_message = NULL;
+    response->data = cJSON_PrintUnformatted(body);
+    response->data_size = response->data ? strlen(response->data) : 0;
+
+    // Clean up
+    cJSON_Delete(body);
+
+    return 0;
+}
+
+
+
+int handle_continue(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        set_response_error(response, "Debugger not running or attached");
+        return -1;
+    }
+
+    if (!mock_debugger.paused) {
+        set_response_error(response, "Debugger not paused");
+        return -1;
+    }
+
+    // Create success response
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    cJSON_AddBoolToObject(body, "allThreadsContinued", true);
+
+    set_response_success(response, body);
+    cJSON_Delete(body);
+
+    mock_debugger.paused = false;
+
+    // Send continued event according to DAP spec
+    DAPServer* server = (DAPServer*)mock_debugger.server;
+    if (server && server->config.callbacks.handle_event) {
+        cJSON* event_body = cJSON_CreateObject();
+        if (event_body) {
+            cJSON_AddNumberToObject(event_body, "threadId", mock_debugger.current_thread);
+            cJSON_AddBoolToObject(event_body, "allThreadsContinued", true);
+            
+            char* event_body_str = cJSON_PrintUnformatted(event_body);
+            if (event_body_str) {
+                server->config.callbacks.handle_event(server->config.user_data,
+                                                   DAP_EVENT_CONTINUED,
+                                                   event_body_str);
+                free(event_body_str);
+            }
+            cJSON_Delete(event_body);
+        }
+    }
+
+    return 0;
+}
+
+int handle_next(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    if (!mock_debugger.paused) {
+        response->success = false;
+        response->error_message = strdup("Debugger not paused");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    // Simulate stepping over
+    mock_debugger.pc += 4; // Assuming 4-byte instructions
+    int line = get_line_for_address(mock_debugger.pc);
+    if (line > 0) {
+        mock_debugger.current_line = line;
+    }
+
+    response->success = true;
+    response->data = body_str;
+
+    // Send stopped event according to DAP spec
+    DAPServer* server = (DAPServer*)mock_debugger.server;
+    if (server && server->config.callbacks.handle_event) {
+        cJSON* event_body = cJSON_CreateObject();
+        if (event_body) {
+            cJSON_AddStringToObject(event_body, "reason", "step");
+            cJSON_AddNumberToObject(event_body, "threadId", mock_debugger.current_thread);
+            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+            cJSON_AddStringToObject(event_body, "description", "Stepped over instruction");
+            
+            if (mock_debugger.current_source) {
+                cJSON* source = cJSON_CreateObject();
+                if (source) {
+                    cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+                    cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+                    cJSON_AddItemToObject(event_body, "source", source);
+                }
+            }
+            
+            // Add line information if available
+            if (line > 0) {
+                cJSON_AddNumberToObject(event_body, "line", line);
+                cJSON_AddNumberToObject(event_body, "column", mock_debugger.current_column);
+            }
+            
+            char* event_body_str = cJSON_PrintUnformatted(event_body);
+            if (event_body_str) {
+                server->config.callbacks.handle_event(server->config.user_data,
+                                                   DAP_EVENT_STOPPED,
+                                                   event_body_str);
+                free(event_body_str);
+            }
+            cJSON_Delete(event_body);
+        }
+    }
+
+    return 0;
+}
+
+int handle_step_in(cJSON* args, DAPResponse* response) {
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    if (!mock_debugger.paused) {
+        response->success = false;
+        response->error_message = strdup("Debugger not paused");
+        return 0;
+    }
+
+    // Parse arguments
+    int thread_id = -1;
+    bool single_thread = false;
+    
+    const char* granularity = NULL;
+
+    cJSON* thread_id_json = cJSON_GetObjectItem(args, "threadId");
+    if (thread_id_json && cJSON_IsNumber(thread_id_json)) {
+        thread_id = thread_id_json->valueint;
+    }
+
+    cJSON* single_thread_json = cJSON_GetObjectItem(args, "singleThread");
+    if (single_thread_json && cJSON_IsBool(single_thread_json)) {
+        single_thread = cJSON_IsTrue(single_thread_json);
+    }
+
+/*  // This part is commented out as it is not used in the current implementation
+    int target_id = -1;
+    cJSON* target_id_json = cJSON_GetObjectItem(args, "targetId");
+    if (target_id_json && cJSON_IsNumber(target_id_json)) {
+        target_id = target_id_json->valueint;
+    }
+*/
+
+    cJSON* granularity_json = cJSON_GetObjectItem(args, "granularity");
+    if (granularity_json && cJSON_IsString(granularity_json)) {
+        granularity = granularity_json->valuestring;
+    }
+
+    // Validate thread ID
+    if (thread_id < 0) {
+        response->success = false;
+        response->error_message = strdup("Invalid thread ID");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    cJSON_AddBoolToObject(body, "allThreadsStopped", !single_thread);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    // Simulate stepping in based on granularity
+    if (granularity && strcmp(granularity, "instruction") == 0) {
+        mock_debugger.pc += 4; // Single instruction step
+    } else {
+        // Default to statement/line granularity
+        mock_debugger.pc += 8; // Step to next statement/line
+    }
+
+    // Update line information
+    int line = get_line_for_address(mock_debugger.pc);
+    if (line > 0) {
+        mock_debugger.current_line = line;
+    }
+
+    response->success = true;
+    response->data = body_str;
+
+    // Send stopped event according to DAP spec
+    DAPServer* server = (DAPServer*)mock_debugger.server;
+    if (server && server->config.callbacks.handle_event) {
+        cJSON* event_body = cJSON_CreateObject();
+        if (event_body) {
+            cJSON_AddStringToObject(event_body, "reason", "step");
+            cJSON_AddNumberToObject(event_body, "threadId", thread_id);
+            cJSON_AddBoolToObject(event_body, "allThreadsStopped", !single_thread);
+            cJSON_AddStringToObject(event_body, "description", "Stepped into instruction");
+            
+            if (mock_debugger.current_source) {
+                cJSON* source = cJSON_CreateObject();
+                if (source) {
+                    cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+                    cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+                    cJSON_AddItemToObject(event_body, "source", source);
+                }
+            }
+            
+            // Add line information if available
+            if (line > 0) {
+                cJSON_AddNumberToObject(event_body, "line", line);
+                cJSON_AddNumberToObject(event_body, "column", mock_debugger.current_column);
+            }
+            
+            char* event_body_str = cJSON_PrintUnformatted(event_body);
+            if (event_body_str) {
+                server->config.callbacks.handle_event(server->config.user_data,
+                                                   DAP_EVENT_STOPPED,
+                                                   event_body_str);
+                free(event_body_str);
+            }
+            cJSON_Delete(event_body);
+        }
+    }
+
+    return 0;
+}
+
+int handle_step_out(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    if (!mock_debugger.paused) {
+        response->success = false;
+        response->error_message = strdup("Debugger not paused");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    // Simulate stepping out
+    mock_debugger.pc += 4; // Assuming 4-byte instructions
+    int line = get_line_for_address(mock_debugger.pc);
+    if (line > 0) {
+        mock_debugger.current_line = line;
+    }
+
+    response->success = true;
+    response->data = body_str;
+
+    // Send stopped event according to DAP spec
+    DAPServer* server = (DAPServer*)mock_debugger.server;
+    if (server && server->config.callbacks.handle_event) {
+        cJSON* event_body = cJSON_CreateObject();
+        if (event_body) {
+            cJSON_AddStringToObject(event_body, "reason", "step");
+            cJSON_AddNumberToObject(event_body, "threadId", mock_debugger.current_thread);
+            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+            cJSON_AddStringToObject(event_body, "description", "Stepped out of function");
+            
+            if (mock_debugger.current_source) {
+                cJSON* source = cJSON_CreateObject();
+                if (source) {
+                    cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+                    cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+                    cJSON_AddItemToObject(event_body, "source", source);
+                }
+            }
+            
+            // Add line information if available
+            if (line > 0) {
+                cJSON_AddNumberToObject(event_body, "line", line);
+                cJSON_AddNumberToObject(event_body, "column", mock_debugger.current_column);
+            }
+            
+            char* event_body_str = cJSON_PrintUnformatted(event_body);
+            if (event_body_str) {
+                server->config.callbacks.handle_event(server->config.user_data,
+                                                   DAP_EVENT_STOPPED,
+                                                   event_body_str);
+                free(event_body_str);
+            }
+            cJSON_Delete(event_body);
+        }
+    }
+
+    return 0;
+}
+
+int handle_read_memory(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    // Get memory read parameters
+    cJSON* address_json = cJSON_GetObjectItem(args, "address");
+    cJSON* count_json = cJSON_GetObjectItem(args, "count");
+    if (!address_json || !count_json) {
+        response->success = false;
+        response->error_message = strdup("Missing required parameters");
+        return 0;
+    }
+
+    uint64_t address = address_json->valueint;
+    int count = count_json->valueint;
+
+    // Validate parameters
+    if (count <= 0 || count > 1024) {
+        response->success = false;
+        response->error_message = strdup("Invalid count parameter");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    // Simulate memory read
+    char* data = (char*)malloc(count);
+    if (!data) {
+        cJSON_Delete(body);
+        response->success = false;
+        response->error_message = strdup("Failed to allocate memory");
+        return 0;
+    }
+
+    // Fill with mock data
+    for (int i = 0; i < count; i++) {
+        data[i] = (char)((address + i) & 0xFF);
+    }
+
+    // Add to response
+    char address_str[32];
+    snprintf(address_str, sizeof(address_str), "0x%lx", address);
+    cJSON_AddStringToObject(body, "address", address_str);
+    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
+    cJSON_AddStringToObject(body, "data", data);
+    free(data);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    response->success = true;
+    response->data = body_str;
+    return 0;
+}
+
+int handle_write_memory(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    // Get memory write parameters
+    cJSON* address_json = cJSON_GetObjectItem(args, "address");
+    cJSON* data_json = cJSON_GetObjectItem(args, "data");
+    if (!address_json || !data_json) {
+        response->success = false;
+        response->error_message = strdup("Missing required parameters");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    // Simulate memory write
+    cJSON_AddNumberToObject(body, "bytesWritten", strlen(data_json->valuestring));
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    response->success = true;
+    response->data = body_str;
+    return 0;
+}
+
+int handle_read_registers(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    // Create registers array
+    cJSON* registers = cJSON_CreateArray();
+    if (!registers) {
+        cJSON_Delete(body);
+        response->success = false;
+        response->error_message = strdup("Failed to create registers array");
+        return 0;
+    }
+
+    // Add CPU registers
+    for (size_t i = 0; i < NUM_REGISTERS; i++) {
+        cJSON* reg = cJSON_CreateObject();
+        if (!reg) {
+            cJSON_Delete(registers);
+            cJSON_Delete(body);
+            response->success = false;
+            response->error_message = strdup("Failed to create register object");
+            return 0;
+        }
+
+        cJSON_AddStringToObject(reg, "name", cpu_registers[i].name);
+        char value_str[32];
+        snprintf(value_str, sizeof(value_str), "0x%04x", cpu_registers[i].value);
+        cJSON_AddStringToObject(reg, "value", value_str);
+        cJSON_AddStringToObject(reg, "type", cpu_registers[i].type);
+        if (cpu_registers[i].has_nested) {
+            cJSON_AddNumberToObject(reg, "variablesReference", cpu_registers[i].nested_ref);
+        }
+        cJSON_AddItemToArray(registers, reg);
+    }
+
+    cJSON_AddItemToObject(body, "registers", registers);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    response->success = true;
+    response->data = body_str;
+    return 0;
+}
+
+int handle_write_register(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    // Get register write parameters
+    cJSON* name_json = cJSON_GetObjectItem(args, "name");
+    cJSON* value_json = cJSON_GetObjectItem(args, "value");
+    if (!name_json || !value_json) {
+        response->success = false;
+        response->error_message = strdup("Missing required parameters");
+        return 0;
+    }
+
+    const char* name = name_json->valuestring;
+    const char* value = value_json->valuestring;
+
+    // Find register in CPU registers
+    int reg_index = -1;
+    for (size_t i = 0; i < NUM_REGISTERS; i++) {
+        if (strcmp(name, cpu_registers[i].name) == 0) {
+            reg_index = i;
+            break;
+        }
+    }
+
+    if (reg_index == -1) {
+        response->success = false;
+        response->error_message = strdup("Invalid register name");
+        return 0;
+    }
+
+    // Parse value based on register type
+    uint16_t reg_value;
+    if (strcmp(cpu_registers[reg_index].type, "octal") == 0) {
+        if (sscanf(value, "%ho", &reg_value) != 1) {
+            response->success = false;
+            response->error_message = strdup("Invalid octal value");
+            return 0;
+        }
+    } else {
+        if (sscanf(value, "0x%hx", &reg_value) != 1) {
+            response->success = false;
+            response->error_message = strdup("Invalid hex value");
+            return 0;
+        }
+    }
+
+    // Update register
+    cpu_registers[reg_index].value = reg_value;
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    response->success = true;
+    response->data = body_str;
+    return 0;
+}
+
+
+int handle_pause(cJSON* args, DAPResponse* response) {
+    if (!mock_debugger.running || !mock_debugger.attached) {
+        response->success = false;
+        response->error_message = strdup("Debugger not running or attached");
+        return 0;
+    }
+
+    if (mock_debugger.paused) {
+        response->success = false;
+        response->error_message = strdup("Debugger already paused");
+        return 0;
+    }               
+
+    // Parse arguments
+    int thread_id = -1;
+    cJSON* thread_id_json = cJSON_GetObjectItem(args, "threadId");
+    if (thread_id_json && cJSON_IsNumber(thread_id_json)) {
+        thread_id = thread_id_json->valueint;
+    }
+
+    // Validate thread ID
+    if (thread_id < 0) {
+        response->success = false;
+        response->error_message = strdup("Invalid thread ID");
+        return 0;
+    }
+
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+
+    cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+
+    // Convert to string
+    char* body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) {
+        response->success = false;
+        response->error_message = strdup("Failed to format response body");
+        return 0;
+    }
+
+    // Update debugger state
+    mock_debugger.paused = true;
+    mock_debugger.current_thread = thread_id;
+
+    response->success = true;
+    response->data = body_str;
+
+    // Send stopped event according to DAP spec
+    DAPServer* server = (DAPServer*)mock_debugger.server;
+    if (server && server->config.callbacks.handle_event) {
+        cJSON* event_body = cJSON_CreateObject();
+        if (event_body) {
+            cJSON_AddStringToObject(event_body, "reason", "pause");
+            cJSON_AddNumberToObject(event_body, "threadId", thread_id);
+            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+            cJSON_AddStringToObject(event_body, "description", "Thread paused by user");
+            
+            if (mock_debugger.current_source) {
+                cJSON* source = cJSON_CreateObject();
+                if (source) {
+                    cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+                    cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+                    cJSON_AddItemToObject(event_body, "source", source);
+                }
+            }
+            
+            // Add line information if available
+            if (mock_debugger.current_line > 0) {
+                cJSON_AddNumberToObject(event_body, "line", mock_debugger.current_line);
+                cJSON_AddNumberToObject(event_body, "column", mock_debugger.current_column);
+            }
+            
+            char* event_body_str = cJSON_PrintUnformatted(event_body);
+            if (event_body_str) {
+                server->config.callbacks.handle_event(server->config.user_data,
+                                                   DAP_EVENT_STOPPED,
+                                                   event_body_str);
+                free(event_body_str);
+            }
+            cJSON_Delete(event_body);
+        }
+    }
+
+    return 0;
+}
+
+// Implement missing handler functions
+int handle_configuration_done(cJSON* args,  DAPResponse* response) {
+    (void)args;  // Mark as unused
+
+    if (!response) return -1;
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+/**
+ * @brief Evaluate an expression in the current context
+ * 
+ * @param args JSON arguments containing the expression to evaluate
+ * @param response Response to fill with results
+ * @return int 0 on success, error code on failure
+ */
+int handle_evaluate(cJSON* args, DAPResponse* response) {
+    if (!args || !response) return -1;
+    
+    // Extract the expression from arguments
+    cJSON* expression = cJSON_GetObjectItem(args, "expression");
+    if (!expression || !cJSON_IsString(expression)) {
+        set_response_error(response, "Missing or invalid expression");
+        return 0;
+    }
+    
+    // For mock server, just echo back the expression with a mock evaluation
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return 0;
+    }
+    
+    // In a real implementation, this would actually evaluate the expression
+    cJSON_AddStringToObject(body, "result", expression->valuestring);
+    cJSON_AddStringToObject(body, "type", "string");
+    cJSON_AddNumberToObject(body, "variablesReference", 0);
+    
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+
+/**
+ * @brief Return a list of loaded source files
+ * 
+ * @param args JSON arguments (not used in this implementation)
+ * @param response Response to fill with loaded sources
+ * @return int 0 on success, error code on failure
+ */
+int handle_loaded_sources(cJSON* args, DAPResponse* response) {
+    (void)args;  // Mark as unused
+    if (!response) return -1;
+    
+    // Create mock response with current source file
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        set_response_error(response, "Failed to create response body");
+        return 0;
+    }
+    
+    cJSON* sources = cJSON_CreateArray();
+    if (!sources) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create sources array");
+        return 0;
+    }
+    
+    // Add current source if available
+    if (mock_debugger.current_source) {
+        cJSON* source = cJSON_CreateObject();
+        if (source) {
+            cJSON_AddStringToObject(source, "name", mock_debugger.current_source->name);
+            cJSON_AddStringToObject(source, "path", mock_debugger.current_source->path);
+            cJSON_AddNumberToObject(source, "sourceReference", 0);
+            cJSON_AddItemToArray(sources, source);
+        }
+    }
+    
+    cJSON_AddItemToObject(body, "sources", sources);
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+
+// static int handle_set_variable(cJSON* args, DAPResponse* response) { ... }
+// static int handle_set_expression(cJSON* args, DAPResponse* response) { ... }
+// static int handle_modules(cJSON* args, DAPResponse* response) { ... }
+// static int handle_step_back(cJSON* args, DAPResponse* response) { ... }
+// static int handle_set_instruction_breakpoints(cJSON* args, DAPResponse* response) { ... }
+// static int handle_set_data_breakpoints(cJSON* args, DAPResponse* response) { ... }
+// static int handle_exception_info(cJSON* args, DAPResponse* response) { ... }

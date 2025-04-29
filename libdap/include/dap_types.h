@@ -422,4 +422,11 @@ typedef struct {
  */
 void dap_get_scopes_result_free(DAPGetScopesResult* result);
 
+/**
+ * @brief Free memory allocated for a disassemble result
+ * 
+ * @param result Result to free
+ */
+void dap_disassemble_result_free(DAPDisassembleResult* result);
+
 #endif // DAP_TYPES_H 

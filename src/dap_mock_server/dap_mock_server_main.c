@@ -36,6 +36,7 @@ static void print_usage(const char* program_name) {
     printf("Usage: %s [options]\n", program_name);
     printf("Options:\n");
     printf("  -p PORT     Specify the port to listen on (default: %d)\n", DEFAULT_PORT);
+    printf("  -d, --debug Enable debug logging\n");
     printf("  -h          Display this help message and exit\n");
 }
 
@@ -45,9 +46,20 @@ static void print_usage(const char* program_name) {
 int main(int argc, char* argv[]) {
     // Parse command line arguments
     int port = DEFAULT_PORT;
-    int opt;
+    bool debug_mode = false;
     
-    while ((opt = getopt(argc, argv, "p:h")) != -1) {
+    // Define long options
+    static struct option long_options[] = {
+        {"port", required_argument, 0, 'p'},
+        {"debug", no_argument, 0, 'd'},
+        {"help", no_argument, 0, 'h'},
+        {0, 0, 0, 0}
+    };
+    
+    int opt;
+    int option_index = 0;
+    
+    while ((opt = getopt_long(argc, argv, "p:dh", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'p':
                 port = atoi(optarg);
@@ -55,6 +67,10 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "Error: Invalid port number. Must be between 1 and 65535.\n");
                     return EXIT_FAILURE;
                 }
+                break;
+            case 'd':
+                debug_mode = true;
+                printf("Debug mode enabled\n");
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -73,6 +89,12 @@ int main(int argc, char* argv[]) {
     if (dbg_mock_init(port) != 0) {
         fprintf(stderr, "Error: Failed to initialize mock debugger.\n");
         return EXIT_FAILURE;
+    }
+    
+    // Enable debug logging if requested
+    if (debug_mode) {
+        printf("Enabling transport debug logging\n");
+        mock_debugger.server->transport->debuglog = true;
     }
     
     // Start the mock debugger

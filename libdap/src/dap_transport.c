@@ -29,6 +29,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <netdb.h>  // For gethostbyname and struct hostent
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>  // For TCP_NODELAY
+#include <arpa/inet.h>    // For inet_ntop
+#include <unistd.h>       // For close
 #include "dap_transport.h"
 #include "dap_error.h"
 
@@ -40,17 +48,15 @@
     fflush(stderr); \
 } while(0)
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>  // For TCP_NODELAY
-#include <unistd.h>
-#include <arpa/inet.h>
-#endif
+// Debug logging macro for a specific transport
+#define TRANSPORT_DEBUG_LOG(transport, ...) do { \
+    if (!(transport) || (transport)->debuglog) { \
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] ", __func__, __LINE__); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n"); \
+        fflush(stderr); \
+    } \
+} while(0)
 
 DAPTransport* dap_transport_create(const DAPTransportConfig* config) {
     if (!config) {
@@ -69,6 +75,7 @@ DAPTransport* dap_transport_create(const DAPTransportConfig* config) {
     transport->listen_fd = -1;
     transport->client_fd = -1;
     transport->is_server = true;
+    transport->debuglog = false;  // Initialize debuglog to false by default
 
     return transport;
 }
@@ -194,9 +201,13 @@ int dap_transport_accept(DAPTransport* transport) {
     // Convert IP address to string safely
     char ip_str[INET_ADDRSTRLEN];
     if (inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str)) == NULL) {
-        DEBUG_LOG("Client connected from unknown address");
+        if (transport->debuglog) {  
+            DEBUG_LOG("Client connected from unknown address");
+        }
     } else {
-        DEBUG_LOG("Client connected from %s:%d", ip_str, ntohs(client_addr.sin_port));
+        if (transport->debuglog) {
+            DEBUG_LOG("Client connected from %s:%d", ip_str, ntohs(client_addr.sin_port));
+        }
     }
     
     return 0;
@@ -228,81 +239,124 @@ void dap_transport_free(DAPTransport* transport) {
     free(transport);
 }
 
-int dap_transport_send(DAPTransport* transport, const char* data) {
-    if (!transport || !data) {
-        DEBUG_LOG("Invalid arguments: transport=%p, data=%p", (void*)transport, (void*)data);
-        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+int dap_transport_send(DAPTransport* transport, const char* message) {
+    if (!transport || !message) {
         return -1;
     }
 
-    if (transport->client_fd < 0) {
-        DEBUG_LOG("No client connected (client_fd=%d)", transport->client_fd);
-        dap_error_set(DAP_ERROR_TRANSPORT, "No client connected");
-        return -1;
+    if (transport->debuglog) {
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Sending message - Length: %zu\n", __func__, __LINE__, strlen(message));
     }
 
-    // Disable Nagle's algorithm to ensure immediate sending
-    int flag = 1;
-    if (setsockopt(transport->client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) < 0) {
-        DEBUG_LOG("Failed to set TCP_NODELAY: %s (errno=%d)", strerror(errno), errno);
-        dap_error_set(DAP_ERROR_TRANSPORT, "Failed to set TCP_NODELAY");
-        return -1;
-    }
-    DEBUG_LOG("TCP_NODELAY set successfully");
-
-    // Format the message with DAP header
+    // Format the message with header - ENSURE PROPER LINE ENDINGS
     char header[64];
-    size_t data_len = strlen(data);
-    size_t header_len = snprintf(header, sizeof(header),
-                             "Content-Length: %zu\r\n\r\n",
-                             data_len);
-    if (header_len >= sizeof(header)) {
-        DEBUG_LOG("Header too long: needed %zu bytes, max is %zu", header_len, sizeof(header));
-        dap_error_set(DAP_ERROR_TRANSPORT, "Header too long");
+    size_t content_length = strlen(message);
+    // Use explicit \r\n sequence as bytes, not as string literals that might get converted
+    int header_length = snprintf(header, sizeof(header), "Content-Length: %zu%c%c%c%c", 
+                               content_length, 13, 10, 13, 10);
+
+    if (header_length < 0 || (size_t)header_length >= sizeof(header)) {
+        if (transport->debuglog) {
+            fprintf(stderr, "[DAP TRANSPORT %s:%d] Header too long\n", __func__, __LINE__);
+        }
         return -1;
     }
 
-    DEBUG_LOG("Sending message - Header length: %zu, Content length: %zu", header_len, data_len);
-    DEBUG_LOG("Header: '%.*s'", (int)header_len, header);
-    DEBUG_LOG("Content: '%s'", data);
-    
+    // Set TCP_NODELAY to ensure timely delivery
+    if (transport->config.type == DAP_TRANSPORT_TCP) {
+        int flag = 1;
+        if (setsockopt(transport->client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) < 0) {
+            if (transport->debuglog) {
+                fprintf(stderr, "[DAP TRANSPORT %s:%d] Failed to set TCP_NODELAY: %s\n", __func__, __LINE__, strerror(errno));
+            }
+        } else {
+            if (transport->debuglog) {
+                fprintf(stderr, "[DAP TRANSPORT %s:%d] TCP_NODELAY set successfully\n", __func__, __LINE__);
+            }
+        }
+    }
+
+    // Send message
+    ssize_t total_sent = 0;
+    ssize_t remaining = header_length;
+    const char* curr_ptr = header;
+
+    if (transport->debuglog) {
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Sending message - Header length: %d, Content length: %zu\n", 
+                __func__, __LINE__, header_length, content_length);
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Header: '%s'\n", __func__, __LINE__, header);
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Content: '%s'\n", __func__, __LINE__, message);
+    }
+
     // Send header
-    ssize_t sent = 0;
-    size_t total = header_len;
-    while (sent < (ssize_t)total) {
-        ssize_t result = send(transport->client_fd, header + sent, total - sent, 0);
-        if (result < 0) {
+    while (remaining > 0) {
+        ssize_t sent = send(transport->client_fd, curr_ptr, remaining, 0);
+        if (sent <= 0) {
             if (errno == EINTR) {
-                DEBUG_LOG("Header send interrupted, retrying");
                 continue;
             }
-            DEBUG_LOG("Failed to send header: %s (errno=%d)", strerror(errno), errno);
-            dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send header");
+            if (transport->debuglog) {
+                fprintf(stderr, "[DAP TRANSPORT %s:%d] Failed to send header: %s\n", 
+                        __func__, __LINE__, strerror(errno));
+            }
             return -1;
         }
-        sent += result;
-        DEBUG_LOG("Header: sent %zd/%zu bytes", sent, total);
+        total_sent += sent;
+        curr_ptr += sent;
+        remaining -= sent;
     }
+
+    if (transport->debuglog) {
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Header: sent %zd/%d bytes\n", 
+                __func__, __LINE__, total_sent, header_length);
+    }
+
+    // Reset for content
+    total_sent = 0;
+    remaining = content_length;
+    curr_ptr = message;
 
     // Send content
-    sent = 0;
-    total = data_len;
-    while (sent < (ssize_t)total) {
-        ssize_t result = send(transport->client_fd, data + sent, total - sent, 0);
-        if (result < 0) {
+    while (remaining > 0) {
+        ssize_t sent = send(transport->client_fd, curr_ptr, remaining, 0);
+        if (sent <= 0) {
             if (errno == EINTR) {
-                DEBUG_LOG("Content send interrupted, retrying");
                 continue;
             }
-            DEBUG_LOG("Failed to send content: %s (errno=%d)", strerror(errno), errno);
-            dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send content");
+            if (transport->debuglog) {
+                fprintf(stderr, "[DAP TRANSPORT %s:%d] Failed to send content: %s\n", 
+                        __func__, __LINE__, strerror(errno));
+            }
             return -1;
         }
-        sent += result;
-        DEBUG_LOG("Content: sent %zd/%zu bytes", sent, total);
+        total_sent += sent;
+        curr_ptr += sent;
+        remaining -= sent;
     }
 
-    DEBUG_LOG("Message sent successfully - Total bytes: %zu", header_len + data_len);
+    if (transport->debuglog) {
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Content: sent %zd/%zu bytes\n", 
+                __func__, __LINE__, total_sent, content_length);
+        fprintf(stderr, "[DAP TRANSPORT %s:%d] Message sent successfully - Total bytes: %zu\n", 
+                __func__, __LINE__, header_length + content_length);
+    }
+
+    // Force flush the TCP buffer by toggling TCP_NODELAY
+    if (transport->config.type == DAP_TRANSPORT_TCP) {
+        int flag = 0;
+        setsockopt(transport->client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        flag = 1;
+        setsockopt(transport->client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        
+        // Force a small write to trigger immediate flush
+        char flush_byte = 0;
+        send(transport->client_fd, &flush_byte, 0, 0);
+        
+        if (transport->debuglog) {
+            fprintf(stderr, "[DAP TRANSPORT %s:%d] Socket flush completed\n", __func__, __LINE__);
+        }
+    }
+
     return 0;
 }
 
@@ -315,7 +369,9 @@ int dap_transport_send(DAPTransport* transport, const char* data) {
  */
 int dap_transport_receive(DAPTransport* transport, char** message) {
     if (!transport || !message) {
-        DEBUG_LOG("Invalid arguments");
+        if (transport && transport->debuglog) {
+            DEBUG_LOG("Invalid arguments");
+        }
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
     }
@@ -323,8 +379,10 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
     // Read header first
     char header_buffer[1024];
     ssize_t header_received = recv(transport->client_fd, header_buffer, sizeof(header_buffer) - 1, 0);
-    if (header_received < 0) {
-        DEBUG_LOG("Failed to receive header: %s", strerror(errno));
+    if (header_received <= 0) {
+        if (transport->debuglog) {
+            DEBUG_LOG("Failed to receive header: %s", strerror(errno));
+        }
         dap_error_set(DAP_ERROR_TRANSPORT, "Failed to receive header");
         return -1;
     }
@@ -333,19 +391,32 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
     // Parse Content-Length
     char* content_length_str = strstr(header_buffer, "Content-Length: ");
     if (!content_length_str) {
-        DEBUG_LOG("Missing Content-Length header in received data");
+        if (transport->debuglog) {
+            DEBUG_LOG("Missing Content-Length header in received data");
+        }
         dap_error_set(DAP_ERROR_TRANSPORT, "Missing Content-Length header");
         return -1;
     }
     content_length_str += strlen("Content-Length: ");
     size_t content_length = (size_t)atoi(content_length_str);
+    
+    // Validate content length to prevent overflow
+    if (content_length > 10*1024*1024) { // Limit to 10MB to prevent malicious inputs
+        if (transport->debuglog) {
+            DEBUG_LOG("Content length too large: %zu", content_length);
+        }
+        dap_error_set(DAP_ERROR_TRANSPORT, "Content length too large");
+        return -1;
+    }
 
     // Skip the two newlines after the header
     char* content_start = strstr(header_buffer, "\r\n\r\n");
     if (!content_start) {
         content_start = strstr(header_buffer, "\n\n");
         if (!content_start) {
-            DEBUG_LOG("Invalid header format - no delimiter found");
+            if (transport->debuglog) {
+                DEBUG_LOG("Invalid header format - no delimiter found");
+            }
             dap_error_set(DAP_ERROR_TRANSPORT, "Invalid header format");
             return -1;
         }
@@ -357,17 +428,31 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
     // Calculate how much of the content we already received in the header buffer
     size_t header_content_len = header_received - (content_start - header_buffer);
     
-    // Allocate buffer for full content
+    // Make sure we don't exceed the header buffer
+    if (header_content_len > header_received) {
+        if (transport->debuglog) {
+            DEBUG_LOG("Invalid header format - content calculation error");
+        }
+        dap_error_set(DAP_ERROR_TRANSPORT, "Invalid header format");
+        return -1;
+    }
+    
+    // Allocate buffer for full content with space for null terminator
     char* buffer = malloc(content_length + 1);
     if (!buffer) {
-        DEBUG_LOG("Failed to allocate memory for message");
+        if (transport->debuglog) {
+            DEBUG_LOG("Failed to allocate memory for message");
+        }
         dap_error_set(DAP_ERROR_MEMORY, "Failed to allocate message buffer");
         return -1;
     }
 
     // Copy any content already in header buffer
     if (header_content_len > 0) {
-        memcpy(buffer, content_start, header_content_len);
+        // Ensure we don't copy more than the content length
+        size_t copy_len = (header_content_len <= content_length) ? 
+                           header_content_len : content_length;
+        memcpy(buffer, content_start, copy_len);
     }
 
     // If we need more content, read it
@@ -375,16 +460,129 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
         size_t remaining = content_length - header_content_len;
         ssize_t content_received = recv(transport->client_fd, buffer + header_content_len, remaining, 0);
         if (content_received < 0) {
-            DEBUG_LOG("Failed to receive content: %s", strerror(errno));
+            if (transport->debuglog) {
+                DEBUG_LOG("Failed to receive content: %s", strerror(errno));
+            }
             free(buffer);
             dap_error_set(DAP_ERROR_TRANSPORT, "Failed to receive content");
             return -1;
         }
-        header_content_len += (size_t)content_received;
+        // Make sure we don't exceed the buffer
+        if ((size_t)content_received > remaining) {
+            if (transport->debuglog) {
+                DEBUG_LOG("Received more data than expected");
+            }
+            free(buffer);
+            dap_error_set(DAP_ERROR_TRANSPORT, "Received more data than expected");
+            return -1;
+        }
     }
 
+    // Ensure null termination
     buffer[content_length] = '\0';
     *message = buffer;
+
+    if (transport->debuglog) {
+        DEBUG_LOG("Received message: %zu bytes", content_length);
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Connect to a server (client-side function)
+ * 
+ * @param transport Transport instance
+ * @return int 0 on success, -1 on failure
+ */
+int dap_transport_connect(DAPTransport* transport) {
+    if (!transport) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid transport");
+        return -1;
+    }
+
+    if (transport->client_fd >= 0) {
+        dap_error_set(DAP_ERROR_TRANSPORT, "Already connected");
+        return -1;
+    }
+
+    switch (transport->config.type) {
+        case DAP_TRANSPORT_TCP: {
+            // Create socket
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Failed to create socket");
+                return -1;
+            }
+
+            // Enable TCP_NODELAY to disable Nagle's algorithm for timely delivery
+            int flag = 1;
+            if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) < 0) {
+                fprintf(stderr, "[DAP TRANSPORT] Warning: Failed to set TCP_NODELAY: %s\n", 
+                        strerror(errno));
+            }
+
+            // Set up server address
+            struct sockaddr_in server_addr;
+            memset(&server_addr, 0, sizeof(server_addr));
+            server_addr.sin_family = AF_INET;
+            server_addr.sin_port = htons(transport->config.config.tcp.port);
+
+            // Get server's IP address from hostname
+            struct hostent* server = gethostbyname(transport->config.config.tcp.host);
+            if (!server) {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Could not resolve hostname");
+                close(fd);
+                return -1;
+            }
+            memcpy(&server_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
+
+            // Connect to server
+            if (connect(fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Failed to connect to server");
+                close(fd);
+                return -1;
+            }
+
+            transport->client_fd = fd;
+            break;
+        }
+
+        case DAP_TRANSPORT_UNIX: {
+            // Create socket
+            int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (fd < 0) {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Failed to create socket");
+                return -1;
+            }
+
+            // Set up server address
+            struct sockaddr_un server_addr;
+            memset(&server_addr, 0, sizeof(server_addr));
+            server_addr.sun_family = AF_UNIX;
+            strncpy(server_addr.sun_path, transport->config.config.unix_socket.path,
+                    sizeof(server_addr.sun_path) - 1);
+
+            // Connect to server
+            if (connect(fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Failed to connect to server");
+                close(fd);
+                return -1;
+            }
+
+            transport->client_fd = fd;
+            break;
+        }
+
+        case DAP_TRANSPORT_PIPE:
+        case DAP_TRANSPORT_STDIO:
+            dap_error_set(DAP_ERROR_NOT_IMPLEMENTED, "Transport type not implemented");
+            return -1;
+
+        default:
+            dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid transport type");
+            return -1;
+    }
 
     return 0;
 } 

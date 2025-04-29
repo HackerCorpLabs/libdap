@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch dap_debugger",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/dap_debugger",
+            "args": ["intr.asm", "-h", "localhost", "--program", "/tmp/a.out"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build-with-make",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}

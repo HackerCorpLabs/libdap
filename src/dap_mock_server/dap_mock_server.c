@@ -38,13 +38,11 @@
 
 #include "dap_mock_server.h"
 
-
-
-
-
-
 // Forward declarations
 struct DAPServer;
+
+
+/*** CALLBACKS ***/
 
 // Function to step the CPU one instruction
 static int step_cpu(DAPServer *server) {
@@ -70,6 +68,8 @@ static int step_cpu_statement(DAPServer *server) {
     mock_debugger.pc += 2;
     return mock_debugger.pc;
 }
+
+/*** INITIALIZATION ***/
 
 // Update the line_maps field in MockDebugger initialization
 MockDebugger mock_debugger = {
@@ -153,82 +153,4 @@ void dbg_mock_cleanup(void) {
         dap_server_free(mock_debugger.server);
         mock_debugger.server = NULL;
     }
-}
-
-void dbg_mock_set_program_path(const char* path) {
-    if (mock_debugger.server->program_path) {
-        free((void*)mock_debugger.server->program_path);
-    }
-    mock_debugger.server->program_path = path ? strdup(path) : NULL;
-}
-
-uint32_t dbg_mock_get_pc(void) {
-    return mock_debugger.pc;
-}
-
-void dbg_mock_set_pc(uint32_t pc) {
-    mock_debugger.pc = pc;
-}
-
-int dbg_mock_get_current_thread(void) {
-    return mock_debugger.server->current_thread;
-}
-
-void dbg_mock_set_current_thread(int thread_id) {
-    mock_debugger.server->current_thread = thread_id;
-}
-
-bool dbg_mock_is_running(void) {
-    return mock_debugger.server->running;
-}
-
-void dbg_mock_set_running(bool running) {
-    mock_debugger.server->running = running;
-}
-
-bool dbg_mock_is_attached(void) {
-    return mock_debugger.server->attached;
-}
-
-void dbg_mock_set_attached(bool attached) {
-    mock_debugger.server->attached = attached;
-}
-
-
-
-
-
-int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
-    (void)server;  // Mark as unused
-    (void)args;  // Mark as unused
-
-    cleanup_breakpoints(server);
-    printf("Disconnecting from debuggee\n");
-    
-    response->success = true;
-    response->data = strdup("{}");
-    return 0;
-}
-
-int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
-    (void)server;  // Mark as unused
-    (void)args;  // Mark as unused
-
-    printf("Terminating debuggee\n");
-    
-    response->success = true;
-    response->data = strdup("{}");
-    return 0;
-}
-
-
-int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
-    (void)server;  // Mark as unused
-    (void)args;  // Mark as unused
-
-    printf("Restarting debuggee\n");
-    
-    response->success = true;
-    response->data = strdup("{}");
-    return 0;
 }

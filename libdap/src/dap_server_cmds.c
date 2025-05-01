@@ -2347,3 +2347,38 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
     response->data = strdup("{}");
     return 0;
 }
+
+int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
+    (void)server;  // Mark as unused
+    (void)args;  // Mark as unused
+
+    cleanup_breakpoints(server);
+    printf("Disconnecting from debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
+    (void)server;  // Mark as unused
+    (void)args;  // Mark as unused
+
+    printf("Terminating debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}
+
+
+int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
+    (void)server;  // Mark as unused
+    (void)args;  // Mark as unused
+
+    printf("Restarting debuggee\n");
+    
+    response->success = true;
+    response->data = strdup("{}");
+    return 0;
+}

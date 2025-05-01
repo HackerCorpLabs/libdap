@@ -19,25 +19,27 @@
 #include <stdint.h>
 #include <unistd.h>
 
-
 // Debug logging macro
-#define DAP_SERVER_DEBUG_LOG(...) do { \
-    fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
-    fprintf(stderr, __VA_ARGS__); \
-    fprintf(stderr, "\n"); \
-    fflush(stderr); \
-} while(0)
-
+#define DAP_SERVER_DEBUG_LOG(...)                                   \
+    do                                                              \
+    {                                                               \
+        fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
+        fprintf(stderr, __VA_ARGS__);                               \
+        fprintf(stderr, "\n");                                      \
+        fflush(stderr);                                             \
+    } while (0)
 
 #include "dap_types.h"
 #include <cjson/cJSON.h>
 
-
-
-void cleanup_breakpoints(DAPServer* dap_server) {
-    if (dap_server->breakpoints) {
-        for (int i = 0; i < dap_server->breakpoint_count; i++) {
-            if (dap_server->breakpoints[i].source) {
+void cleanup_breakpoints(DAPServer *dap_server)
+{
+    if (dap_server->breakpoints)
+    {
+        for (int i = 0; i < dap_server->breakpoint_count; i++)
+        {
+            if (dap_server->breakpoints[i].source)
+            {
                 free(dap_server->breakpoints[i].source->path);
                 free(dap_server->breakpoints[i].source);
             }
@@ -48,12 +50,13 @@ void cleanup_breakpoints(DAPServer* dap_server) {
     }
 }
 
-
-
-void cleanup_line_maps(DAPServer* dap_server) {
-    if (dap_server->line_maps) {
-        for (int i = 0; i < dap_server->line_map_count; i++) {
-            free((void*)dap_server->line_maps[i].file_path);
+void cleanup_line_maps(DAPServer *dap_server)
+{
+    if (dap_server->line_maps)
+    {
+        for (int i = 0; i < dap_server->line_map_count; i++)
+        {
+            free((void *)dap_server->line_maps[i].file_path);
         }
         free(dap_server->line_maps);
         dap_server->line_maps = NULL;
@@ -62,28 +65,32 @@ void cleanup_line_maps(DAPServer* dap_server) {
     }
 }
 
-
 // Server state
-typedef struct {
-    DAPServer* server;
+typedef struct
+{
+    DAPServer *server;
     bool is_connected;
     bool is_running;
     bool is_paused;
     int current_thread_id;
-    DAPEventType last_event;  // Track last event type
+    DAPEventType last_event; // Track last event type
 } DAPServerState;
 
-DAPServer* dap_server_create(const DAPServerConfig* config) {
-    if (!config) {
+DAPServer *dap_server_create(const DAPServerConfig *config)
+{
+    if (!config)
+    {
         return NULL;
     }
 
-    DAPServer* server = calloc(1, sizeof(DAPServer));
-    if (!server) {
+    DAPServer *server = calloc(1, sizeof(DAPServer));
+    if (!server)
+    {
         return NULL;
     }
 
-    if (dap_server_init(server, config) < 0) {
+    if (dap_server_init(server, config) < 0)
+    {
         free(server);
         return NULL;
     }
@@ -91,13 +98,16 @@ DAPServer* dap_server_create(const DAPServerConfig* config) {
     return server;
 }
 
-int dap_server_init(DAPServer* server, const DAPServerConfig* config) {
-    if (!server || !config) {
+int dap_server_init(DAPServer *server, const DAPServerConfig *config)
+{
+    if (!server || !config)
+    {
         return -1;
     }
 
     server->transport = dap_transport_create(&config->transport);
-    if (!server->transport) {
+    if (!server->transport)
+    {
         return -1;
     }
 
@@ -112,17 +122,20 @@ int dap_server_init(DAPServer* server, const DAPServerConfig* config) {
 
 /**
  * @brief Start the DAP server
- * 
+ *
  * @param server Server instance
  * @return int 0 on success, -1 on error
  */
-int dap_server_start(DAPServer* server) {
-    if (!server) {
+int dap_server_start(DAPServer *server)
+{
+    if (!server)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
         return -1;
     }
 
-    if (dap_transport_start(server->transport) < 0) {
+    if (dap_transport_start(server->transport) < 0)
+    {
         dap_error_set(DAP_ERROR_TRANSPORT, "Failed to start transport");
         return -1;
     }
@@ -133,17 +146,20 @@ int dap_server_start(DAPServer* server) {
 
 /**
  * @brief Stop the DAP server
- * 
+ *
  * @param server Server instance
  * @return int 0 on success, -1 on error
  */
-int dap_server_stop(DAPServer* server) {
-    if (!server) {
+int dap_server_stop(DAPServer *server)
+{
+    if (!server)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
         return -1;
     }
 
-    if (dap_transport_stop(server->transport) < 0) {
+    if (dap_transport_stop(server->transport) < 0)
+    {
         dap_error_set(DAP_ERROR_TRANSPORT, "Failed to stop transport");
         return -1;
     }
@@ -154,18 +170,22 @@ int dap_server_stop(DAPServer* server) {
 
 /**
  * @brief Free the DAP server
- * 
+ *
  * @param server Server instance
  */
-void dap_server_free(DAPServer* server) {
-    if (!server) return;
+void dap_server_free(DAPServer *server)
+{
+    if (!server)
+        return;
 
-    if (server->transport) {
+    if (server->transport)
+    {
         dap_transport_free(server->transport);
     }
 
-    if (server->config.program_path) {
-        free(server->config.program_path);
+    if (server->program_path)
+    {
+        free(server->program_path);
     }
 
     free(server);
@@ -173,13 +193,15 @@ void dap_server_free(DAPServer* server) {
 
 /**
  * @brief Process a DAP message
- * 
+ *
  * @param server Server instance
  * @param message Message to process
  * @return int 0 on success, -1 on error
  */
-int dap_server_process_message(DAPServer* server, const char* message) {
-    if (!server || !message) {
+int dap_server_process_message(DAPServer *server, const char *message)
+{
+    if (!server || !message)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
     }
@@ -188,40 +210,38 @@ int dap_server_process_message(DAPServer* server, const char* message) {
     DAPMessageType type;
     DAPCommandType command;
     int sequence;
-    cJSON* content = NULL;
-    
-    if (dap_parse_message(message, &type, &command, &sequence, &content) < 0) {
+    cJSON *content = NULL;
+
+    if (dap_parse_message(message, &type, &command, &sequence, &content) < 0)
+    {
         return -1;
     }
 
-    switch (type) {
-        case DAP_MESSAGE_REQUEST:
-            // Handle request
-            if (dap_server_handle_request(server, command, sequence, content) < 0) {
-                cJSON_Delete(content);
-                return -1;
-            }
-            break;
-
-        case DAP_MESSAGE_RESPONSE:
-            // Handle response
-            DAP_SERVER_DEBUG_LOG("Received response: sequence=%d", sequence);
-            break;
-
-        case DAP_MESSAGE_EVENT:
-            // Handle event
-            DAP_SERVER_DEBUG_LOG("Received event: type=%d", command);
-            if (server->config.callbacks.handle_event) {
-                char* content_str = cJSON_PrintUnformatted(content);
-                server->config.callbacks.handle_event(server->config.user_data, (DAPEventType)command, content_str);
-                free(content_str);
-            }
-            break;
-
-        default:
-            DAP_SERVER_DEBUG_LOG("Unknown message type: %d", type);
+    switch (type)
+    {
+    case DAP_MESSAGE_REQUEST:
+        // Handle request
+        if (dap_server_handle_request(server, command, sequence, content) < 0)
+        {
             cJSON_Delete(content);
             return -1;
+        }
+        break;
+
+    case DAP_MESSAGE_RESPONSE:
+        // Handle response
+        DAP_SERVER_DEBUG_LOG("Received response: sequence=%d", sequence);
+        break;
+
+    case DAP_MESSAGE_EVENT:
+        // Handle event
+        DAP_SERVER_DEBUG_LOG("Received event: type=%d. IGNORING!", command);
+        break;
+
+    default:
+        DAP_SERVER_DEBUG_LOG("Unknown message type: %d", type);
+        cJSON_Delete(content);
+        return -1;
     }
 
     cJSON_Delete(content);
@@ -230,7 +250,7 @@ int dap_server_process_message(DAPServer* server, const char* message) {
 
 /**
  * @brief Send a DAP response
- * 
+ *
  * @param server Server instance
  * @param command Command type
  * @param sequence Sequence number
@@ -238,26 +258,31 @@ int dap_server_process_message(DAPServer* server, const char* message) {
  * @param body Response body (JSON string)
  * @return int 0 on success, -1 on error
  */
-int dap_server_send_response(DAPServer* server, DAPCommandType command,
-                           int sequence, bool success, cJSON* body) {
-    if (!server) {
+int dap_server_send_response(DAPServer *server, DAPCommandType command,
+                             int sequence, bool success, cJSON *body)
+{
+    if (!server)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
         return -1;
     }
 
-    cJSON* response = dap_create_response(command, sequence, success, body);
-    if (!response) {
+    cJSON *response = dap_create_response(command, sequence, success, body);
+    if (!response)
+    {
         return -1;
     }
 
-    char* response_str = cJSON_PrintUnformatted(response);
+    char *response_str = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
-    
-    if (!response_str) {
+
+    if (!response_str)
+    {
         return -1;
     }
 
-    if (dap_transport_send(server->transport, response_str) < 0) {
+    if (dap_transport_send(server->transport, response_str) < 0)
+    {
         dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send response");
         free(response_str);
         return -1;
@@ -269,31 +294,36 @@ int dap_server_send_response(DAPServer* server, DAPCommandType command,
 
 /**
  * @brief Send an event to the client
- * 
+ *
  * @param server Server instance
  * @param event_type Event type
  * @param body Event body (JSON string)
  * @return int 0 on success, -1 on error
  */
-int dap_server_send_event(DAPServer* server, DAPEventType event_type, cJSON* body) {
-    if (!server) {
+int dap_server_send_event(DAPServer *server, DAPEventType event_type, cJSON *body)
+{
+    if (!server)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
         return -1;
     }
 
-    cJSON* event = dap_create_event(event_type, body);
-    if (!event) {
+    cJSON *event = dap_create_event(event_type, body);
+    if (!event)
+    {
         return -1;
     }
 
-    char* event_str = cJSON_PrintUnformatted(event);
+    char *event_str = cJSON_PrintUnformatted(event);
     cJSON_Delete(event);
-    
-    if (!event_str) {
+
+    if (!event_str)
+    {
         return -1;
     }
 
-    if (dap_transport_send(server->transport, event_str) < 0) {
+    if (dap_transport_send(server->transport, event_str) < 0)
+    {
         dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send event");
         free(event_str);
         return -1;
@@ -303,111 +333,112 @@ int dap_server_send_event(DAPServer* server, DAPEventType event_type, cJSON* bod
     return 0;
 }
 
-int dap_server_handle_request(DAPServer* server, DAPCommandType command,
-                            int sequence, cJSON* content) {
-    if (!server) {
+int dap_server_handle_request(DAPServer *server, DAPCommandType command,
+                              int sequence, cJSON *content)
+{
+    if (!server)
+    {
         DAP_SERVER_DEBUG_LOG("Invalid server pointer");
         dap_error_set(DAP_ERROR_INVALID_STATE, "Server not properly initialized");
         return -1;
     }
 
     DAP_SERVER_DEBUG_LOG("Handling request: command=%d, sequence=%d", command, sequence);
-    if (content) {
-        char* content_str = cJSON_PrintUnformatted(content);
+    if (content)
+    {
+        char *content_str = cJSON_PrintUnformatted(content);
         DAP_SERVER_DEBUG_LOG("Request content: %s", content_str);
         free(content_str);
     }
 
-    // Check if we have a callback
-    if (!server->config.callbacks.handle_command) {
-        DAP_SERVER_DEBUG_LOG("No command handler registered");
-        cJSON* error_response = cJSON_CreateObject();
-        cJSON* error = cJSON_CreateObject();
-        cJSON_AddNumberToObject(error, "id", 1000);
-        cJSON_AddStringToObject(error, "format", "No command handler registered");
-        cJSON_AddBoolToObject(error, "showUser", true);
-        cJSON_AddItemToObject(error_response, "error", error);
-        return dap_server_send_response(server, command, sequence, false, error_response);
-    }
-
     // Create response structure
     DAPResponse response = {0};
-    
+
     // Convert content to string for callback
-    char* content_str = content ? cJSON_PrintUnformatted(content) : NULL;
-    
+    char *content_str = content ? cJSON_PrintUnformatted(content) : NULL;
+
     // Call the handler
-    int result = server->config.callbacks.handle_command(server->config.user_data, 
-                                                       command, 
-                                                       content_str,
-                                                       &response);
-    
-    if (content_str) {
+    int result = dap_server_handle_command(server, command, content_str, &response);
+
+    if (content_str)
+    {
         free(content_str);
     }
-    
-    if (result < 0) {
+
+    if (result < 0)
+    {
         dap_error_set(DAP_ERROR_REQUEST_FAILED, "Command handler failed");
-        if (response.error_message) {
+        if (response.error_message)
+        {
             free(response.error_message);
         }
-        if (response.data) {
+        if (response.data)
+        {
             free(response.data);
         }
         return -1;
     }
 
     // Send the response with the same command type as the request
-    cJSON* response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
-    result = dap_server_send_response(server, command, sequence, 
-                                    response.success, 
-                                    response_body);
+    cJSON *response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
+    result = dap_server_send_response(server, command, sequence,
+                                      response.success,
+                                      response_body);
 
     // Clean up response
-    if (response.error_message) {
+    if (response.error_message)
+    {
         free(response.error_message);
     }
-    if (response.data) {
+    if (response.data)
+    {
         free(response.data);
     }
 
     return result;
 }
 
-
-
-
-int dap_server_run(DAPServer* server) {
-    if (!server) {
+int dap_server_run(DAPServer *server)
+{
+    if (!server)
+    {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
         return -1;
     }
 
-    if (!server->is_initialized) {
+    if (!server->is_initialized)
+    {
         dap_error_set(DAP_ERROR_INVALID_STATE, "Server not initialized");
         return -1;
     }
 
-    while (server->is_running) {
-        if (dap_transport_accept(server->transport) < 0) {
+    while (server->is_running)
+    {
+        if (dap_transport_accept(server->transport) < 0)
+        {
             continue;
         }
 
-        while (server->is_running) {
-            char* message = NULL;
+        while (server->is_running)
+        {
+            char *message = NULL;
             int result = dap_transport_receive(server->transport, &message);
-            if (result < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (result < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
                     continue;
                 }
                 break;
             }
 
-            if (!message) {
+            if (!message)
+            {
                 break;
             }
 
-            if (dap_server_process_message(server, message) < 0) {
+            if (dap_server_process_message(server, message) < 0)
+            {
                 free(message);
                 continue;
             }
@@ -417,30 +448,32 @@ int dap_server_run(DAPServer* server) {
     }
 
     return 0;
-} 
-
-
-
+}
 
 // Update add_breakpoint to use MockDebugger
-void add_breakpoint(DAPServer* server, const char* file_path, int line) {
+void add_breakpoint(DAPServer *server, const char *file_path, int line)
+{
     // Check if breakpoint already exists
-    for (int i = 0; i < server->breakpoint_count; i++) {
-        if (server->breakpoints[i].source && 
-            strcmp(server->breakpoints[i].source->path, file_path) == 0 && 
-            server->breakpoints[i].line == line) {
+    for (int i = 0; i < server->breakpoint_count; i++)
+    {
+        if (server->breakpoints[i].source &&
+            strcmp(server->breakpoints[i].source->path, file_path) == 0 &&
+            server->breakpoints[i].line == line)
+        {
             return; // Breakpoint already exists
         }
     }
 
     // Resize array if needed
-    if (server->breakpoint_count >= MAX_BREAKPOINTS) {
+    if (server->breakpoint_count >= MAX_BREAKPOINTS)
+    {
         return;
     }
 
-    DAPBreakpoint* new_breakpoints = realloc(server->breakpoints, 
-                                           (server->breakpoint_count + 1) * sizeof(DAPBreakpoint));
-    if (!new_breakpoints) {
+    DAPBreakpoint *new_breakpoints = realloc(server->breakpoints,
+                                             (server->breakpoint_count + 1) * sizeof(DAPBreakpoint));
+    if (!new_breakpoints)
+    {
         return;
     }
 
@@ -448,30 +481,36 @@ void add_breakpoint(DAPServer* server, const char* file_path, int line) {
     server->breakpoints[server->breakpoint_count].line = line;
     server->breakpoints[server->breakpoint_count].column = 0;
     server->breakpoints[server->breakpoint_count].verified = true;
-    
+
     // Set the source
-    DAPSource* bp_source = malloc(sizeof(DAPSource));
-    if (bp_source) {
+    DAPSource *bp_source = malloc(sizeof(DAPSource));
+    if (bp_source)
+    {
         bp_source->path = strdup(file_path);
         server->breakpoints[server->breakpoint_count].source = bp_source;
     }
-    
+
     server->breakpoint_count++;
 }
 
 // Update remove_breakpoints to use MockDebugger
-void remove_breakpoints(DAPServer* server, const char* file_path) {
-    for (int i = 0; i < server->breakpoint_count; i++) {
-        if (server->breakpoints[i].source && 
-            strcmp(server->breakpoints[i].source->path, file_path) == 0) {
+void remove_breakpoints(DAPServer *server, const char *file_path)
+{
+    for (int i = 0; i < server->breakpoint_count; i++)
+    {
+        if (server->breakpoints[i].source &&
+            strcmp(server->breakpoints[i].source->path, file_path) == 0)
+        {
             // Free the source
-            if (server->breakpoints[i].source) {
+            if (server->breakpoints[i].source)
+            {
                 free(server->breakpoints[i].source->path);
                 free(server->breakpoints[i].source);
             }
-            
+
             // Move last breakpoint to this position
-            if (i < server->breakpoint_count - 1) {
+            if (i < server->breakpoint_count - 1)
+            {
                 server->breakpoints[i] = server->breakpoints[server->breakpoint_count - 1];
             }
             server->breakpoint_count--;
@@ -481,15 +520,20 @@ void remove_breakpoints(DAPServer* server, const char* file_path) {
 }
 
 // Update get_breakpoints_for_file to use MockDebugger
-cJSON* get_breakpoints_for_file(DAPServer* server, const char* file_path) {
-    cJSON* breakpoints = cJSON_CreateArray();
-    if (!breakpoints) return NULL;
+cJSON *get_breakpoints_for_file(DAPServer *server, const char *file_path)
+{
+    cJSON *breakpoints = cJSON_CreateArray();
+    if (!breakpoints)
+        return NULL;
 
-    for (int i = 0; i < server->breakpoint_count; i++) {
-        if (server->breakpoints[i].source && 
-            strcmp(server->breakpoints[i].source->path, file_path) == 0) {
-            cJSON* bp = cJSON_CreateObject();
-            if (bp) {
+    for (int i = 0; i < server->breakpoint_count; i++)
+    {
+        if (server->breakpoints[i].source &&
+            strcmp(server->breakpoints[i].source->path, file_path) == 0)
+        {
+            cJSON *bp = cJSON_CreateObject();
+            if (bp)
+            {
                 cJSON_AddNumberToObject(bp, "line", server->breakpoints[i].line);
                 cJSON_AddBoolToObject(bp, "verified", server->breakpoints[i].verified);
                 cJSON_AddItemToArray(breakpoints, bp);
@@ -501,9 +545,12 @@ cJSON* get_breakpoints_for_file(DAPServer* server, const char* file_path) {
 }
 
 // Add helper function for line mapping
-int get_line_for_address(DAPServer* server, uint32_t address) {
-    for (int i = 0; i < server->line_map_count; i++) {
-        if (server->line_maps[i].address == address) {
+int get_line_for_address(DAPServer *server, uint32_t address)
+{
+    for (int i = 0; i < server->line_map_count; i++)
+    {
+        if (server->line_maps[i].address == address)
+        {
             return server->line_maps[i].line;
         }
     }
@@ -511,11 +558,14 @@ int get_line_for_address(DAPServer* server, uint32_t address) {
 }
 
 // Fix pointer type in add_line_map
-void add_line_map(DAPServer* server, const char* file_path, int line, uint32_t address) {
-    if (server->line_map_count >= server->line_map_capacity) {
+void add_line_map(DAPServer *server, const char *file_path, int line, uint32_t address)
+{
+    if (server->line_map_count >= server->line_map_capacity)
+    {
         size_t new_capacity = server->line_map_capacity == 0 ? 16 : server->line_map_capacity * 2;
-        SourceLineMap* new_maps = realloc(server->line_maps, new_capacity * sizeof(SourceLineMap));
-        if (!new_maps) {
+        SourceLineMap *new_maps = realloc(server->line_maps, new_capacity * sizeof(SourceLineMap));
+        if (!new_maps)
+        {
             return;
         }
         server->line_maps = new_maps;
@@ -528,3 +578,150 @@ void add_line_map(DAPServer* server, const char* file_path, int line, uint32_t a
     server->line_map_count++;
 }
 
+int dap_server_handle_command(DAPServer *server, DAPCommandType command,
+                              const char *args, DAPResponse *response)
+{
+
+    if (!response)
+    {
+        return -1;
+    }
+
+    DAP_SERVER_DEBUG_LOG("Handling command: %d", (int)command);
+
+    // Convert args string to cJSON if needed
+    cJSON *json_args = args ? cJSON_Parse(args) : NULL;
+    if (args && !json_args)
+    {
+        response->success = false;
+        response->error_message = strdup("Failed to parse arguments");
+        return 0; // Return 0 even for errors to ensure response is sent
+    }
+
+    // Handle different commands
+    int result = 0;
+    switch (command)
+    {
+    case DAP_CMD_INITIALIZE:
+        result = handle_initialize(server, json_args, response);
+        break;
+    case DAP_CMD_LAUNCH:
+    {
+        DAP_SERVER_DEBUG_LOG("About to handle launch request");
+        result = handle_launch(server, json_args, response);
+        DAP_SERVER_DEBUG_LOG("Launch request handled, result=%d", result);
+
+        // Always return 0 for launch even if there was an error
+        // This ensures that the response is sent back to the client
+        if (result != 0)
+        {
+            DAP_SERVER_DEBUG_LOG("Converting error result %d to success 0 to ensure response is sent", result);
+            result = 0;
+        }
+
+        // Store a copy of the args for later sending the event
+        cJSON *program = json_args ? cJSON_GetObjectItem(json_args, "program") : NULL;
+        cJSON *args_array = json_args ? cJSON_GetObjectItem(json_args, "args") : NULL;
+
+        // Schedule the event to be sent after response
+        if (response->success && program && cJSON_IsString(program))
+        {
+            // Small delay to ensure response is processed first
+            usleep(10000); // 10ms delay
+            send_launch_stopped_event(server, program->valuestring, args_array);
+        }
+
+        break; // Use break instead of return to continue with normal flow
+    }
+    case DAP_CMD_ATTACH:
+        result = handle_attach(server, json_args, response);
+        break;
+    case DAP_CMD_DISCONNECT:
+        cleanup_breakpoints(server);
+        result = handle_disconnect(server, json_args, response);
+        break;
+    case DAP_CMD_TERMINATE:
+        result = handle_terminate(server, json_args, response);
+        break;
+    case DAP_CMD_RESTART:
+        result = handle_restart(server, json_args, response);
+        break;
+    case DAP_CMD_SET_BREAKPOINTS:
+        result = handle_set_breakpoints(server, json_args, response);
+        break;
+    case DAP_CMD_CONFIGURATION_DONE:
+        result = handle_configuration_done(server, json_args, response);
+        break;
+    case DAP_CMD_THREADS:
+        result = handle_threads(server, json_args, response);
+        break;
+    case DAP_CMD_STACK_TRACE:
+        result = handle_stack_trace(server, json_args, response);
+        break;
+    case DAP_CMD_SCOPES:
+        result = handle_scopes(server, json_args, response);
+        break;
+    case DAP_CMD_VARIABLES:
+        result = handle_variables(server, json_args, response);
+        break;
+    case DAP_CMD_CONTINUE:
+        result = handle_continue(server, json_args, response);
+        break;
+    case DAP_CMD_NEXT:
+        result = handle_next(server, json_args, response);
+        break;
+    case DAP_CMD_STEP_IN:
+        result = handle_step_in(server, json_args, response);
+        break;
+    case DAP_CMD_STEP_OUT:
+        result = handle_step_out(server, json_args, response);
+        break;
+    case DAP_CMD_EVALUATE:
+        result = handle_evaluate(server, json_args, response);
+        break;
+    case DAP_CMD_PAUSE:
+        result = handle_pause(server, json_args, response);
+        break;
+    case DAP_CMD_READ_MEMORY:
+        result = handle_read_memory(server, json_args, response);
+        break;
+    case DAP_CMD_WRITE_MEMORY:
+        result = handle_write_memory(server, json_args, response);
+        break;
+    case DAP_CMD_READ_REGISTERS:
+        result = handle_read_registers(server, json_args, response);
+        break;
+    case DAP_CMD_WRITE_REGISTERS:
+        result = handle_write_register(server, json_args, response);
+        break;
+    case DAP_CMD_SOURCE:
+        result = handle_source(server, json_args, response);
+        break;
+    case DAP_CMD_LOADED_SOURCES:
+        result = handle_loaded_sources(server, json_args, response);
+        break;
+    case DAP_CMD_DISASSEMBLE:
+        result = handle_disassemble(server, json_args, response);
+        break;
+    default:
+        response->success = false;
+        response->error_message = strdup("Unknown command");
+        result = 0;
+        break;
+    }
+
+    if (json_args)
+    {
+        cJSON_Delete(json_args);
+    }
+
+    // Ensure we always return 0 so that responses are sent to the client
+    // DAP protocol requires all requests to have responses, even errors
+    if (result != 0)
+    {
+        DAP_SERVER_DEBUG_LOG("Command handler returned error %d, converting to 0 to ensure response is sent", result);
+        result = 0;
+    }
+
+    return result;
+}

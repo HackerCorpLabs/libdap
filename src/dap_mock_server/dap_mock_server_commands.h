@@ -41,8 +41,6 @@ int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response);
 
 
 
-int mock_handle_command(void* user_data, DAPCommandType command, const char* args, DAPResponse* response);
-
 // Callback function for handling DAP commands
 int handle_launch(DAPServer* server, cJSON* args, DAPResponse* response) ;
 int handle_attach(DAPServer* server, cJSON* args, DAPResponse* response);

@@ -217,25 +217,7 @@ int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* a
                 set_response_success(response, body);
                 cJSON_Delete(body);
 
-                // Send stopped event according to DAP spec
-                DAPServer* server = (DAPServer*)mock_debugger.server;
-                if (server && server->config.callbacks.handle_event) {
-                    cJSON* event_body = cJSON_CreateObject();
-                    if (event_body) {
-                        cJSON_AddNumberToObject(event_body, "threadId", thread_id);
-                        cJSON_AddStringToObject(event_body, "reason", "pause");
-                        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
-                        
-                        char* event_body_str = cJSON_PrintUnformatted(event_body);
-                        if (event_body_str) {
-                            server->config.callbacks.handle_event(server->config.user_data,
-                                                               DAP_EVENT_STOPPED,
-                                                               event_body_str);
-                            free(event_body_str);
-                        }
-                        cJSON_Delete(event_body);
-                    }
-                }
+                
                 return 0;
             }
             set_response_error(response, "Debugger is already paused");
@@ -1174,25 +1156,6 @@ int handle_continue(DAPServer* server, cJSON* args, DAPResponse* response) {
     cJSON_Delete(body);
 
     server->paused = false;
-
-    // Send continued event according to DAP spec
-    if (server->config.callbacks.handle_event) {
-        cJSON* event_body = cJSON_CreateObject();
-        if (event_body) {
-            cJSON_AddNumberToObject(event_body, "threadId", server->current_thread);
-            cJSON_AddBoolToObject(event_body, "allThreadsContinued", true);
-            
-            char* event_body_str = cJSON_PrintUnformatted(event_body);
-            if (event_body_str) {
-                server->config.callbacks.handle_event(server->config.user_data,
-                                                   DAP_EVENT_CONTINUED,
-                                                   event_body_str);
-                free(event_body_str);
-            }
-            cJSON_Delete(event_body);
-        }
-    }
-
     return 0;
 }
 
@@ -1218,9 +1181,15 @@ int handle_next(DAPServer* server, cJSON* args, DAPResponse* response) {
         response->success = false;
         response->error_message = strdup("Failed to create response body");
         return 0;
+
     }
 
+    cJSON_AddStringToObject(body, "reason", "step");
+    cJSON_AddNumberToObject(body, "threadId", server->current_thread);
     cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+    cJSON_AddStringToObject(body, "description", "Stepped over instruction");
+
+    
 
     // Convert to string
     char* body_str = cJSON_PrintUnformatted(body);
@@ -1241,39 +1210,30 @@ int handle_next(DAPServer* server, cJSON* args, DAPResponse* response) {
     response->success = true;
     response->data = body_str;
 
-    if (server->config.callbacks.handle_event) {
-        cJSON* event_body = cJSON_CreateObject();
-        if (event_body) {
-            cJSON_AddStringToObject(event_body, "reason", "step");
-            cJSON_AddNumberToObject(event_body, "threadId", server->current_thread);
-            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
-            cJSON_AddStringToObject(event_body, "description", "Stepped over instruction");
-            
-            if (server->current_source) {
-                cJSON* source = cJSON_CreateObject();
-                if (source) {
-                    cJSON_AddStringToObject(source, "name", server->current_source->name);
-                    cJSON_AddStringToObject(source, "path", server->current_source->path);
-                    cJSON_AddItemToObject(event_body, "source", source);
-                }
+    // Send event
+    cJSON* event_body = cJSON_CreateObject();
+    if (event_body) {
+        
+        if (server->current_source) {
+            cJSON* source = cJSON_CreateObject();
+            if (source) {
+                cJSON_AddStringToObject(source, "name", server->current_source->name);
+                cJSON_AddStringToObject(source, "path", server->current_source->path);
+                cJSON_AddItemToObject(event_body, "source", source);
             }
-            
-            // Add line information if available
-            if (line > 0) {
-                cJSON_AddNumberToObject(event_body, "line", line);
-                cJSON_AddNumberToObject(event_body, "column", server->current_column);
-            }
-            
-            char* event_body_str = cJSON_PrintUnformatted(event_body);
-            if (event_body_str) {
-                server->config.callbacks.handle_event(server->config.user_data,
-                                                   DAP_EVENT_STOPPED,
-                                                   event_body_str);
-                free(event_body_str);
-            }
-            cJSON_Delete(event_body);
         }
+        
+        // Add line information if available
+        if (line > 0) {
+            cJSON_AddNumberToObject(event_body, "line", line);
+            cJSON_AddNumberToObject(event_body, "column", server->current_column);
+        }
+        
+        // Use dap_server_send_event instead of manual event creation and sending
+        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        cJSON_Delete(event_body);
     }
+
 
     return 0;
 }
@@ -1364,7 +1324,7 @@ int handle_step_in(DAPServer* server, cJSON* args, DAPResponse* response) {
     response->data = body_str;
 
     
-    if (server->config.callbacks.handle_event) {
+    
         cJSON* event_body = cJSON_CreateObject();
         if (event_body) {
             cJSON_AddStringToObject(event_body, "reason", "step");
@@ -1386,17 +1346,12 @@ int handle_step_in(DAPServer* server, cJSON* args, DAPResponse* response) {
                 cJSON_AddNumberToObject(event_body, "line", line);
                 cJSON_AddNumberToObject(event_body, "column", server->current_column);
             }
+                        
             
-            char* event_body_str = cJSON_PrintUnformatted(event_body);
-            if (event_body_str) {
-                server->config.callbacks.handle_event(server->config.user_data,
-                                                   DAP_EVENT_STOPPED,
-                                                   event_body_str);
-                free(event_body_str);
-            }
+            dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
             cJSON_Delete(event_body);
         }
-    }
+    
 
     return 0;
 }
@@ -1444,39 +1399,33 @@ int handle_step_out(DAPServer* server, cJSON* args, DAPResponse* response) {
     response->success = true;
     response->data = body_str;
 
-    if (server->config.callbacks.handle_event) {
-        cJSON* event_body = cJSON_CreateObject();
-        if (event_body) {
-            cJSON_AddStringToObject(event_body, "reason", "step");
-            cJSON_AddNumberToObject(event_body, "threadId", server->current_thread);
-            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
-            cJSON_AddStringToObject(event_body, "description", "Stepped out of function");
-            
-            if (server->current_source) {
-                cJSON* source = cJSON_CreateObject();
-                if (source) {
-                    cJSON_AddStringToObject(source, "name", server->current_source->name);
-                    cJSON_AddStringToObject(source, "path", server->current_source->path);
-                    cJSON_AddItemToObject(event_body, "source", source);
-                }
+    // Send event
+    cJSON* event_body = cJSON_CreateObject();
+    if (event_body) {
+        cJSON_AddStringToObject(event_body, "reason", "step");
+        cJSON_AddNumberToObject(event_body, "threadId", server->current_thread);
+        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+        cJSON_AddStringToObject(event_body, "description", "Stepped out of function");
+        
+        if (server->current_source) {
+            cJSON* source = cJSON_CreateObject();
+            if (source) {
+                cJSON_AddStringToObject(source, "name", server->current_source->name);
+                cJSON_AddStringToObject(source, "path", server->current_source->path);
+                cJSON_AddItemToObject(event_body, "source", source);
             }
-            
-            // Add line information if available
-            if (line > 0) {
-                cJSON_AddNumberToObject(event_body, "line", line);
-                cJSON_AddNumberToObject(event_body, "column", server->current_column);
-            }
-            
-            char* event_body_str = cJSON_PrintUnformatted(event_body);
-            if (event_body_str) {
-                server->config.callbacks.handle_event(server->config.user_data,
-                                                   DAP_EVENT_STOPPED,
-                                                   event_body_str);
-                free(event_body_str);
-            }
-            cJSON_Delete(event_body);
         }
+        
+        // Add line information if available
+        if (line > 0) {
+            cJSON_AddNumberToObject(event_body, "line", line);
+            cJSON_AddNumberToObject(event_body, "column", server->current_column);
+        }
+                    
+        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        cJSON_Delete(event_body);
     }
+    
 
     return 0;
 }
@@ -1788,40 +1737,33 @@ int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response) {
     response->data = body_str;
 
     // Send stopped event according to DAP spec
-    
-    if (server->config.callbacks.handle_event) {
-        cJSON* event_body = cJSON_CreateObject();
-        if (event_body) {
-            cJSON_AddStringToObject(event_body, "reason", "pause");
-            cJSON_AddNumberToObject(event_body, "threadId", thread_id);
-            cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
-            cJSON_AddStringToObject(event_body, "description", "Thread paused by user");
-            
-            if (server->current_source) {
-                cJSON* source = cJSON_CreateObject();
-                if (source) {
-                    cJSON_AddStringToObject(source, "name", server->current_source->name);
-                    cJSON_AddStringToObject(source, "path", server->current_source->path);
-                    cJSON_AddItemToObject(event_body, "source", source);
-                }
+        
+    cJSON* event_body = cJSON_CreateObject();
+    if (event_body) {
+        cJSON_AddStringToObject(event_body, "reason", "pause");
+        cJSON_AddNumberToObject(event_body, "threadId", thread_id);
+        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+        cJSON_AddStringToObject(event_body, "description", "Thread paused by user");
+        
+        if (server->current_source) {
+            cJSON* source = cJSON_CreateObject();
+            if (source) {
+                cJSON_AddStringToObject(source, "name", server->current_source->name);
+                cJSON_AddStringToObject(source, "path", server->current_source->path);
+                cJSON_AddItemToObject(event_body, "source", source);
             }
-            
-            // Add line information if available
-            if (server->current_line > 0) {
-                cJSON_AddNumberToObject(event_body, "line", server->current_line);
-                cJSON_AddNumberToObject(event_body, "column", server->current_column);
-            }
-            
-            char* event_body_str = cJSON_PrintUnformatted(event_body);
-            if (event_body_str) {
-                server->config.callbacks.handle_event(server->config.user_data,
-                                                   DAP_EVENT_STOPPED,
-                                                   event_body_str);
-                free(event_body_str);
-            }
-            cJSON_Delete(event_body);
         }
+        
+        // Add line information if available
+        if (server->current_line > 0) {
+            cJSON_AddNumberToObject(event_body, "line", server->current_line);
+            cJSON_AddNumberToObject(event_body, "column", server->current_column);
+        }
+                    
+        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        cJSON_Delete(event_body);
     }
+
 
     return 0;
 }
@@ -2182,11 +2124,6 @@ void send_launch_stopped_event(DAPServer* server, const char* program_path, cJSO
         cJSON_AddItemToObject(event_body, "args", cJSON_Duplicate(args, 1));
     }
 
-    // Send the event directly with the cJSON object
-    // Note: dap_server_send_event takes ownership of event_body and will free it
     dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-    
-    // Do NOT delete event_body here - it's already deleted by dap_server_send_event
-    // The line below caused a double-free error
-    // cJSON_Delete(event_body);
+    cJSON_Delete(event_body);
 }

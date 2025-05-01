@@ -1,16 +1,5 @@
-/**
- * @file dap_mock_server_commands.h
- * @brief Command handler declarations for the DAP mock server
- */
-
-#ifndef DAP_MOCK_SERVER_COMMANDS_H
-#define DAP_MOCK_SERVER_COMMANDS_H
-
+#include "dap_server.h"
 #include <cjson/cJSON.h>
-#include "../libdap/include/dap_protocol.h"
-
-
-int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* args, DAPResponse* response);
 
 
 // Command handler declarations
@@ -45,6 +34,6 @@ int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_launch(DAPServer* server, cJSON* args, DAPResponse* response) ;
 int handle_attach(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_initialize(DAPServer* server, cJSON* args, DAPResponse* response);
-void send_launch_stopped_event(DAPServer* server, const char* program_path, cJSON* args);
 
-#endif // DAP_MOCK_SERVER_COMMANDS_H
+
+int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* args, DAPResponse* response);

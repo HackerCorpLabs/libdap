@@ -37,7 +37,7 @@
 #include <sys/stat.h>
 
 #include "dap_mock_server.h"
-#include "dap_mock_server_commands.h"
+
 
 
 
@@ -46,6 +46,30 @@
 // Forward declarations
 struct DAPServer;
 
+// Function to step the CPU one instruction
+static int step_cpu(DAPServer *server) {
+    (void)server;
+    // Mock implementation to advance PC by 1
+    mock_debugger.pc++;
+    return mock_debugger.pc;
+}
+
+// Function to step the CPU to the next source line
+static int step_cpu_line(DAPServer *server) {
+    (void)server;
+    // Mock implementation to advance PC by 4 (typical instruction size)
+    mock_debugger.pc += 4;
+    return mock_debugger.pc;
+}
+
+// Function to step the CPU to the next statement
+static int step_cpu_statement(DAPServer *server) {
+    (void)server;
+    // Mock implementation to advance PC by 2 (smaller step than line)
+
+    mock_debugger.pc += 2;
+    return mock_debugger.pc;
+}
 
 // Update the line_maps field in MockDebugger initialization
 MockDebugger mock_debugger = {
@@ -82,6 +106,11 @@ int dbg_mock_init(int port) {
     };
 
     mock_debugger.server = dap_server_create(&config);
+
+    mock_debugger.server->step_cpu = step_cpu;
+    mock_debugger.server->step_cpu_line = step_cpu_line;
+    mock_debugger.server->step_cpu_statement = step_cpu_statement;
+    
     if (!mock_debugger.server) {
         return -1;
     }
@@ -173,6 +202,7 @@ int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
     (void)server;  // Mark as unused
     (void)args;  // Mark as unused
 
+    cleanup_breakpoints(server);
     printf("Disconnecting from debuggee\n");
     
     response->success = true;

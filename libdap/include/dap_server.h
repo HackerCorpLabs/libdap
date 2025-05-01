@@ -28,10 +28,26 @@
 #ifndef ND100X_DAP_SERVER_H
 #define ND100X_DAP_SERVER_H
 
+
+// Debug logging macro
+#define DAP_SERVER_DEBUG_LOG(...)                                   \
+    do                                                              \
+    {                                                               \
+        fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
+        fprintf(stderr, __VA_ARGS__);                               \
+        fprintf(stderr, "\n");                                      \
+        fflush(stderr);                                             \
+    } while (0)
+
+    
+
 // Define MAX_BREAKPOINTS if not already defined
 #ifndef MAX_BREAKPOINTS
 #define MAX_BREAKPOINTS 100 // Maximum number of breakpoints supported
 #endif
+
+// Maximum number of commands supported
+#define MAX_DAP_COMMANDS 50
 
 #include "dap_protocol.h"
 #include "dap_message.h"
@@ -40,6 +56,41 @@
 // Forward declarations
 typedef struct DAPServer DAPServer;
 typedef struct DAPServerConfig DAPServerConfig;
+
+
+
+// Breakpoint structure
+typedef struct {
+    char* file_path;
+    int line;
+    bool verified;
+} Breakpoint;
+
+// Line mapping structure
+typedef struct
+{
+    const char *file_path;
+    int line;
+    uint32_t address;
+} SourceLineMap;
+
+
+// Register structure and list
+typedef struct {
+    const char* name;
+    uint16_t value;
+    const char* type;
+    bool has_nested;  // Whether this register has nested variables (like status flags)
+    int nested_ref;   // Reference number for nested variables
+} Register;
+
+// Status flag structure
+typedef struct {
+    const char* name;
+    bool value;
+    const char* type;
+} StatusFlag;
+
 
 /**
  * @brief Response structure for DAP commands
@@ -52,13 +103,9 @@ typedef struct
     char *error_message; /**< Error message if failed, NULL if succeeded */
 } DAPResponse;
 
-// Line mapping structure
-typedef struct
-{
-    const char *file_path;
-    int line;
-    uint32_t address;
-} SourceLineMap;
+// Define command handler type for function pointers
+typedef int (*DAPCommandHandler)(DAPServer *server, cJSON *args, DAPResponse *response);
+
 
 /**
  * @brief DAP server configuration
@@ -82,7 +129,7 @@ struct DAPServer
     int sequence;          /**< Current sequence number */
     int current_thread_id; /**< Current thread ID for execution control */
 
-    const char *program_path;
+    char *program_path;
 
     const DAPSource *current_source;
 
@@ -94,16 +141,32 @@ struct DAPServer
     int line_map_count;
     int line_map_capacity;
 
+    // Command handler array
+    DAPCommandHandler command_handlers[MAX_DAP_COMMANDS]; /**< Array of command handlers */
+    
+    ///Steps to the next machine instruction. This is useful for very low-level debugging (e.g., assembly, bytecode).
+    int (*step_cpu)(DAPServer *server);
+
+    /// @brief Steps to the next line of source code. This can differ from "statement" when multiple statements are on the same line or when statements span multiple lines.
+    int (*step_cpu_line)(DAPServer *server);
+
+    /// @brief Steps to the next statement in the current source code (typical behavior for source-level debugging).
+    int (*step_cpu_statement)(DAPServer *server);
+
     // Not used ???
 
     int current_thread;
     int current_line;
+    int current_pc; // Current program counter from the cpu (set when stepping)
     int current_column;
 
     bool running;
     bool attached;
     bool paused;
 };
+
+
+
 
 /**
  * @brief Create a new DAP server
@@ -222,4 +285,13 @@ void cleanup_line_maps(DAPServer *dap_server);
  */
 int dap_server_handle_command(DAPServer *server, DAPCommandType command, const char *args, DAPResponse *response);
 
+/**
+ * @brief Initialize command handlers for the DAP server
+ *
+ * @param server Server instance
+ */
+void initialize_command_handlers(DAPServer *server);
+
+
+int get_line_for_address(DAPServer* server, uint32_t address);
 #endif /* ND100X_DAP_SERVER_H */

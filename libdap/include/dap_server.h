@@ -28,6 +28,12 @@
 #ifndef ND100X_DAP_SERVER_H
 #define ND100X_DAP_SERVER_H
 
+
+// Define MAX_BREAKPOINTS if not already defined
+#ifndef MAX_BREAKPOINTS
+#define MAX_BREAKPOINTS 100  // Maximum number of breakpoints supported
+#endif
+
 #include "dap_protocol.h"
 #include "dap_message.h"
 #include "dap_transport.h"
@@ -77,6 +83,16 @@ typedef struct {
                        const char* content);
 } DAPDebugCallbacks;
 
+
+
+// Line mapping structure
+typedef struct {
+    const char* file_path;
+    int line;
+    uint32_t address;
+} SourceLineMap;
+
+
 /**
  * @brief DAP server configuration
  */
@@ -96,8 +112,36 @@ struct DAPServer {
     DAPTransport* transport;      /**< Transport instance */
     bool is_running;             /**< Whether server is running */
     bool is_initialized;         /**< Whether server is initialized */
+
+    
+
     int sequence;                /**< Current sequence number */
     int current_thread_id;       /**< Current thread ID for execution control */
+
+    const char* program_path;
+    
+    const DAPSource* current_source;
+
+    int breakpoint_count;
+    DAPBreakpoint* breakpoints;
+
+
+    // Line mapping fields
+    SourceLineMap* line_maps;
+    int line_map_count;
+    int line_map_capacity;
+
+
+    // Not used ???
+
+    int current_thread;
+    int current_line;
+    int current_column;
+
+    bool running;
+    bool attached;
+    bool paused;    
+
 };
 
 /**
@@ -185,5 +229,11 @@ int dap_server_send_response(DAPServer* server, DAPCommandType command,
 int dap_server_send_event(DAPServer* server, DAPEventType event_type, cJSON* body);
 
 int dap_server_run(DAPServer* server);
+
+void cleanup_breakpoints(DAPServer* debugger);
+void cleanup_line_maps(DAPServer* dap_server);  
+
+
+
 
 #endif /* ND100X_DAP_SERVER_H */ 

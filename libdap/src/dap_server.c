@@ -33,6 +33,36 @@
 #include <cjson/cJSON.h>
 
 
+
+void cleanup_breakpoints(DAPServer* dap_server) {
+    if (dap_server->breakpoints) {
+        for (int i = 0; i < dap_server->breakpoint_count; i++) {
+            if (dap_server->breakpoints[i].source) {
+                free(dap_server->breakpoints[i].source->path);
+                free(dap_server->breakpoints[i].source);
+            }
+        }
+        free(dap_server->breakpoints);
+        dap_server->breakpoints = NULL;
+        dap_server->breakpoint_count = 0;
+    }
+}
+
+
+
+void cleanup_line_maps(DAPServer* dap_server) {
+    if (dap_server->line_maps) {
+        for (int i = 0; i < dap_server->line_map_count; i++) {
+            free((void*)dap_server->line_maps[i].file_path);
+        }
+        free(dap_server->line_maps);
+        dap_server->line_maps = NULL;
+        dap_server->line_map_count = 0;
+        dap_server->line_map_capacity = 0;
+    }
+}
+
+
 // Server state
 typedef struct {
     DAPServer* server;
@@ -42,10 +72,6 @@ typedef struct {
     int current_thread_id;
     DAPEventType last_event;  // Track last event type
 } DAPServerState;
-
-// Forward declarations
-static int __attribute__((unused)) handle_set_breakpoints(DAPServer* server, const char* content, int sequence);
-static int __attribute__((unused)) handle_initialize(DAPServer* server, cJSON* content, int sequence);
 
 DAPServer* dap_server_create(const DAPServerConfig* config) {
     if (!config) {
@@ -348,37 +374,8 @@ int dap_server_handle_request(DAPServer* server, DAPCommandType command,
     return result;
 }
 
-/**
- * @brief Handle initialize request
- * 
- * @param server Server instance
- * @param content Request content
- * @param sequence Sequence number
- * @return int 0 on success, -1 on failure
- */
-static int __attribute__((unused)) handle_initialize(DAPServer* server, cJSON* content, int sequence) {
-    // TODO: Implement initialize handler
-    (void)server;    // Mark as used
-    (void)content;   // Mark as used
-    (void)sequence;  // Mark as used
-    return 0;
-}
 
-/**
- * @brief Handle set breakpoints request
- * 
- * @param server Server instance
- * @param content Request content
- * @param sequence Sequence number
- * @return int 0 on success, -1 on failure
- */
-static int __attribute__((unused)) handle_set_breakpoints(DAPServer* server, const char* content, int sequence) {
-    // TODO: Implement set breakpoints handler
-    (void)server;    // Mark as used
-    (void)content;   // Mark as used
-    (void)sequence;  // Mark as used
-    return 0;
-}
+
 
 int dap_server_run(DAPServer* server) {
     if (!server) {
@@ -421,3 +418,113 @@ int dap_server_run(DAPServer* server) {
 
     return 0;
 } 
+
+
+
+
+// Update add_breakpoint to use MockDebugger
+void add_breakpoint(DAPServer* server, const char* file_path, int line) {
+    // Check if breakpoint already exists
+    for (int i = 0; i < server->breakpoint_count; i++) {
+        if (server->breakpoints[i].source && 
+            strcmp(server->breakpoints[i].source->path, file_path) == 0 && 
+            server->breakpoints[i].line == line) {
+            return; // Breakpoint already exists
+        }
+    }
+
+    // Resize array if needed
+    if (server->breakpoint_count >= MAX_BREAKPOINTS) {
+        return;
+    }
+
+    DAPBreakpoint* new_breakpoints = realloc(server->breakpoints, 
+                                           (server->breakpoint_count + 1) * sizeof(DAPBreakpoint));
+    if (!new_breakpoints) {
+        return;
+    }
+
+    server->breakpoints = new_breakpoints;
+    server->breakpoints[server->breakpoint_count].line = line;
+    server->breakpoints[server->breakpoint_count].column = 0;
+    server->breakpoints[server->breakpoint_count].verified = true;
+    
+    // Set the source
+    DAPSource* bp_source = malloc(sizeof(DAPSource));
+    if (bp_source) {
+        bp_source->path = strdup(file_path);
+        server->breakpoints[server->breakpoint_count].source = bp_source;
+    }
+    
+    server->breakpoint_count++;
+}
+
+// Update remove_breakpoints to use MockDebugger
+void remove_breakpoints(DAPServer* server, const char* file_path) {
+    for (int i = 0; i < server->breakpoint_count; i++) {
+        if (server->breakpoints[i].source && 
+            strcmp(server->breakpoints[i].source->path, file_path) == 0) {
+            // Free the source
+            if (server->breakpoints[i].source) {
+                free(server->breakpoints[i].source->path);
+                free(server->breakpoints[i].source);
+            }
+            
+            // Move last breakpoint to this position
+            if (i < server->breakpoint_count - 1) {
+                server->breakpoints[i] = server->breakpoints[server->breakpoint_count - 1];
+            }
+            server->breakpoint_count--;
+            i--; // Check this position again
+        }
+    }
+}
+
+// Update get_breakpoints_for_file to use MockDebugger
+cJSON* get_breakpoints_for_file(DAPServer* server, const char* file_path) {
+    cJSON* breakpoints = cJSON_CreateArray();
+    if (!breakpoints) return NULL;
+
+    for (int i = 0; i < server->breakpoint_count; i++) {
+        if (server->breakpoints[i].source && 
+            strcmp(server->breakpoints[i].source->path, file_path) == 0) {
+            cJSON* bp = cJSON_CreateObject();
+            if (bp) {
+                cJSON_AddNumberToObject(bp, "line", server->breakpoints[i].line);
+                cJSON_AddBoolToObject(bp, "verified", server->breakpoints[i].verified);
+                cJSON_AddItemToArray(breakpoints, bp);
+            }
+        }
+    }
+
+    return breakpoints;
+}
+
+// Add helper function for line mapping
+int get_line_for_address(DAPServer* server, uint32_t address) {
+    for (int i = 0; i < server->line_map_count; i++) {
+        if (server->line_maps[i].address == address) {
+            return server->line_maps[i].line;
+        }
+    }
+    return -1;
+}
+
+// Fix pointer type in add_line_map
+void add_line_map(DAPServer* server, const char* file_path, int line, uint32_t address) {
+    if (server->line_map_count >= server->line_map_capacity) {
+        size_t new_capacity = server->line_map_capacity == 0 ? 16 : server->line_map_capacity * 2;
+        SourceLineMap* new_maps = realloc(server->line_maps, new_capacity * sizeof(SourceLineMap));
+        if (!new_maps) {
+            return;
+        }
+        server->line_maps = new_maps;
+        server->line_map_capacity = new_capacity;
+    }
+
+    server->line_maps[server->line_map_count].file_path = strdup(file_path);
+    server->line_maps[server->line_map_count].line = line;
+    server->line_maps[server->line_map_count].address = address;
+    server->line_map_count++;
+}
+

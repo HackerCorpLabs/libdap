@@ -10,38 +10,43 @@
 #include "../libdap/include/dap_protocol.h"
 
 
-int handle_execution_control(DAPCommandType command, cJSON* args, DAPResponse* response);
+int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* args, DAPResponse* response);
 
 
 // Command handler declarations
-int handle_initialize(cJSON* args, DAPResponse* response);
-int handle_launch(cJSON* args, DAPResponse* response);
-int handle_attach(cJSON* args, DAPResponse* response);
-int handle_disconnect(cJSON* args, DAPResponse* response);
-int handle_terminate(cJSON* args, DAPResponse* response);
-int handle_restart(cJSON* args, DAPResponse* response);
-int handle_set_breakpoints(cJSON* args, DAPResponse* response);
-int handle_source(cJSON* args, DAPResponse* response);
-int handle_threads(cJSON* args, DAPResponse* response);
-int handle_stack_trace(cJSON* args, DAPResponse* response);
-int handle_disassemble(cJSON* args, DAPResponse* response);
-int handle_loaded_sources(cJSON* args, DAPResponse* response);
-int handle_break(cJSON* args, DAPResponse* response);
-int handle_scopes(cJSON* args, DAPResponse* response);
-int handle_variables(cJSON* args, DAPResponse* response);
-int handle_continue(cJSON* args, DAPResponse* response);
-int handle_next(cJSON* args, DAPResponse* response);
-int handle_step_in(cJSON* args, DAPResponse* response);
-int handle_step_out(cJSON* args, DAPResponse* response);
-int handle_evaluate(cJSON* args, DAPResponse* response);
-int handle_configuration_done(cJSON* args, DAPResponse* response);
-int handle_read_memory(cJSON* args, DAPResponse* response);
-int handle_write_memory(cJSON* args, DAPResponse* response);
-int handle_read_registers(cJSON* args, DAPResponse* response);
-int handle_write_register(cJSON* args, DAPResponse* response);
-int handle_pause(cJSON* args, DAPResponse* response);
+
+int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_set_breakpoints(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_source(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_threads(DAPServer* server,   cJSON* args, DAPResponse* response);
+int handle_stack_trace(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_disassemble(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_loaded_sources(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_break(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_scopes(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_variables(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_continue(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_next(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_step_in(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_step_out(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_evaluate(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_configuration_done(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_read_memory(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_write_memory(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_read_registers(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_write_register(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response);
+
+
+
+int mock_handle_command(void* user_data, DAPCommandType command, const char* args, DAPResponse* response);
 
 // Callback function for handling DAP commands
-int mock_handle_command(void* user_data, DAPCommandType command, const char* args, DAPResponse* response);
+int handle_launch(DAPServer* server, cJSON* args, DAPResponse* response) ;
+int handle_attach(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_initialize(DAPServer* server, cJSON* args, DAPResponse* response);
+void send_launch_stopped_event(DAPServer* server, const char* program_path, cJSON* args);
 
 #endif // DAP_MOCK_SERVER_COMMANDS_H

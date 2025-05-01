@@ -577,13 +577,6 @@ static int handle_launch_wrapper(DAPServer *server, cJSON *json_args, DAPRespons
 
     return result;
 }
-
-// Special handler for disconnect to preserve cleanup behavior
-static int handle_disconnect_wrapper(DAPServer *server, cJSON *json_args, DAPResponse *response) {
-    cleanup_breakpoints(server);
-    return handle_disconnect(server, json_args, response);
-}
-
 // Initialize the command handlers array in the server struct
 void initialize_command_handlers(DAPServer *server) {
     // Clear the array first
@@ -594,7 +587,7 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_INITIALIZE] = handle_initialize;
     server->command_handlers[DAP_CMD_LAUNCH] = handle_launch_wrapper;
     server->command_handlers[DAP_CMD_ATTACH] = handle_attach;
-    server->command_handlers[DAP_CMD_DISCONNECT] = handle_disconnect_wrapper;
+    server->command_handlers[DAP_CMD_DISCONNECT] = handle_disconnect;
     server->command_handlers[DAP_CMD_TERMINATE] = handle_terminate;
     server->command_handlers[DAP_CMD_RESTART] = handle_restart;
     server->command_handlers[DAP_CMD_SET_BREAKPOINTS] = handle_set_breakpoints;

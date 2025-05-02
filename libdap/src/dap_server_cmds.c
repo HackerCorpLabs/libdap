@@ -1412,7 +1412,8 @@ int handle_next(DAPServer *server, cJSON *args, DAPResponse *response)
 
         // Use dap_server_send_event instead of manual event creation and sending
         dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-        cJSON_Delete(event_body);
+        // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
+        // cJSON_Delete(event_body);
     }
 
     return 0;
@@ -1563,7 +1564,8 @@ int handle_step_in(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-        cJSON_Delete(event_body);
+        // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
+        // cJSON_Delete(event_body);
     }
 
     return 0;
@@ -1656,7 +1658,8 @@ int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-        cJSON_Delete(event_body);
+        // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
+        // cJSON_Delete(event_body);
     }
 
     return 0;
@@ -2037,7 +2040,8 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-        cJSON_Delete(event_body);
+        // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
+        // cJSON_Delete(event_body);
     }
 
     return 0;
@@ -2343,8 +2347,16 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
     server->attached = true;
     server->paused = true;
 
-    response->success = true;
-    response->data = strdup("{}");
+    // Create a proper JSON object instead of using strdup
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+    
+    set_response_success(response, body);
+    cJSON_Delete(body);
     return 0;
 }
 
@@ -2355,8 +2367,16 @@ int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
     cleanup_breakpoints(server);
     printf("Disconnecting from debuggee\n");
     
-    response->success = true;
-    response->data = strdup("{}");
+    // Create a proper JSON object instead of using strdup
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+    
+    set_response_success(response, body);
+    cJSON_Delete(body);
     return 0;
 }
 
@@ -2366,8 +2386,16 @@ int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
 
     printf("Terminating debuggee\n");
     
-    response->success = true;
-    response->data = strdup("{}");
+    // Create a proper JSON object instead of using strdup
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+    
+    set_response_success(response, body);
+    cJSON_Delete(body);
     return 0;
 }
 
@@ -2378,7 +2406,15 @@ int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
 
     printf("Restarting debuggee\n");
     
-    response->success = true;
-    response->data = strdup("{}");
+    // Create a proper JSON object instead of using strdup
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        response->success = false;
+        response->error_message = strdup("Failed to create response body");
+        return 0;
+    }
+    
+    set_response_success(response, body);
+    cJSON_Delete(body);
     return 0;
 }

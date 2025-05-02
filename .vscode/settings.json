@@ -1,0 +1,15 @@
+{
+    "[c]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools"
+    },
+    "files.associations": {
+        "*.uc": "uc",
+        "*.asm": "nd100",
+        "dap_protocol.h": "c",
+        "stdarg.h": "c",
+        "dap_transport.h": "c",
+        "cjson.h": "c",
+        "dap_mock_server_commands.h": "c",
+        "dap_types.h": "c"
+    }
+}

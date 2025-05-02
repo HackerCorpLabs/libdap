@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "../libdap/include/dap_client.h"
+#include "dap_client.h"
 #include "dap_debugger_types.h"
 
 extern const DebuggerCommand commands[];
@@ -25,5 +25,30 @@ void print_command_help(const char* command_name);
 
 // Command handler for help command
 int handle_help_command(DAPClient* client, const char* args);
+
+/**
+ * @brief Display help for all commands or a specific command
+ * 
+ * @param client DAP client
+ * @param command_name Command name to display help for, or NULL for all commands
+ * @return int 0 on success, non-zero on error
+ */
+int display_help(DAPClient* client, const char* command_name);
+
+/**
+ * @brief Register all command help entries
+ * 
+ * This function registers all help entries for supported commands
+ * 
+ * @return int 0 on success, non-zero on error
+ */
+int register_command_help(void);
+
+/**
+ * @brief Clean up help system resources
+ * 
+ * @return int 0 on success, non-zero on error
+ */
+int cleanup_help_system(void);
 
 #endif // DAP_DEBUGGER_HELP_H 

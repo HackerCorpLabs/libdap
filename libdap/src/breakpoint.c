@@ -17,58 +17,9 @@
 
 // Breakpoint manager structure
 struct BreakpointManager {
-    Breakpoint* breakpoints;
+    BreakpointInfo* breakpoints;
     int capacity;
     int count;
-};
-
-// Simplified condition structure
-struct Condition {
-    ConditionType type;
-    union {
-        struct {
-            Register reg;
-            uint16_t value;
-        } register_check;
-        struct {
-            uint16_t address;
-            uint8_t value;
-        } memory;
-        struct {
-            Condition* left;
-            Condition* right;
-        } logical;
-    } data;
-};
-
-// Breakpoint structure with embedded strings
-struct Breakpoint {
-    BreakpointType type;
-    bool enabled;
-    int hit_count;
-    int hit_limit;
-    union {
-        struct {
-            char file[256];  // Fixed size for simplicity
-            int line;
-        } source;
-        struct {
-            char function[256];  // Fixed size for simplicity
-        } function;
-        struct {
-            uint16_t address;
-            uint16_t mask;
-        } memory;
-        struct {
-            Register reg;
-            uint16_t value;
-            uint16_t mask;
-        } register_change;
-        struct {
-            Condition condition;  // Embedded condition, not a pointer
-            char condition_str[256];  // Fixed size for simplicity
-        } conditional;
-    } location;
 };
 
 // Default register configuration for 6502
@@ -100,7 +51,7 @@ BreakpointManager* breakpoint_manager_create(size_t initial_capacity) {
         return NULL;
     }
 
-    manager->breakpoints = malloc(initial_capacity * sizeof(Breakpoint));
+    manager->breakpoints = malloc(initial_capacity * sizeof(BreakpointInfo));
     if (!manager->breakpoints) {
         dap_error_set(DAP_ERROR_MEMORY, "Failed to allocate breakpoint array");
         free(manager);
@@ -141,8 +92,8 @@ static int breakpoint_manager_resize(BreakpointManager* manager, size_t new_capa
         return -1;
     }
 
-    Breakpoint* new_breakpoints = realloc(manager->breakpoints, 
-                                        new_capacity * sizeof(Breakpoint));
+    BreakpointInfo* new_breakpoints = realloc(manager->breakpoints, 
+                                        new_capacity * sizeof(BreakpointInfo));
     if (!new_breakpoints) {
         dap_error_set(DAP_ERROR_MEMORY, "Failed to resize breakpoint array");
         return -1;
@@ -161,7 +112,7 @@ static int breakpoint_manager_resize(BreakpointManager* manager, size_t new_capa
  * @param bp Breakpoint to add
  * @return int Index of the new breakpoint, or -1 on error
  */
-int breakpoint_manager_add(BreakpointManager* manager, const Breakpoint* bp) {
+int breakpoint_manager_add(BreakpointManager* manager, const BreakpointInfo* bp) {
     if (!manager || !bp) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
@@ -175,7 +126,7 @@ int breakpoint_manager_add(BreakpointManager* manager, const Breakpoint* bp) {
     }
 
     // Copy the breakpoint
-    Breakpoint* new_bp = &manager->breakpoints[manager->count];
+    BreakpointInfo* new_bp = &manager->breakpoints[manager->count];
     new_bp->type = bp->type;
     new_bp->enabled = bp->enabled;
     new_bp->hit_count = bp->hit_count;
@@ -199,16 +150,12 @@ int breakpoint_manager_add(BreakpointManager* manager, const Breakpoint* bp) {
                     bp->location.conditional.condition_str, 
                     sizeof(new_bp->location.conditional.condition_str) - 1);
             new_bp->location.conditional.condition_str[sizeof(new_bp->location.conditional.condition_str) - 1] = '\0';
-            
-            // Parse the condition string into the embedded condition struct
-            if (!breakpoint_parse_condition(new_bp->location.conditional.condition_str, 
-                                         &new_bp->location.conditional.condition)) {
-                dap_error_set(DAP_ERROR_INVALID_ARG, "Failed to parse condition");
-                return -1;
-            }
+            // Copy condition
+            new_bp->location.conditional.condition = bp->location.conditional.condition;
             break;
         case BREAKPOINT_ADDRESS:
-            new_bp->location.address = bp->location.address;
+            new_bp->location.memory.address = bp->location.memory.address;
+            new_bp->location.memory.mask = bp->location.memory.mask;
             break;
         case BREAKPOINT_MEMORY_READ:
         case BREAKPOINT_MEMORY_WRITE:
@@ -220,16 +167,21 @@ int breakpoint_manager_add(BreakpointManager* manager, const Breakpoint* bp) {
             new_bp->location.register_change.value = bp->location.register_change.value;
             new_bp->location.register_change.mask = bp->location.register_change.mask;
             break;
-        default:
-            dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid breakpoint type");
-            return -1;
     }
-
+    
+    int index = manager->count;
     manager->count++;
     dap_error_clear();
-    return manager->count - 1;
+    return index;
 }
 
+/**
+ * @brief Remove a breakpoint from the manager
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint to remove
+ * @return int 0 on success, -1 on error
+ */
 int breakpoint_manager_remove(BreakpointManager* manager, int index) {
     if (!manager || index < 0 || index >= manager->count) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
@@ -237,16 +189,16 @@ int breakpoint_manager_remove(BreakpointManager* manager, int index) {
     }
 
     // Free any allocated resources for the breakpoint being removed
-    Breakpoint* bp = &manager->breakpoints[index];
+    BreakpointInfo* bp = &manager->breakpoints[index];
     if (bp->type == BREAKPOINT_CONDITIONAL) {
         breakpoint_free_condition(&bp->location.conditional.condition);
     }
 
-    // Shift remaining breakpoints
-    if (index < manager->count - 1) {
+    // Move the last breakpoint to this position if it's not the last one
+    if (index != manager->count - 1) {
         memmove(&manager->breakpoints[index],
                 &manager->breakpoints[index + 1],
-                sizeof(Breakpoint) * (manager->count - index - 1));
+                sizeof(BreakpointInfo) * (manager->count - index - 1));
     }
 
     manager->count--;
@@ -254,6 +206,12 @@ int breakpoint_manager_remove(BreakpointManager* manager, int index) {
     return 0;
 }
 
+/**
+ * @brief Get the number of breakpoints
+ * 
+ * @param manager Breakpoint manager
+ * @return int Number of breakpoints, or -1 on error
+ */
 int breakpoint_manager_count(const BreakpointManager* manager) {
     if (!manager) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager");
@@ -263,7 +221,14 @@ int breakpoint_manager_count(const BreakpointManager* manager) {
     return manager->count;
 }
 
-const Breakpoint* breakpoint_manager_get(const BreakpointManager* manager, int index) {
+/**
+ * @brief Get a breakpoint by index
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @return const BreakpointInfo* Breakpoint at the given index, or NULL on error
+ */
+const BreakpointInfo* breakpoint_manager_get(const BreakpointManager* manager, int index) {
     if (!manager || index < 0 || index >= manager->count) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
         return NULL;
@@ -272,6 +237,14 @@ const Breakpoint* breakpoint_manager_get(const BreakpointManager* manager, int i
     return &manager->breakpoints[index];
 }
 
+/**
+ * @brief Set whether a breakpoint is enabled
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @param enabled Whether the breakpoint should be enabled
+ * @return int 0 on success, -1 on error
+ */
 int breakpoint_manager_set_enabled(BreakpointManager* manager, int index, bool enabled) {
     if (!manager || index < 0 || index >= manager->count) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
@@ -282,9 +255,17 @@ int breakpoint_manager_set_enabled(BreakpointManager* manager, int index, bool e
     return 0;
 }
 
+/**
+ * @brief Set the hit limit for a breakpoint
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @param limit Hit limit (0 = unlimited)
+ * @return int 0 on success, -1 on error
+ */
 int breakpoint_manager_set_hit_limit(BreakpointManager* manager, int index, int limit) {
-    if (!manager || index < 0 || index >= manager->count) {
-        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
+    if (!manager || index < 0 || index >= manager->count || limit < 0) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager, index, or limit");
         return -1;
     }
     manager->breakpoints[index].hit_limit = limit;
@@ -292,6 +273,13 @@ int breakpoint_manager_set_hit_limit(BreakpointManager* manager, int index, int 
     return 0;
 }
 
+/**
+ * @brief Get the hit count for a breakpoint
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @return int Hit count, or -1 on error
+ */
 int breakpoint_manager_get_hit_count(const BreakpointManager* manager, int index) {
     if (!manager || index < 0 || index >= manager->count) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
@@ -301,6 +289,13 @@ int breakpoint_manager_get_hit_count(const BreakpointManager* manager, int index
     return manager->breakpoints[index].hit_count;
 }
 
+/**
+ * @brief Reset the hit count for a breakpoint
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @return int 0 on success, -1 on error
+ */
 int breakpoint_manager_reset_hit_count(BreakpointManager* manager, int index) {
     if (!manager || index < 0 || index >= manager->count) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
@@ -311,15 +306,28 @@ int breakpoint_manager_reset_hit_count(BreakpointManager* manager, int index) {
     return 0;
 }
 
-static bool check_hit_limit(Breakpoint* bp) {
+/**
+ * @brief Check if a breakpoint has hit its limit
+ * 
+ * @param bp Breakpoint to check
+ * @return true if hit limit reached, false otherwise
+ */
+static bool check_hit_limit(BreakpointInfo* bp) {
     if (bp->hit_limit > 0 && bp->hit_count >= bp->hit_limit) {
         bp->enabled = false;
-        return false;
+        return true;
     }
-    bp->hit_count++;
-    return true;
+    return false;
 }
 
+/**
+ * @brief Check if a memory access should trigger a breakpoint
+ * 
+ * @param manager Breakpoint manager
+ * @param address Memory address
+ * @param is_write Whether this is a write access
+ * @return true if a breakpoint is triggered, false otherwise
+ */
 bool breakpoint_manager_check_memory_access(const BreakpointManager* manager,
     uint16_t address, bool is_write) {
     if (!manager) {
@@ -328,15 +336,23 @@ bool breakpoint_manager_check_memory_access(const BreakpointManager* manager,
     }
 
     for (int i = 0; i < manager->count; i++) {
-        Breakpoint* bp = &manager->breakpoints[i];
+        BreakpointInfo* bp = &manager->breakpoints[i];
         if (!bp->enabled) {
             continue;
         }
 
+        // Match on appropriate breakpoint type
         if ((is_write && bp->type == BREAKPOINT_MEMORY_WRITE) ||
             (!is_write && bp->type == BREAKPOINT_MEMORY_READ)) {
-            if ((address & bp->location.memory.mask) == bp->location.memory.address) {
-                return check_hit_limit(bp);
+            
+            // Check if address matches (with mask)
+            if ((address & bp->location.memory.mask) == 
+                (bp->location.memory.address & bp->location.memory.mask)) {
+                
+                bp->hit_count++;
+                check_hit_limit(bp);
+                dap_error_clear();
+                return true;
             }
         }
     }
@@ -345,22 +361,37 @@ bool breakpoint_manager_check_memory_access(const BreakpointManager* manager,
     return false;
 }
 
+/**
+ * @brief Check if a register change should trigger a breakpoint
+ * 
+ * @param manager Breakpoint manager
+ * @param reg Register being changed
+ * @param value New register value
+ * @return true if a breakpoint is triggered, false otherwise
+ */
 bool breakpoint_manager_check_register_change(const BreakpointManager* manager,
-    Register reg, uint16_t value) {
+    RegisterType reg, uint16_t value) {
     if (!manager) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager");
         return false;
     }
 
     for (int i = 0; i < manager->count; i++) {
-        Breakpoint* bp = &manager->breakpoints[i];
+        BreakpointInfo* bp = &manager->breakpoints[i];
         if (!bp->enabled || bp->type != BREAKPOINT_REGISTER_CHANGE) {
             continue;
         }
 
+        // Check if register matches
         if (bp->location.register_change.reg == reg) {
-            if ((value & bp->location.register_change.mask) == bp->location.register_change.value) {
-                return check_hit_limit(bp);
+            // Check if value matches (with mask)
+            if ((value & bp->location.register_change.mask) == 
+                (bp->location.register_change.value & bp->location.register_change.mask)) {
+                
+                bp->hit_count++;
+                check_hit_limit(bp);
+                dap_error_clear();
+                return true;
             }
         }
     }
@@ -369,85 +400,89 @@ bool breakpoint_manager_check_register_change(const BreakpointManager* manager,
     return false;
 }
 
-// Helper function to evaluate a condition
+/**
+ * @brief Evaluate a condition
+ * 
+ * @param cond Condition to evaluate
+ * @param pc Program counter
+ * @param registers Register array
+ * @param memory Memory array
+ * @return true if condition is met, false otherwise
+ */
 static bool evaluate_condition(const Condition* cond, uint16_t pc, uint16_t* registers, uint8_t* memory) {
     if (!cond) return false;
 
-    // Check if this is a memory condition
-    if (cond->data.memory.address != 0 || cond->data.memory.value != 0) {
-        if (!memory) return false;
-        uint8_t mem_value = memory[cond->data.memory.address];
-        
-        switch (cond->type) {
-            case CONDITION_EQUAL:
-                return mem_value == cond->data.memory.value;
-            case CONDITION_NOT_EQUAL:
-                return mem_value != cond->data.memory.value;
-            case CONDITION_LESS:
-                return mem_value < cond->data.memory.value;
-            case CONDITION_LESS_EQUAL:
-                return mem_value <= cond->data.memory.value;
-            case CONDITION_GREATER:
-                return mem_value > cond->data.memory.value;
-            case CONDITION_GREATER_EQUAL:
-                return mem_value >= cond->data.memory.value;
-            default:
-                return false;
-        }
-    }
-
-    // Handle register conditions
     switch (cond->type) {
         case CONDITION_EQUAL:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc == cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] == cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] == cond->data.register_check.value;
-
         case CONDITION_NOT_EQUAL:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc != cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] != cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] != cond->data.register_check.value;
-
         case CONDITION_LESS:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc < cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] < cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] < cond->data.register_check.value;
-
         case CONDITION_LESS_EQUAL:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc <= cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] <= cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] <= cond->data.register_check.value;
-
         case CONDITION_GREATER:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc > cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] > cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] > cond->data.register_check.value;
-
         case CONDITION_GREATER_EQUAL:
             if (cond->data.register_check.reg == REG_PC) {
                 return pc >= cond->data.register_check.value;
+            } else {
+                return registers[cond->data.register_check.reg] >= cond->data.register_check.value;
             }
-            return registers[cond->data.register_check.reg] >= cond->data.register_check.value;
-
+        case CONDITION_AND:
+            return cond->data.logical.left && cond->data.logical.right &&
+                   evaluate_condition(cond->data.logical.left, pc, registers, memory) &&
+                   evaluate_condition(cond->data.logical.right, pc, registers, memory);
+        case CONDITION_OR:
+            return cond->data.logical.left && cond->data.logical.right &&
+                   (evaluate_condition(cond->data.logical.left, pc, registers, memory) ||
+                    evaluate_condition(cond->data.logical.right, pc, registers, memory));
+        case CONDITION_NOT:
+            return cond->data.logical.left &&
+                   !evaluate_condition(cond->data.logical.left, pc, registers, memory);
         default:
             return false;
     }
 }
 
-// Check if a condition is met
+/**
+ * @brief Check if a conditional breakpoint condition is met
+ * 
+ * @param manager Breakpoint manager
+ * @param index Index of the breakpoint
+ * @param pc Program counter
+ * @param registers Register array
+ * @param memory Memory array
+ * @return true if condition is met, false otherwise
+ */
 bool breakpoint_manager_check_condition(const BreakpointManager* manager,
     int index, uint16_t pc, uint16_t* registers, uint8_t* memory) {
-    if (!manager || index < 0 || index >= manager->count) {
-        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid manager or index");
+    if (!manager || index < 0 || index >= manager->count || !registers || !memory) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return false;
     }
 
-    const Breakpoint* bp = &manager->breakpoints[index];
+    const BreakpointInfo* bp = &manager->breakpoints[index];
     if (!bp->enabled || bp->type != BREAKPOINT_CONDITIONAL) {
         dap_error_clear();
         return false;
@@ -458,141 +493,145 @@ bool breakpoint_manager_check_condition(const BreakpointManager* manager,
     return result;
 }
 
-// Parse a condition string into a Condition structure
+/**
+ * @brief Parse a condition string into a Condition structure
+ * 
+ * @param str Condition string
+ * @param condition Condition structure to fill
+ * @return true on success, false on error
+ */
 bool breakpoint_parse_condition(const char* str, Condition* condition) {
-    if (!str || !condition) return false;
-
-    // Initialize the condition
-    memset(condition, 0, sizeof(Condition));
-
-    // Skip whitespace
-    while (isspace(*str)) str++;
-
-    // Check if this is a memory condition
-    if (*str == '[') {
-        str++;  // Skip '['
-        
-        // Parse address
-        char* end;
-        unsigned long address = strtoul(str, &end, 0);
-        if (end == str) return false;
-        str = end;
-        
-        // Validate address is within 16-bit range
-        if (address > 0xFFFF) return false;
-        condition->data.memory.address = (uint16_t)address;
-        
-        // Skip ']'
-        while (isspace(*str)) str++;
-        if (*str != ']') return false;
-        str++;
-        
-        // Skip whitespace
-        while (isspace(*str)) str++;
-        
-        // Parse operator
-        if (strncmp(str, "==", 2) == 0) {
-            condition->type = CONDITION_EQUAL;
-            str += 2;
-        } else if (strncmp(str, "!=", 2) == 0) {
-            condition->type = CONDITION_NOT_EQUAL;
-            str += 2;
-        } else {
-            return false;
-        }
-        
-        // Skip whitespace
-        while (isspace(*str)) str++;
-        
-        // Parse value
-        unsigned long value = strtoul(str, &end, 0);
-        if (end == str) return false;
-        
-        // Validate value is within 8-bit range
-        if (value > 0xFF) return false;
-        condition->data.memory.value = (uint8_t)value;
-        
-        return true;
+    if (!str || !condition) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return false;
     }
-    
-    // Parse register condition
-    const RegisterConfig* reg = default_registers;
-    while (reg->name) {
-        size_t len = strlen(reg->name);
-        if (strncmp(str, reg->name, len) == 0) {
-            condition->data.register_check.reg = reg->index;
+
+    // This is a simplified parser for demonstration
+    // In a real implementation, you would parse expressions like "A == 0x10"
+
+    // Skip leading whitespace
+    while (*str && isspace(*str)) str++;
+
+    // Check for empty string
+    if (!*str) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Empty condition string");
+        return false;
+    }
+
+    // Look for register name
+    RegisterType reg = REG_PC;
+    bool found_reg = false;
+
+    // Check each register name
+    for (int i = 0; default_registers[i].name; i++) {
+        size_t len = strlen(default_registers[i].name);
+        if (strncmp(str, default_registers[i].name, len) == 0 && 
+            (isspace(str[len]) || str[len] == '=' || str[len] == '!' ||
+             str[len] == '<' || str[len] == '>')) {
+            
+            reg = (RegisterType)default_registers[i].index;
             str += len;
+            found_reg = true;
             break;
         }
-        reg++;
     }
-    
-    if (!reg->name) return false;  // No matching register found
 
-    // Skip whitespace
-    while (isspace(*str)) str++;
-
-    // Parse operator
-    if (strncmp(str, "==", 2) == 0) {
-        condition->type = CONDITION_EQUAL;
-        str += 2;
-    } else if (strncmp(str, "!=", 2) == 0) {
-        condition->type = CONDITION_NOT_EQUAL;
-        str += 2;
-    } else if (strncmp(str, "<", 1) == 0) {
-        condition->type = CONDITION_LESS;
-        str += 1;
-    } else if (strncmp(str, "<=", 2) == 0) {
-        condition->type = CONDITION_LESS_EQUAL;
-        str += 2;
-    } else if (strncmp(str, ">", 1) == 0) {
-        condition->type = CONDITION_GREATER;
-        str += 1;
-    } else if (strncmp(str, ">=", 2) == 0) {
-        condition->type = CONDITION_GREATER_EQUAL;
-        str += 2;
-    } else {
+    if (!found_reg) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid register name in condition");
         return false;
     }
 
     // Skip whitespace
-    while (isspace(*str)) str++;
+    while (*str && isspace(*str)) str++;
 
-    // Parse value
-    char* end;
-    condition->data.register_check.value = strtoul(str, &end, 0);
-    if (end == str) return false;
+    // Check for comparison operator
+    ConditionType type;
+    if (strncmp(str, "==", 2) == 0) {
+        type = CONDITION_EQUAL;
+        str += 2;
+    } else if (strncmp(str, "!=", 2) == 0) {
+        type = CONDITION_NOT_EQUAL;
+        str += 2;
+    } else if (strncmp(str, "<=", 2) == 0) {
+        type = CONDITION_LESS_EQUAL;
+        str += 2;
+    } else if (strncmp(str, ">=", 2) == 0) {
+        type = CONDITION_GREATER_EQUAL;
+        str += 2;
+    } else if (*str == '<') {
+        type = CONDITION_LESS;
+        str++;
+    } else if (*str == '>') {
+        type = CONDITION_GREATER;
+        str++;
+    } else {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid comparison operator in condition");
+        return false;
+    }
 
+    // Skip whitespace
+    while (*str && isspace(*str)) str++;
+
+    // Parse value (hexadecimal or decimal)
+    char* endptr;
+    uint16_t value;
+    if (strncmp(str, "0x", 2) == 0 || strncmp(str, "0X", 2) == 0) {
+        value = (uint16_t)strtoul(str, &endptr, 16);
+    } else {
+        value = (uint16_t)strtoul(str, &endptr, 10);
+    }
+
+    if (endptr == str) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid value in condition");
+        return false;
+    }
+
+    // Set condition
+    condition->type = type;
+    condition->data.register_check.reg = reg;
+    condition->data.register_check.value = value;
+
+    dap_error_clear();
     return true;
 }
 
-// Free a condition structure (now just clears it)
+/**
+ * @brief Free a condition structure
+ * 
+ * @param condition Condition to free
+ */
 void breakpoint_free_condition(Condition* condition) {
     if (!condition) return;
-    memset(condition, 0, sizeof(Condition));
+    
+    if (condition->type == CONDITION_AND || condition->type == CONDITION_OR ||
+        condition->type == CONDITION_NOT) {
+        if (condition->data.logical.left) {
+            breakpoint_free_condition(condition->data.logical.left);
+            free(condition->data.logical.left);
+        }
+        if (condition->data.logical.right) {
+            breakpoint_free_condition(condition->data.logical.right);
+            free(condition->data.logical.right);
+        }
+    }
 }
 
-// Helper function to safely set a string field with length checking
 static void breakpoint_set_string(char* dest, const char* src, size_t max_len) {
-    if (!dest || !src) return;
     strncpy(dest, src, max_len - 1);
     dest[max_len - 1] = '\0';
 }
 
-// Helper function to safely set file name
-void breakpoint_set_file(Breakpoint* bp, const char* file) {
+void breakpoint_set_file(BreakpointInfo* bp, const char* file) {
     if (!bp || !file) return;
     breakpoint_set_string(bp->location.source.file, file, sizeof(bp->location.source.file));
 }
 
-// Helper function to safely set function name
-void breakpoint_set_function(Breakpoint* bp, const char* function) {
+void breakpoint_set_function(BreakpointInfo* bp, const char* function) {
     if (!bp || !function) return;
     breakpoint_set_string(bp->location.function, function, sizeof(bp->location.function));
 }
 
-// Helper function to safely set condition string
-void breakpoint_set_condition_str(Breakpoint* bp, const char* condition_str) {
+void breakpoint_set_condition_str(BreakpointInfo* bp, const char* condition_str) {
     if (!bp || !condition_str) return;
     breakpoint_set_string(bp->location.conditional.condition_str, condition_str, 
                          sizeof(bp->location.conditional.condition_str));

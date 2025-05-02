@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include "../libdap/include/dap_client.h"
+#include "dap_client.h"
 #include "dap_debugger_types.h"
 #include "dap_debugger_help.h"
 
@@ -30,7 +30,7 @@ int handle_quit_command(DAPClient* client, const char* args) {
     if (client) {
         DAPDisconnectResult result = {0};
         dap_client_disconnect(client, false, false, &result);
-        dap_client_free(client);
+        // Don't free the client here, it will be freed in main.c
     }
     return 1; // Signal to exit
 }

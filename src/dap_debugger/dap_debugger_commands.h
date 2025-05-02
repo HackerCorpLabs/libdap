@@ -1,7 +1,7 @@
 #ifndef DAP_DEBUGGER_COMMANDS_H
 #define DAP_DEBUGGER_COMMANDS_H
 
-#include "../libdap/include/dap_client.h"
+#include "dap_client.h"
 
 // Command handler function declarations
 int handle_help_command(DAPClient* client, const char* args);

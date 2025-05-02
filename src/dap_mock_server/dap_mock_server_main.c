@@ -11,7 +11,7 @@
 #include <string.h>
 #include <errno.h>
 #include "dap_mock_server.h"
-#include "../libdap/include/dap_server.h"
+#include "dap_server.h"
 
 // Declare the mock debugger state
 extern MockDebugger mock_debugger;

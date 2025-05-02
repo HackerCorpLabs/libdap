@@ -16,9 +16,9 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <cjson/cJSON.h>
-#include "../libdap/include/dap_client.h"
-#include "../libdap/include/dap_protocol.h"
-#include "../libdap/include/dap_error.h"
+#include "dap_client.h"
+#include "dap_protocol.h"
+#include "dap_error.h"
 #include <getopt.h>
 #include <ctype.h>
 #include <termios.h>
@@ -766,12 +766,19 @@ int main(int argc, char* argv[]) {
     
     // Cleanup client
     if (g_client) {
-        DAPDisconnectResult result = {0};
-        dap_client_disconnect(g_client, false, false, &result);
+        // Check if client is still connected before attempting to disconnect
+        if (g_client->connected) {
+            DAPDisconnectResult result = {0};
+            dap_client_disconnect(g_client, false, false, &result);
+        }
+
+        // Free the program path if it exists and hasn't been already freed
         if (g_client->program_path) {
             free(g_client->program_path);
             g_client->program_path = NULL;
         }
+        
+        // Free the client
         dap_client_free(g_client);
         g_client = NULL;  // Set to NULL after freeing
     }

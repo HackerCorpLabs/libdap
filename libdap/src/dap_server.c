@@ -140,6 +140,25 @@ void dap_server_free(DAPServer *server)
         free(server->program_path);
     }
 
+    // Clean up current source information
+    if (server->current_source)
+    {
+        if (server->current_source->path)
+        {
+            free((void *)server->current_source->path);
+        }
+        if (server->current_source->name)
+        {
+            free((void *)server->current_source->name);
+        }
+        free((void *)server->current_source);
+        server->current_source = NULL;
+    }
+
+    // Clean up breakpoints and line maps
+    cleanup_breakpoints(server);
+    cleanup_line_maps(server);
+
     free(server);
 }
 
@@ -572,7 +591,6 @@ static int handle_launch_wrapper(DAPServer *server, cJSON *json_args, DAPRespons
         }
 
         dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
-        cJSON_Delete(event_body);
     }
 
     return result;

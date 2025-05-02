@@ -29,11 +29,11 @@
 #include <stdarg.h>  // Added for va_list
 #include <ctype.h>   // Added for isdigit() and other character classification functions
 #include <cjson/cJSON.h>
-#include "../libdap/include/dap_server.h"
-#include "../libdap/include/dap_error.h"
-#include "../libdap/include/dap_types.h"
-#include "../libdap/include/dap_transport.h"
-#include "../libdap/include/dap_protocol.h"
+#include "dap_server.h"
+#include "dap_error.h"
+#include "dap_types.h"
+#include "dap_transport.h"
+#include "dap_protocol.h"
 #include <sys/stat.h>
 
 #include "dap_mock_server.h"

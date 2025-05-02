@@ -81,9 +81,7 @@ typedef struct {
 // Create and configure a DAP server
 DAPServer* server = dap_server_create();
 DAPServerConfig config = {
-    .transport = { /* transport config */ },
-    .callbacks = { /* debug operation callbacks */ },
-    .user_data = NULL
+    .transport = { /* transport config */ },    
 };
 dap_server_configure(server, &config);
 

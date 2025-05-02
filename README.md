@@ -61,14 +61,55 @@ The DAP Client is a test implementation that demonstrates the integration of the
 - Add unit tests 
 
 
-## Dependencies
+## CMake
 
-- using cJSON.
-  - Add the libraris
-  
+### Building the Project
+
+1. Generate the build system:
+```bash
+cmake -B build
+-- Using system cJSON library
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/ronny/repos/libdap/build
+```
+
+2. Compile the project:
+```bash
+cmake --build build
+```
+
+3. The compiled binaries will be in the `build` directory.
+
+### Cleaning the Build
+
+To clean the build and start fresh:
+
+```bash
+# Remove all build artifacts
+cmake --build build --target clean
+
+# Or to remove the entire build directory
+rm -rf build
+```
+
+### Dependencies
+
+- Using cJSON library:
   ```bash
+  # Ubuntu/Debian
   sudo apt update
   sudo apt install libcjson-dev
 
+  # Fedora/RHEL
+  sudo dnf install cjson-devel
+  ```
+
+- Using readline library:
+  ```bash
+  # Ubuntu/Debian
   sudo apt install libreadline-dev
+  
+  # Fedora/RHEL
+  sudo dnf install readline-devel
   ```

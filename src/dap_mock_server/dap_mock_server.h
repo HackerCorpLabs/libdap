@@ -1,21 +1,21 @@
-#ifndef DBG_MOCK_H
-#define DBG_MOCK_H
+#ifndef DAP_MOCK_SERVER_H
+#define DAP_MOCK_SERVER_H
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "../libdap/include/dap_protocol.h"
-#include "../libdap/include/dap_types.h"
-#include "../libdap/include/dap_server.h"
+#include "dap_protocol.h"
+#include "dap_types.h"
+#include "dap_server.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Debug logging macro
-#define MOCK_SERVER_DEBUG_LOG(...) do { \
-    fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
-    fprintf(stderr, __VA_ARGS__); \
-    fprintf(stderr, "\n"); \
-    fflush(stderr); \
-} while(0)
-
+#define DBG_MOCK_LOG(fmt, ...) \
+    do { \
+        fprintf(stderr, "[DBG_MOCK] " fmt "\n", ##__VA_ARGS__); \
+    } while(0)
 
 // Mock debugger state structure
 typedef struct {
@@ -37,5 +37,8 @@ int dbg_mock_start(void);
 void dbg_mock_stop(void);
 void dbg_mock_cleanup(void);
 
+#ifdef __cplusplus
+}
+#endif
 
-#endif // DBG_MOCK_H 
+#endif // DAP_MOCK_SERVER_H 

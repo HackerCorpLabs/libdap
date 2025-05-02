@@ -40,7 +40,7 @@ typedef enum {
     REG_Y,          // Y Register
     REG_SR,         // Status Register
     REG_COUNT       // Number of registers
-} Register;
+} RegisterType;  // Renamed from Register to RegisterType
 
 /**
  * @brief Breakpoint types
@@ -75,13 +75,16 @@ typedef enum {
     CONDITION_NOT              // !
 } ConditionType;
 
+// Forward declaration for recursive struct
+typedef struct Condition Condition;
+
 /**
  * @brief Condition structure
  * 
  * Represents a condition that can be evaluated to determine if a breakpoint should trigger.
  * Supports both register and memory conditions using a union.
  */
-typedef struct {
+struct Condition {
     ConditionType type;  // The comparison operator
     union {
         struct {
@@ -89,17 +92,15 @@ typedef struct {
             uint8_t value;       // Value to compare
         } memory;               // For memory conditions
         struct {
-            Register reg;        // Register to check
+            RegisterType reg;    // Register to check (using renamed type)
             uint16_t value;      // Value to compare
         } register_check;       // For register conditions
         struct {
-            uint8_t left_type;   // Type of left condition
-            uint8_t right_type;  // Type of right condition
-            uint16_t left_value; // Value for left condition
-            uint16_t right_value; // Value for right condition
+            Condition* left;     // Left operand of logical condition
+            Condition* right;    // Right operand of logical condition
         } logical;              // For logical conditions
     } data;
-} Condition;
+};
 
 // Breakpoint structure
 typedef struct {
@@ -116,7 +117,7 @@ typedef struct {
             uint16_t mask;       // Address mask
         } memory;                // For BREAKPOINT_MEMORY_*
         struct {
-            Register reg;        // Register to monitor
+            RegisterType reg;    // Register to monitor (using renamed type)
             uint16_t value;      // Value to match
             uint16_t mask;       // Value mask
         } register_change;       // For BREAKPOINT_REGISTER_CHANGE
@@ -128,7 +129,7 @@ typedef struct {
     bool enabled;               // Whether breakpoint is enabled
     int hit_count;             // Number of times hit
     int hit_limit;             // Maximum number of hits (0 = unlimited)
-} Breakpoint;
+} BreakpointInfo;  // Renamed from Breakpoint to BreakpointInfo
 
 // Breakpoint manager structure
 typedef struct BreakpointManager BreakpointManager;
@@ -145,7 +146,7 @@ BreakpointManager* breakpoint_manager_create(size_t initial_capacity);
 void breakpoint_manager_free(BreakpointManager* manager);
 
 // Add a breakpoint to the manager
-int breakpoint_manager_add(BreakpointManager* manager, const Breakpoint* bp);
+int breakpoint_manager_add(BreakpointManager* manager, const BreakpointInfo* bp);
 
 // Remove a breakpoint from the manager
 int breakpoint_manager_remove(BreakpointManager* manager, int index);
@@ -154,7 +155,7 @@ int breakpoint_manager_remove(BreakpointManager* manager, int index);
 int breakpoint_manager_count(const BreakpointManager* manager);
 
 // Get a breakpoint by index
-const Breakpoint* breakpoint_manager_get(const BreakpointManager* manager, int index);
+const BreakpointInfo* breakpoint_manager_get(const BreakpointManager* manager, int index);
 
 // Set whether a breakpoint is enabled
 int breakpoint_manager_set_enabled(BreakpointManager* manager, int index, bool enabled);
@@ -174,7 +175,7 @@ bool breakpoint_manager_check_memory_access(const BreakpointManager* manager,
 
 // Check if a register change should trigger a breakpoint
 bool breakpoint_manager_check_register_change(const BreakpointManager* manager,
-    Register reg, uint16_t value);
+    RegisterType reg, uint16_t value);
 
 // Check if a condition is met
 bool breakpoint_manager_check_condition(const BreakpointManager* manager,

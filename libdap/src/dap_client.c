@@ -70,8 +70,14 @@ static void dap_debug_log_message(DAPClient* client, const char* prefix, const c
  * @return int 0 on success, -1 on failure
  */
 int dap_client_send_message(DAPClient* client, const char* message_str, char** response_body) {
-    if (!client || !client->connected || !message_str) {
+    if (!client || !message_str) {
         DAP_CLIENT_DEBUG_LOG("Invalid arguments");
+        return -1;
+    }
+    
+    // Check if client is connected
+    if (!client->connected || !client->transport) {
+        DAP_CLIENT_DEBUG_LOG("Client not connected");
         return -1;
     }
 
@@ -129,7 +135,12 @@ int dap_client_send_message(DAPClient* client, const char* message_str, char** r
  * @return int 0 on success, -1 on failure
  */
 int dap_client_send_request(DAPClient* client, DAPCommandType command, cJSON* arguments, char** response_body) {
-    if (!client || !client->connected) {
+    if (!client) {
+        DAP_CLIENT_DEBUG_LOG("Client is NULL");
+        return -1;
+    }
+    
+    if (!client->connected || !client->transport) {
         DAP_CLIENT_DEBUG_LOG("Client not connected");
         return -1;
     }
@@ -280,6 +291,15 @@ int dap_client_disconnect(DAPClient* client, bool restart, bool terminate_debugg
     if (!client || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
+    
+    // Check if already disconnected to prevent double disconnect
+    if (!client->connected) {
+        result->base.success = true;
+        result->restart = restart;
+        result->terminate_debuggee = terminate_debuggee;
+        return DAP_ERROR_NONE;
+    }
+    
     cJSON* args = cJSON_CreateObject();
     if (!args) {
         return DAP_ERROR_MEMORY;
@@ -292,6 +312,10 @@ int dap_client_disconnect(DAPClient* client, bool restart, bool terminate_debugg
     if (response_body) {
         free(response_body);
     }
+    
+    // Mark as disconnected regardless of whether the disconnect request succeeded
+    client->connected = false;
+    
     if (error == DAP_ERROR_NONE) {
         result->base.success = true;
         result->restart = restart;
@@ -309,31 +333,41 @@ int dap_client_disconnect(DAPClient* client, bool restart, bool terminate_debugg
 void dap_client_free(DAPClient* client) {
     if (!client) return;
     
-    // Disconnect if still connected
-    if (client->connected) {
-        DAPDisconnectResult result = {0};  // Initialize all fields to 0
-        dap_client_disconnect(client, false, false, &result);
-    }
+    // Set a flag to avoid any use of the client during freeing
+    client->connected = false;
     
-    // Free transport
+    // Free transport if it exists
     if (client->transport) {
         dap_transport_free(client->transport);
         client->transport = NULL;
     }
     
-    // Free hostname
+    // Free hostname if it exists
     if (client->host) {
         free(client->host);
+        client->host = NULL;
     }
     
-    // Free program path
+    // Free program path if it exists
     if (client->program_path) {
         free(client->program_path);
+        client->program_path = NULL;
     }
     
-    // Free breakpoints
+    // Free breakpoints if they exist
     if (client->breakpoints) {
+        // Free any dynamically allocated fields within breakpoints
+        for (int i = 0; i < client->num_breakpoints; i++) {
+            if (client->breakpoints[i].message) {
+                free(client->breakpoints[i].message);
+            }
+            if (client->breakpoints[i].condition) {
+                free(client->breakpoints[i].condition);
+            }
+            // Free any other fields that might be dynamically allocated
+        }
         free(client->breakpoints);
+        client->breakpoints = NULL;
     }
     
     // Free client structure

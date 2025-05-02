@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug ND100X Assembly",
+            "type": "nd100x",
+            "request": "launch",
+            "program": "${workspaceFolder}/intr.asm",
+            "binary": "${workspaceFolder}/intr.bin",
+            "mapFile": "${workspaceFolder}/intr.map",
+            "stopOnEntry": true,
+            "host": "localhost",
+            "port": 4711,
+            "breakpoints": [
+                {
+                    "line": 10
+                },
+                {
+                    "line": 20
+                }
+            ]
+        },
+        {
+            "name": "Attach to ND100X",
+            "type": "nd100x",
+            "request": "attach",
+            "host": "localhost",
+            "port": 4711
+        }
+    ]
+} 

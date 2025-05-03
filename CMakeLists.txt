@@ -14,6 +14,15 @@ else()
     add_compile_definitions(_GNU_SOURCE)
 endif()
 
+# Check for option from parent project
+if(NOT DEFINED BUILD_DAP_TEST_TOOLS)
+    # If not defined by parent, use our own option
+    option(BUILD_EXECUTABLES "Build the dap_debugger and dap_mock_server executables" OFF)
+else()
+    # Use the option passed by parent project
+    set(BUILD_EXECUTABLES ${BUILD_DAP_TEST_TOOLS})
+endif()
+
 # Handle cJSON dependency more carefully
 # First try to find cJSON as a package with all possible methods
 find_package(cJSON QUIET)
@@ -86,10 +95,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Optional: Only build executables if you want them
-option(BUILD_EXECUTABLES "Build the dap_debugger and dap_mock_server executables" ON)
-
+# Build the DAP test tools if requested
 if(BUILD_EXECUTABLES)
+    message(STATUS "Building DAP test tools: dap_debugger and dap_mock_server")
+    
     # DAP Debugger executable
     file(GLOB DAP_DEBUGGER_SOURCES "src/dap_debugger/*.c")
     add_executable(dap_debugger ${DAP_DEBUGGER_SOURCES})
@@ -109,6 +118,8 @@ if(BUILD_EXECUTABLES)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_mock_server
         ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
     )
+else()
+    message(STATUS "Skipping DAP test tools build (use --with-dap-tools to enable)")
 endif()
 
 # Install rules

@@ -56,3 +56,7 @@ node_modules/
 
 # Binary files
 bin/
+
+
+# Build files
+build/

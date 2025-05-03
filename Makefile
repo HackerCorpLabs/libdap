@@ -54,10 +54,10 @@ help:
 	@echo "  release       - Build release version"
 	@echo "  sanitize      - Build with address sanitizer"
 	@echo "  clean         - Remove build directories"	
-	@echo "  runsrv        - Build and run mock serve
+	@echo "  runsrv        - Build and run mock server"
 	@echo "  rund          - Build and run the debugger"
 	@echo "  help          - Show this help"
 	@echo ""
 	@echo "This Makefile is a wrapper around CMake. If you prefer, you can use CMake directly:"
 	@echo "  cmake -B build"
-	@echo "  cmake --build build""
+	@echo "  cmake --build build"

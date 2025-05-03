@@ -93,6 +93,33 @@ cmake --build build --target clean
 rm -rf build
 ```
 
+
+### Using Make
+
+A Makefile is included to simplify the process if you prefer using make.
+
+```bash
+
+$make help
+
+libDAP makefile - CMake wrapper
+-------------------------------------------------------------------------------
+Targets:
+  all (default) - Same as 'debug'
+  debug         - Build debug version
+  release       - Build release version
+  sanitize      - Build with address sanitizer
+  clean         - Remove build directories
+  runsrv        - Build and run mock server
+  rund          - Build and run the debugger
+  help          - Show this help
+
+This Makefile is a wrapper around CMake. If you prefer, you can use CMake directly:
+  cmake -B build
+  cmake --build build
+```
+
+
 ### Dependencies
 
 - Using cJSON library:

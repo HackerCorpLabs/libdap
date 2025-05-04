@@ -36,9 +36,29 @@ void print_usage(const char* program_name) {
 #define CONSOLE_PROMPT "(dap)" 
 
 void print_command_with_cursor(const char* cmd, int cursor_pos) {
-    (void)cursor_pos;  // Mark parameter as intentionally unused
-    printf("\r%s %s", CONSOLE_PROMPT, cmd);
+    // Make a copy of the command string for safety
+    char* safe_cmd = strdup(cmd ? cmd : "");
+    if (!safe_cmd) {
+        // Memory allocation failed, fall back to simpler approach
+        printf("\r\033[K%s %s", CONSOLE_PROMPT, cmd ? cmd : "");
+        fflush(stdout);
+        return;
+    }
+    
+    // Calculate string length
+    size_t cmd_len = strlen(safe_cmd);
+    
+    // Clear line and print prompt and command
+    printf("\r\033[K%s %s", CONSOLE_PROMPT, safe_cmd);
+    
+    // Position cursor if needed
+    if (cursor_pos < (int)cmd_len) {
+        // Move cursor back to the right position
+        printf("\033[%dD", (int)cmd_len - cursor_pos);
+    }
+    
     fflush(stdout);
+    free(safe_cmd);
 }
 
 
@@ -139,6 +159,9 @@ static int get_parameter_matches(const char* command, const char* prefix, const 
 }
 
 void handle_tab_completion(char* cmd, int* cursor_pos) {
+    // Guard against NULL pointers
+    if (!cmd || !cursor_pos) return;
+    
     // Make a copy of the command for tokenizing
     char* cmd_copy = strdup(cmd);
     if (!cmd_copy) return;
@@ -197,9 +220,8 @@ void handle_tab_completion(char* cmd, int* cursor_pos) {
             (*cursor_pos)++;
         }
         
-        // Display the updated command
-        printf("\r%s %s", CONSOLE_PROMPT, cmd);
-        fflush(stdout);
+        // Display the updated command using the improved function
+        print_command_with_cursor(cmd, *cursor_pos);
         free(cmd_copy);
         return;
     }
@@ -244,8 +266,8 @@ void handle_tab_completion(char* cmd, int* cursor_pos) {
         // Update cursor position
         *cursor_pos = (prefix - cmd) + common_prefix_len;
         
-        printf("\r%s %s", CONSOLE_PROMPT, cmd);
-        fflush(stdout);
+        // Use the improved command display function
+        print_command_with_cursor(cmd, *cursor_pos);
     }
     
     // Show all completions
@@ -253,8 +275,10 @@ void handle_tab_completion(char* cmd, int* cursor_pos) {
     for (int i = 0; i < match_count; i++) {
         printf("  %s\n", matches[i]);
     }
-    printf("%s %s", CONSOLE_PROMPT, cmd);
-    fflush(stdout);
+    
+    // Use the improved command display function after showing completions
+    printf("\n");
+    print_command_with_cursor(cmd, *cursor_pos);
     
     free(cmd_copy);
 } 

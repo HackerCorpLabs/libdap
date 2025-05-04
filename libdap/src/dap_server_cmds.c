@@ -27,7 +27,7 @@ static StatusFlag status_flags[] = {
     {"O", false, "flag"},    // Static overflow flag
     {"C", false, "flag"},    // Carry flag
     {"M", false, "flag"},    // Multi-shift link flag
-    {"PIL", 0, "level"},     // Program Level (4 bits)
+    {"PIL", false, "level"}, // Program Level (4 bits) - changed to bool for compatibility
     {"N100", true, "flag"},  // ND-100 flag (always 1)
     {"SEXI", false, "flag"}, // Memory management extended mode
     {"PONI", false, "flag"}, // Memory management ON flag
@@ -121,6 +121,35 @@ void set_response_error(DAPResponse *response, const char *error_message)
     }
 }
 
+/**
+ * @brief Send the 'initialized' event to the client
+ * This event should be sent after the successful response to an 'initialize' request
+ * @param server Server instance
+ * @return 0 on success, non-zero on failure
+ */
+int send_initialized_event(DAPServer *server)
+{
+    if (!server)
+    {
+        return -1;
+    }
+
+    // Create empty body - the initialized event doesn't need any additional data
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        return -1;
+    }
+
+    // Send the event
+    int result = dap_server_send_event(server, "initialized", body);
+    
+    // Clean up
+    cJSON_Delete(body);
+    
+    return result;
+}
+
 /// @brief Handle the DAP initialize command
 /// @param server
 /// @param args
@@ -128,14 +157,129 @@ void set_response_error(DAPResponse *response, const char *error_message)
 /// @return
 int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)server; // Mark as unused
-    (void)args;   // Mark as unused
-
-    if (!response)
+    if (!response || !server)
     {
         return -1;
     }
 
+    // Store client capabilities if provided
+    if (args)
+    {
+        // Parse and store important client capabilities
+        cJSON *client_id = cJSON_GetObjectItem(args, "clientID");
+        if (client_id && cJSON_IsString(client_id)) {
+            if (server->client_capabilities.clientID) {
+                free(server->client_capabilities.clientID);
+            }
+            server->client_capabilities.clientID = strdup(client_id->valuestring);
+        }
+        
+        cJSON *client_name = cJSON_GetObjectItem(args, "clientName");
+        if (client_name && cJSON_IsString(client_name)) {
+            if (server->client_capabilities.clientName) {
+                free(server->client_capabilities.clientName);
+            }
+            server->client_capabilities.clientName = strdup(client_name->valuestring);
+        }
+        
+        cJSON *adapter_id = cJSON_GetObjectItem(args, "adapterID");
+        if (adapter_id && cJSON_IsString(adapter_id)) {
+            if (server->client_capabilities.adapterID) {
+                free(server->client_capabilities.adapterID);
+            }
+            server->client_capabilities.adapterID = strdup(adapter_id->valuestring);
+        }
+        
+        cJSON *locale = cJSON_GetObjectItem(args, "locale");
+        if (locale && cJSON_IsString(locale)) {
+            if (server->client_capabilities.locale) {
+                free(server->client_capabilities.locale);
+            }
+            server->client_capabilities.locale = strdup(locale->valuestring);
+        }
+        
+        // Store path format (path or uri)
+        cJSON *path_format = cJSON_GetObjectItem(args, "pathFormat");
+        if (path_format && cJSON_IsString(path_format)) {
+            if (server->client_capabilities.pathFormat) {
+                free(server->client_capabilities.pathFormat);
+            }
+            server->client_capabilities.pathFormat = strdup(path_format->valuestring);
+        }
+        
+        // Store line/column formatting preferences
+        cJSON *lines_start_at_1 = cJSON_GetObjectItem(args, "linesStartAt1");
+        if (lines_start_at_1 && cJSON_IsBool(lines_start_at_1)) {
+            server->client_capabilities.linesStartAt1 = cJSON_IsTrue(lines_start_at_1);
+        } else {
+            server->client_capabilities.linesStartAt1 = true; // Default to 1-based
+        }
+        
+        cJSON *columns_start_at_1 = cJSON_GetObjectItem(args, "columnsStartAt1");
+        if (columns_start_at_1 && cJSON_IsBool(columns_start_at_1)) {
+            server->client_capabilities.columnsStartAt1 = cJSON_IsTrue(columns_start_at_1);
+        } else {
+            server->client_capabilities.columnsStartAt1 = true; // Default to 1-based
+        }
+        
+        // Store supported client features
+        cJSON *supports_variable_type = cJSON_GetObjectItem(args, "supportsVariableType");
+        if (supports_variable_type && cJSON_IsBool(supports_variable_type)) {
+            server->client_capabilities.supportsVariableType = cJSON_IsTrue(supports_variable_type);
+        }
+        
+        cJSON *supports_variable_paging = cJSON_GetObjectItem(args, "supportsVariablePaging");
+        if (supports_variable_paging && cJSON_IsBool(supports_variable_paging)) {
+            server->client_capabilities.supportsVariablePaging = cJSON_IsTrue(supports_variable_paging);
+        }
+        
+        cJSON *supports_run_in_terminal = cJSON_GetObjectItem(args, "supportsRunInTerminalRequest");
+        if (supports_run_in_terminal && cJSON_IsBool(supports_run_in_terminal)) {
+            server->client_capabilities.supportsRunInTerminalRequest = cJSON_IsTrue(supports_run_in_terminal);
+        }
+        
+        cJSON *supports_memory_references = cJSON_GetObjectItem(args, "supportsMemoryReferences");
+        if (supports_memory_references && cJSON_IsBool(supports_memory_references)) {
+            server->client_capabilities.supportsMemoryReferences = cJSON_IsTrue(supports_memory_references);
+        }
+        
+        cJSON *supports_progress_reporting = cJSON_GetObjectItem(args, "supportsProgressReporting");
+        if (supports_progress_reporting && cJSON_IsBool(supports_progress_reporting)) {
+            server->client_capabilities.supportsProgressReporting = cJSON_IsTrue(supports_progress_reporting);
+        }
+        
+        cJSON *supports_invalidated_event = cJSON_GetObjectItem(args, "supportsInvalidatedEvent");
+        if (supports_invalidated_event && cJSON_IsBool(supports_invalidated_event)) {
+            server->client_capabilities.supportsInvalidatedEvent = cJSON_IsTrue(supports_invalidated_event);
+        }
+        
+        cJSON *supports_memory_event = cJSON_GetObjectItem(args, "supportsMemoryEvent");
+        if (supports_memory_event && cJSON_IsBool(supports_memory_event)) {
+            server->client_capabilities.supportsMemoryEvent = cJSON_IsTrue(supports_memory_event);
+        }
+
+        cJSON *supports_ansi_styling = cJSON_GetObjectItem(args, "supportsANSIStyling");
+        if (supports_ansi_styling && cJSON_IsBool(supports_ansi_styling)) {
+            server->client_capabilities.supportsANSIStyling = cJSON_IsTrue(supports_ansi_styling);
+        }
+        
+        cJSON *supports_args_shell = cJSON_GetObjectItem(args, "supportsArgsCanBeInterpretedByShell");
+        if (supports_args_shell && cJSON_IsBool(supports_args_shell)) {
+            server->client_capabilities.supportsArgsCanBeInterpretedByShell = cJSON_IsTrue(supports_args_shell);
+        }
+        
+        cJSON *supports_start_debugging = cJSON_GetObjectItem(args, "supportsStartDebuggingRequest");
+        if (supports_start_debugging && cJSON_IsBool(supports_start_debugging)) {
+            server->client_capabilities.supportsStartDebuggingRequest = cJSON_IsTrue(supports_start_debugging);
+        }
+
+        // Log the client information
+        DAP_SERVER_DEBUG_LOG("Initialized with client: %s (%s)", 
+            server->client_capabilities.clientName ? server->client_capabilities.clientName : "unknown",
+            server->client_capabilities.clientID ? server->client_capabilities.clientID : "unknown");
+    }
+
+    // Create the response with our capabilities
     cJSON *capabilities = cJSON_CreateObject();
     if (!capabilities)
     {
@@ -143,17 +287,14 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Set supported capabilities
+    // Set our supported capabilities
+    // ONLY set to true what we actually support
     cJSON_AddBoolToObject(capabilities, "supportsConfigurationDoneRequest", true);
     cJSON_AddBoolToObject(capabilities, "supportsFunctionBreakpoints", true);
     cJSON_AddBoolToObject(capabilities, "supportsConditionalBreakpoints", true);
     cJSON_AddBoolToObject(capabilities, "supportsHitConditionalBreakpoints", true);
     cJSON_AddBoolToObject(capabilities, "supportsEvaluateForHovers", true);
-    cJSON_AddBoolToObject(capabilities, "supportsStepBack", false);
     cJSON_AddBoolToObject(capabilities, "supportsSetVariable", true);
-    cJSON_AddBoolToObject(capabilities, "supportsRestartFrame", false);
-    cJSON_AddBoolToObject(capabilities, "supportsGotoTargetsRequest", false);
-    cJSON_AddBoolToObject(capabilities, "supportsStepInTargetsRequest", false);
     cJSON_AddBoolToObject(capabilities, "supportsCompletionsRequest", true);
     cJSON_AddBoolToObject(capabilities, "supportsModulesRequest", true);
     cJSON_AddBoolToObject(capabilities, "supportsRestartRequest", true);
@@ -173,14 +314,61 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON_AddBoolToObject(capabilities, "supportsDisassembleRequest", true);
     cJSON_AddBoolToObject(capabilities, "supportsCancelRequest", true);
     cJSON_AddBoolToObject(capabilities, "supportsBreakpointLocationsRequest", true);
-    cJSON_AddBoolToObject(capabilities, "supportsClipboardContext", true);
     cJSON_AddBoolToObject(capabilities, "supportsSteppingGranularity", true);
     cJSON_AddBoolToObject(capabilities, "supportsInstructionBreakpoints", true);
+    
+    // These capabilities might not be supported fully by our implementation
+    cJSON_AddBoolToObject(capabilities, "supportsStepBack", false);
+    cJSON_AddBoolToObject(capabilities, "supportsRestartFrame", false);
+    cJSON_AddBoolToObject(capabilities, "supportsGotoTargetsRequest", false);
+    cJSON_AddBoolToObject(capabilities, "supportsStepInTargetsRequest", false);
+    cJSON_AddBoolToObject(capabilities, "supportsClipboardContext", false);
     cJSON_AddBoolToObject(capabilities, "supportsExceptionFilterOptions", true);
     cJSON_AddBoolToObject(capabilities, "supportsSingleThreadExecutionRequests", true);
 
+    // Create and add exception filters
+    cJSON *exceptionFilters = cJSON_CreateArray();
+    if (exceptionFilters)
+    {
+        // Add "all exceptions" filter
+        cJSON *all_exceptions = cJSON_CreateObject();
+        if (all_exceptions)
+        {
+            cJSON_AddStringToObject(all_exceptions, "filter", "all");
+            cJSON_AddStringToObject(all_exceptions, "label", "All Exceptions");
+            cJSON_AddStringToObject(all_exceptions, "description", "Break on all exceptions");
+            cJSON_AddBoolToObject(all_exceptions, "default", false);
+            cJSON_AddItemToArray(exceptionFilters, all_exceptions);
+        }
+
+        // Add "uncaught exceptions" filter
+        cJSON *uncaught = cJSON_CreateObject();
+        if (uncaught)
+        {
+            cJSON_AddStringToObject(uncaught, "filter", "uncaught");
+            cJSON_AddStringToObject(uncaught, "label", "Uncaught Exceptions");
+            cJSON_AddStringToObject(uncaught, "description", "Break on uncaught exceptions");
+            cJSON_AddBoolToObject(uncaught, "default", true);
+            cJSON_AddItemToArray(exceptionFilters, uncaught);
+        }
+
+        cJSON_AddItemToObject(capabilities, "exceptionBreakpointFilters", exceptionFilters);
+    }
+
+    // Set ANSI styling if client supports it
+    if (server->client_capabilities.supportsANSIStyling) {
+        cJSON_AddBoolToObject(capabilities, "supportsANSIStyling", true);
+    }
+
     set_response_success(response, capabilities);
     cJSON_Delete(capabilities);
+    
+    // Mark that we've received initialize
+    server->is_initialized = true;
+    
+    // Note: The 'initialized' event will be sent by dap_server_handle_request
+    // immediately after sending this response, as per the DAP specification
+    
     return 0;
 }
 
@@ -233,7 +421,7 @@ int handle_execution_control(DAPServer *server, DAPCommandType command, cJSON *a
         {
             server->paused = true;
             // If single_thread is true, only pause the specified thread
-            if (single_thread && thread_id != server->current_thread)
+            if (single_thread && thread_id != server->current_thread_id)
             {
                 set_response_error(response, "Cannot pause non-current thread in single-thread mode");
                 return -1;
@@ -266,7 +454,7 @@ int handle_execution_control(DAPServer *server, DAPCommandType command, cJSON *a
         if (server->paused)
         {
             // If single_thread is true, only continue the specified thread
-            if (single_thread && thread_id != server->current_thread)
+            if (single_thread && thread_id != server->current_thread_id)
             {
                 set_response_error(response, "Cannot continue non-current thread in single-thread mode");
                 return -1;
@@ -1348,7 +1536,7 @@ int handle_next(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     cJSON_AddStringToObject(body, "reason", "step");
-    cJSON_AddNumberToObject(body, "threadId", server->current_thread);
+    cJSON_AddNumberToObject(body, "threadId", server->current_thread_id);
     cJSON_AddBoolToObject(body, "allThreadsStopped", true);
     cJSON_AddStringToObject(body, "description", "Stepped over instruction");
 
@@ -1411,7 +1599,7 @@ int handle_next(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         // Use dap_server_send_event instead of manual event creation and sending
-        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        dap_server_send_event(server, "stopped", event_body);
         // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
         // cJSON_Delete(event_body);
     }
@@ -1563,7 +1751,7 @@ int handle_step_in(DAPServer *server, cJSON *args, DAPResponse *response)
             cJSON_AddNumberToObject(event_body, "column", server->current_column);
         }
 
-        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        dap_server_send_event(server, "stopped", event_body);
         // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
         // cJSON_Delete(event_body);
     }
@@ -1635,7 +1823,7 @@ int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response)
     if (event_body)
     {
         cJSON_AddStringToObject(event_body, "reason", "step");
-        cJSON_AddNumberToObject(event_body, "threadId", server->current_thread);
+        cJSON_AddNumberToObject(event_body, "threadId", server->current_thread_id);
         cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
         cJSON_AddStringToObject(event_body, "description", "Stepped out of function");
 
@@ -1657,7 +1845,7 @@ int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response)
             cJSON_AddNumberToObject(event_body, "column", server->current_column);
         }
 
-        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        dap_server_send_event(server, "stopped", event_body);
         // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
         // cJSON_Delete(event_body);
     }
@@ -2006,7 +2194,7 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Update debugger state
     server->paused = true;
-    server->current_thread = thread_id;
+    server->current_thread_id = thread_id;
 
     response->success = true;
     response->data = body_str;
@@ -2039,7 +2227,7 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
             cJSON_AddNumberToObject(event_body, "column", server->current_column);
         }
 
-        dap_server_send_event(server, DAP_EVENT_STOPPED, event_body);
+        dap_server_send_event(server, "stopped", event_body);
         // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
         // cJSON_Delete(event_body);
     }
@@ -2256,7 +2444,7 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         cJSON_AddItemToObject(body, "cwd", cJSON_Duplicate(cwd, 1));
 
     // Set debugger state
-    server->running = true;
+    server->is_running = true;
     server->attached = true;
     server->paused = true;
 
@@ -2343,7 +2531,7 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
         return 0;
     }
 
-    server->running = true;
+    server->is_running = true;
     server->attached = true;
     server->paused = true;
 

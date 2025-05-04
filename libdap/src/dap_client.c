@@ -104,11 +104,71 @@ int dap_client_send_message(DAPClient* client, const char* message_str, char** r
         return -1;
     }
 
-    // Read response using transport layer
+    // Read response using transport layer, handling any events that arrive first
     char* response = NULL;
-    if (dap_transport_receive(client->transport, &response) != 0) {
-        DAP_CLIENT_DEBUG_LOG("Failed to receive response");
-        return -1;
+    while (1) {
+        char* message = NULL;
+        if (dap_transport_receive(client->transport, &message) != 0) {
+            DAP_CLIENT_DEBUG_LOG("Failed to receive message");
+            return -1;
+        }
+        
+        if (!message) {
+            DAP_CLIENT_DEBUG_LOG("Received null message");
+            return -1;
+        }
+        
+        // Parse the message to determine if it's a response or an event
+        cJSON* json = cJSON_Parse(message);
+        if (!json) {
+            DAP_CLIENT_DEBUG_LOG("Failed to parse message as JSON: %s", message);
+            free(message);
+            return -1;
+        }
+        
+        // Check the message type
+        cJSON* type_obj = cJSON_GetObjectItem(json, "type");
+        if (!type_obj || !cJSON_IsString(type_obj)) {
+            DAP_CLIENT_DEBUG_LOG("Message missing 'type' field: %s", message);
+            cJSON_Delete(json);
+            free(message);
+            return -1;
+        }
+        
+        const char* type = type_obj->valuestring;
+        
+        // If it's an event, process it and continue waiting for response
+        if (strcmp(type, "event") == 0) {
+            // Process event (log it for now)
+            cJSON* event_obj = cJSON_GetObjectItem(json, "event");
+            if (event_obj && cJSON_IsString(event_obj)) {
+                DAP_CLIENT_DEBUG_LOG("Received event while waiting for response: %s", event_obj->valuestring);
+                
+                // Here you could add more sophisticated event handling
+                // For example, store the event in a queue for later processing
+                // or call an event handler callback if one is registered
+            }
+            
+            // Use the common event handler
+            dap_client_handle_event(client, json);
+            
+            cJSON_Delete(json);
+            free(message);
+            continue; // Continue waiting for response
+        } 
+        // If it's a response, break the loop and return it
+        else if (strcmp(type, "response") == 0) {
+            response = message; // Store the response
+            cJSON_Delete(json);
+            break;
+        } 
+        // Unknown message type
+        else {
+            DAP_CLIENT_DEBUG_LOG("Unexpected message type: %s", type);
+            cJSON_Delete(json);
+            free(message);
+            return -1;
+        }
     }
 
     // Allocate and copy response
@@ -2659,4 +2719,134 @@ void dap_breakpoint_free(DAPBreakpoint* breakpoint) {
     
     free(breakpoint->log_message);
     breakpoint->log_message = NULL;
+}
+
+/**
+ * @brief Process a received DAP event
+ * 
+ * @param client Pointer to the client
+ * @param event_json JSON object containing the event data
+ * @return int 0 on success, -1 on failure
+ */
+int dap_client_handle_event(DAPClient* client, cJSON* event_json) {
+    if (!client || !event_json) {
+        return -1;
+    }
+    
+    // Extract event type
+    cJSON* event_type = cJSON_GetObjectItem(event_json, "event");
+    if (!event_type || !cJSON_IsString(event_type)) {
+        DAP_CLIENT_DEBUG_LOG("Invalid event: missing 'event' field");
+        return -1;
+    }
+    
+    const char* event_name = event_type->valuestring;
+    
+    // Extract event body if present
+    cJSON* body = cJSON_GetObjectItem(event_json, "body");
+    
+    // Log the event
+    DAP_CLIENT_DEBUG_LOG("Received event: %s", event_name);
+    
+    // Process different event types
+    if (strcmp(event_name, "initialized") == 0) {
+        // Handle initialized event
+        DAP_CLIENT_DEBUG_LOG("Debug adapter initialized");
+        // Additional processing if needed
+    } 
+    else if (strcmp(event_name, "stopped") == 0) {
+        // Handle stopped event
+        if (body) {
+            cJSON* reason = cJSON_GetObjectItem(body, "reason");
+            cJSON* thread_id = cJSON_GetObjectItem(body, "threadId");
+            
+            if (reason && cJSON_IsString(reason)) {
+                if (thread_id && cJSON_IsNumber(thread_id)) {
+                    DAP_CLIENT_DEBUG_LOG("Thread %d stopped: %s", 
+                                      thread_id->valueint, 
+                                      reason->valuestring);
+                } else {
+                    DAP_CLIENT_DEBUG_LOG("Program stopped: %s", 
+                                      reason->valuestring);
+                }
+            }
+        }
+    }
+    else if (strcmp(event_name, "continued") == 0) {
+        // Handle continued event
+        if (body) {
+            cJSON* thread_id = cJSON_GetObjectItem(body, "threadId");
+            cJSON* all_threads_continued = cJSON_GetObjectItem(body, "allThreadsContinued");
+            
+            if (thread_id && cJSON_IsNumber(thread_id)) {
+                if (all_threads_continued && cJSON_IsTrue(all_threads_continued)) {
+                    DAP_CLIENT_DEBUG_LOG("All threads continued");
+                } else {
+                    DAP_CLIENT_DEBUG_LOG("Thread %d continued", thread_id->valueint);
+                }
+            }
+        }
+    }
+    else if (strcmp(event_name, "exited") == 0) {
+        // Handle exited event
+        if (body) {
+            cJSON* exit_code = cJSON_GetObjectItem(body, "exitCode");
+            
+            if (exit_code && cJSON_IsNumber(exit_code)) {
+                DAP_CLIENT_DEBUG_LOG("Program exited with code %d", exit_code->valueint);
+            }
+        }
+    }
+    else if (strcmp(event_name, "terminated") == 0) {
+        // Handle terminated event
+        DAP_CLIENT_DEBUG_LOG("Debug adapter terminated");
+    }
+    else if (strcmp(event_name, "thread") == 0) {
+        // Handle thread event
+        if (body) {
+            cJSON* reason = cJSON_GetObjectItem(body, "reason");
+            cJSON* thread_id = cJSON_GetObjectItem(body, "threadId");
+            
+            if (reason && cJSON_IsString(reason) && 
+                thread_id && cJSON_IsNumber(thread_id)) {
+                DAP_CLIENT_DEBUG_LOG("Thread %d: %s", 
+                                  thread_id->valueint, 
+                                  reason->valuestring);
+            }
+        }
+    }
+    else if (strcmp(event_name, "output") == 0) {
+        // Handle output event
+        if (body) {
+            cJSON* output = cJSON_GetObjectItem(body, "output");
+            cJSON* category = cJSON_GetObjectItem(body, "category");
+            
+            if (output && cJSON_IsString(output)) {
+                const char* category_str = category && cJSON_IsString(category) 
+                                        ? category->valuestring 
+                                        : "console";
+                                        
+                DAP_CLIENT_DEBUG_LOG("[%s] %s", category_str, output->valuestring);
+            }
+        }
+    }
+    else if (strcmp(event_name, "breakpoint") == 0) {
+        // Handle breakpoint event
+        if (body) {
+            cJSON* reason = cJSON_GetObjectItem(body, "reason");
+            cJSON* breakpoint = cJSON_GetObjectItem(body, "breakpoint");
+            
+            if (reason && cJSON_IsString(reason) && breakpoint) {
+                cJSON* id = cJSON_GetObjectItem(breakpoint, "id");
+                if (id && cJSON_IsNumber(id)) {
+                    DAP_CLIENT_DEBUG_LOG("Breakpoint %d: %s", 
+                                      id->valueint, 
+                                      reason->valuestring);
+                }
+            }
+        }
+    }
+    // Additional event types can be handled here
+    
+    return 0;
 }

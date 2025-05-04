@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     
     printf("Mock debugger listening on port %d...\n", port);
     printf("Press Ctrl+C to exit\n");
-    
+        
     // Run the server's message processing loop
     if (dap_server_run(mock_debugger.server) != 0) {
         fprintf(stderr, "Error: Server message loop failed.\n");

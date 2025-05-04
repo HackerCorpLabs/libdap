@@ -484,6 +484,8 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
 
     if (transport->debuglog) {
         DEBUG_LOG("Received message: %zu bytes", content_length);
+        // Log the full message content
+        DEBUG_LOG("Message content: %s", buffer);
     }
 
     return 0;

@@ -97,7 +97,8 @@ typedef enum {
     DAP_CMD_REVERSE_CONTINUE,    ///< Reverse continue request
     DAP_CMD_RESTART_FRAME,       ///< Restart frame request
     DAP_CMD_GOTO,                ///< Goto request
-    DAP_CMD_SET_EXCEPTION_FILTERS ///< Set exception filters request
+    DAP_CMD_SET_EXCEPTION_FILTERS, ///< Set exception filters request
+    DAP_CMD_MAX                    /// Last entry in the enum (used for bounds checking and allocation)
 } DAPCommandType;
 
 /**

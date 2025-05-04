@@ -37,3 +37,11 @@ int handle_initialize(DAPServer* server, cJSON* args, DAPResponse* response);
 
 
 int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* args, DAPResponse* response);
+
+/**
+ * @brief Send the 'initialized' event to the client
+ * This event should be sent after the successful response to an 'initialize' request
+ * @param server Server instance
+ * @return 0 on success, non-zero on failure
+ */
+int send_initialized_event(DAPServer *server);

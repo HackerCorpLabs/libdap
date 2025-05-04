@@ -514,6 +514,13 @@ int dap_client_threads(DAPClient* client, DAPGetThreadsResult* result);
 int dap_client_receive_message(DAPClient* client, cJSON** message);
 int dap_client_stack_trace(DAPClient* client, int thread_id, DAPStackFrame** frames, size_t* frame_count);
 
-
+/**
+ * @brief Process a received DAP event
+ * 
+ * @param client Pointer to the client
+ * @param event_json JSON object containing the event data
+ * @return int 0 on success, -1 on failure
+ */
+int dap_client_handle_event(DAPClient* client, cJSON* event_json);
 
 #endif /* DAP_CLIENT_H */ 

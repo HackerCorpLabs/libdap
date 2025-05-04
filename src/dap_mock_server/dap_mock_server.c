@@ -101,8 +101,7 @@ int dbg_mock_init(int port) {
                     .port = port
                 }
             }
-        },           
-        .stop_at_entry = false,        
+        }
     };
 
     mock_debugger.server = dap_server_create(&config);

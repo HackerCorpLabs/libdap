@@ -229,6 +229,7 @@ int main(int argc, char* argv[]) {
     const char* program_file = NULL;
     const char* host = DEFAULT_HOST;
     int port = DEFAULT_PORT;
+    bool debug_mode = false;
     bool stop_at_entry = false;
     cJSON* program_args = NULL;
     cJSON* env_vars = NULL;
@@ -242,7 +243,8 @@ int main(int argc, char* argv[]) {
         {"program", required_argument, 0, 'f'},
         {"args", required_argument, 0, 'a'},
         {"env", required_argument, 0, 'v'},
-        {"cwd", required_argument, 0, 'd'},
+        {"cwd", required_argument, 0, 'w'},
+        {"debug", no_argument, 0, 'd'},
         {"help", no_argument, 0, '?'},
         {0, 0, 0, 0}
     };
@@ -250,7 +252,7 @@ int main(int argc, char* argv[]) {
     int opt;
     int option_index = 0;
     
-    while ((opt = getopt_long(argc, argv, "h:p:ef:a:v:d:?", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "h:p:ef:a:v:d:w:?", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'h':
                 host = optarg;
@@ -293,6 +295,9 @@ int main(int argc, char* argv[]) {
                 break;
             }
             case 'd':
+                debug_mode = true;
+                break;
+            case 'w':
                 working_dir = optarg;
                 break;
             case '?':
@@ -334,6 +339,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    g_client->debug_mode = debug_mode;
     // Store program path in client for future reference
     g_client->program_path = strdup(program_file);
     
@@ -400,9 +406,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Add required parameters
+    // Add the required program path parameter - specifies the executable/script to debug
     cJSON_AddStringToObject(launch_args, "program", program_file);
+    // Set stopOnEntry parameter - controls whether debugger should pause execution at program start
     cJSON_AddBoolToObject(launch_args, "stopOnEntry", stop_at_entry);
+    // Set noDebug parameter - when false enables debugging features, when true runs program without debugging
     cJSON_AddBoolToObject(launch_args, "noDebug", false);
     
     // Add optional parameters if provided
@@ -493,76 +501,10 @@ int main(int argc, char* argv[]) {
                     // Process the message
                     const char* type = cJSON_GetStringValue(cJSON_GetObjectItem(message, "type"));
                     if (type && strcmp(type, "event") == 0) {
-                        const char* event = cJSON_GetStringValue(cJSON_GetObjectItem(message, "event"));
-                        if (event) {
-                            if (strcmp(event, DAP_CMD_STOPPED) == 0) {
-                                // Handle stopped event
-                                cJSON* body = cJSON_GetObjectItem(message, "body");
-                                if (body) {
-                                    cJSON* reason = cJSON_GetObjectItem(body, "reason");
-                                    cJSON* thread_id = cJSON_GetObjectItem(body, "threadId");
-                                    cJSON* all_threads_stopped = cJSON_GetObjectItem(body, "allThreadsStopped");
-                                    
-                                    if (reason && cJSON_IsString(reason)) {
-                                        printf("\nProgram stopped: %s\n", reason->valuestring);
-                                    }
-                                    
-                                    if (thread_id && cJSON_IsNumber(thread_id)) {
-                                        g_client->thread_id = thread_id->valueint;
-                                        printf("Thread ID: %d\n", thread_id->valueint);
-                                    }
-                                    
-                                    if (all_threads_stopped && cJSON_IsBool(all_threads_stopped)) {
-                                        printf("All threads stopped: %s\n", 
-                                              all_threads_stopped->valueint ? "yes" : "no");
-                                    }
-                                    
-                                    // Get stack trace for the stopped thread
-                                    DAPStackFrame* frames = NULL;
-                                    int frame_count = 0;
-                                    if (dap_client_get_stack_trace(g_client, g_client->thread_id, &frames, &frame_count) == 0) {
-                                        printf("\nStack trace:\n");
-                                        for (int i = 0; i < frame_count; i++) {
-                                            printf("#%d %s:%d\n", i, frames[i].name, frames[i].line);
-                                            free(frames[i].name);
-                                            if (frames[i].source) {
-                                                free(frames[i].source->path);
-                                                free(frames[i].source);
-                                            }
-                                        }
-                                        free(frames);
-                                    }
-                                }
-                            } else if (strcmp(event, DAP_CMD_TERMINATED) == 0) {
-                                printf("\nDebug session terminated\n");
-                                break;
-                            } else if (strcmp(event, DAP_CMD_EXITED) == 0) {
-                                cJSON* body = cJSON_GetObjectItem(message, "body");
-                                if (body) {
-                                    cJSON* exit_code = cJSON_GetObjectItem(body, "exitCode");
-                                    if (exit_code && cJSON_IsNumber(exit_code)) {
-                                        printf("\nProgram exited with code %d\n", exit_code->valueint);
-                                    } else {
-                                        printf("\nProgram exited (unknown exit code)\n");
-                                    }
-                                } else {
-                                    printf("\nProgram exited\n");
-                                }
-                                break;
-                            } else {
-                                // Handle other events - print for debugging
-                                #ifdef DAP_DEBUG_PRINT_JSON
-                                char* json_str = cJSON_Print(message);
-                                if (json_str) {
-                                    printf("\nReceived event: %s\n", event);
-                                    printf("Event details: %s\n", json_str);
-                                    free(json_str);
-                                }
-                                #else
-                                printf("\nReceived event: %s\n", event);
-                                #endif
-                            }
-                        }
+                        // Use the common event handler to log events
+                        dap_client_handle_event(g_client, message);
+                        
+                        
                     } else if (type && strcmp(type, "response") == 0) {
                         // Process responses when they arrive
                         // This is needed to handle responses to requests sent from within the event loop

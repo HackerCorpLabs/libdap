@@ -20,6 +20,7 @@ int handle_disassemble_command(DAPClient* client, const char* args);
 int handle_backtrace_command(DAPClient* client, const char* args);
 int handle_frame_command(DAPClient* client, const char* args);
 int handle_variables_command(DAPClient* client, const char* args);
+int handle_exception_command(DAPClient* client, const char* args);
 /**
  * @brief Print variables with proper formatting based on type and nested structure
  * 
@@ -43,10 +44,9 @@ int handle_show_options_command(DAPClient* client, const char* args);
 int handle_source_command(DAPClient* client, const char* args);
 int handle_search_command(DAPClient* client, const char* args);
 int handle_shell_command(DAPClient* client, const char* args);
-int handle_threads_command(DAPClient* client, const char* args) ;
-
-int handle_debugmode_command(DAPClient* client, const char* args);
+int handle_threads_command(DAPClient* client, const char* args);
 int handle_scopes_command(DAPClient* client, const char* args);
-
 int handle_pause(cJSON* args, DAPResponse* response);
+int handle_debugmode_command(DAPClient* client, const char* args);
+
 #endif // DAP_DEBUGGER_COMMANDS_H 

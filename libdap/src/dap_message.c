@@ -223,6 +223,9 @@ char* dap_message_serialize(const DAPMessage* msg) {
             }
             break;
         case DAP_MESSAGE_RESPONSE:
+            // For responses, set seq to null per DAP spec
+            cJSON_DeleteItemFromObject(root, "seq");
+            cJSON_AddNullToObject(root, "seq");
             cJSON_AddNumberToObject(root, "request_seq", msg->content.response.request_sequence);
             cJSON_AddStringToObject(root, "command", msg->content.response.command);
             cJSON_AddBoolToObject(root, "success", msg->content.response.success);

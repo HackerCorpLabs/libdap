@@ -65,6 +65,13 @@ target_include_directories(dap_objects
         ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
 )
 
+# Find pthread on UNIX platforms
+if(UNIX)
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
+    target_link_libraries(dap_objects PUBLIC Threads::Threads)
+endif()
+
 # Handle cJSON based on detection method
 if(CJSON_METHOD STREQUAL "CMAKE_PACKAGE")
     target_link_libraries(dap_objects PUBLIC cJSON::cJSON)

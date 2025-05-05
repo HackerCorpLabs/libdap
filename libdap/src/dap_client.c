@@ -1705,7 +1705,7 @@ int dap_client_initialize(DAPClient* client) {
     cJSON_AddBoolToObject(capabilities, "supportsExceptionOptions", true);
     cJSON_AddBoolToObject(capabilities, "supportsValueFormattingOptions", true);
     cJSON_AddBoolToObject(capabilities, "supportsExceptionInfoRequest", true);
-    cJSON_AddBoolToObject(capabilities, "supportsTerminateDebuggee", true);
+    cJSON_AddBoolToObject(capabilities, "supportTerminateDebuggee", true); // NOTE! This is not the same as terminateRequest. And be aware of the single vs plural in the name. Its single!
     cJSON_AddBoolToObject(capabilities, "supportsSuspendDebuggee", true);
     cJSON_AddBoolToObject(capabilities, "supportsDelayedStackTraceLoading", true);
     cJSON_AddBoolToObject(capabilities, "supportsLoadedSourcesRequest", true);
@@ -2849,4 +2849,146 @@ int dap_client_handle_event(DAPClient* client, cJSON* event_json) {
     // Additional event types can be handled here
     
     return 0;
+}
+
+/**
+ * @brief Set exception breakpoints
+ *
+ * @param client Pointer to the client
+ * @param filters Array of exception filter IDs
+ * @param num_filters Number of filters
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_set_exception_breakpoints(DAPClient* client, 
+                                       const char** filters, size_t num_filters,
+                                       DAPSetExceptionBreakpointsResult* result) {
+    if (!client || !result) {
+        return DAP_ERROR_INVALID_ARG;
+    }
+    
+    // Initialize result structure
+    result->base.success = false;
+    result->base.message = NULL;
+    result->breakpoints = NULL;
+    result->num_breakpoints = 0;
+    
+    // Create arguments object
+    cJSON* args = cJSON_CreateObject();
+    if (!args) {
+        return DAP_ERROR_MEMORY;
+    }
+    
+    // Create filters array
+    cJSON* filters_array = cJSON_CreateArray();
+    if (!filters_array) {
+        cJSON_Delete(args);
+        return DAP_ERROR_MEMORY;
+    }
+    
+    // Add filters to the array
+    for (size_t i = 0; i < num_filters; i++) {
+        if (filters[i]) {
+            cJSON* filter = cJSON_CreateString(filters[i]);
+            if (!filter) {
+                cJSON_Delete(args);
+                return DAP_ERROR_MEMORY;
+            }
+            cJSON_AddItemToArray(filters_array, filter);
+        }
+    }
+    
+    // Add filters array to arguments
+    cJSON_AddItemToObject(args, "filters", filters_array);
+    
+    // Send the request
+    char* response = NULL;
+    int error = dap_client_send_request(client, DAP_CMD_SET_EXCEPTION_BREAKPOINTS, args, &response);
+    cJSON_Delete(args);
+    
+    if (error != DAP_ERROR_NONE) {
+        return error;
+    }
+    
+    // Parse the response
+    if (!response) {
+        return DAP_ERROR_PARSE_ERROR;
+    }
+    
+    // Parse the response JSON
+    cJSON* root = cJSON_Parse(response);
+    free(response);
+    
+    if (!root) {
+        return DAP_ERROR_PARSE_ERROR;
+    }
+    
+    // Check for success
+    cJSON* success = cJSON_GetObjectItem(root, "success");
+    if (!success || !cJSON_IsBool(success) || !cJSON_IsTrue(success)) {
+        cJSON* message = cJSON_GetObjectItem(root, "message");
+        if (message && cJSON_IsString(message)) {
+            result->base.message = strdup(message->valuestring);
+        }
+        cJSON_Delete(root);
+        return DAP_ERROR_REQUEST_FAILED;
+    }
+    
+    result->base.success = true;
+    
+    // Parse breakpoints from the response body
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    if (!body) {
+        // No body is valid for this response
+        cJSON_Delete(root);
+        return DAP_ERROR_NONE;
+    }
+    
+    cJSON* breakpoints = cJSON_GetObjectItem(body, "breakpoints");
+    if (!breakpoints || !cJSON_IsArray(breakpoints)) {
+        // No breakpoints is valid for this response
+        cJSON_Delete(root);
+        return DAP_ERROR_NONE;
+    }
+    
+    // Count breakpoints
+    int num_breakpoints = cJSON_GetArraySize(breakpoints);
+    if (num_breakpoints <= 0) {
+        cJSON_Delete(root);
+        return DAP_ERROR_NONE;
+    }
+    
+    // Allocate memory for breakpoints
+    result->breakpoints = calloc(num_breakpoints, sizeof(DAPBreakpoint));
+    if (!result->breakpoints) {
+        cJSON_Delete(root);
+        return DAP_ERROR_MEMORY;
+    }
+    result->num_breakpoints = num_breakpoints;
+    
+    // Parse each breakpoint
+    for (int i = 0; i < num_breakpoints; i++) {
+        cJSON* bp = cJSON_GetArrayItem(breakpoints, i);
+        if (!bp) {
+            continue;
+        }
+        
+        cJSON* id = cJSON_GetObjectItem(bp, "id");
+        if (id && cJSON_IsNumber(id)) {
+            result->breakpoints[i].id = id->valueint;
+        }
+        
+        cJSON* verified = cJSON_GetObjectItem(bp, "verified");
+        if (verified && cJSON_IsBool(verified)) {
+            result->breakpoints[i].verified = cJSON_IsTrue(verified);
+        }
+        
+        cJSON* message = cJSON_GetObjectItem(bp, "message");
+        if (message && cJSON_IsString(message)) {
+            result->breakpoints[i].message = strdup(message->valuestring);
+        }
+    }
+    
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
 }

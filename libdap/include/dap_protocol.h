@@ -183,19 +183,20 @@ cJSON* dap_create_request(DAPCommandType command, int sequence, cJSON* args);
  * @brief Create a DAP response message
  * 
  * @param command Command type
- * @param sequence Sequence number
- * @param success Whether the request was successful
+ * @param sequence Sequence number from the request
+ * @param request_seq Sequence number from the request
+ * @param success Whether the command succeeded
  * @param body Response body (cJSON object)
- * @return cJSON* Response message, or NULL on error
+ * @return cJSON* JSON object (caller must free)
  */
-cJSON* dap_create_response(DAPCommandType command, int sequence, bool success, cJSON* body);
+cJSON* dap_create_response(DAPCommandType command, int sequence, int request_seq, bool success, cJSON* body);
 
 /**
  * @brief Create a DAP event message
  * 
  * @param event_type Event type
- * @param body Event body (cJSON object)
- * @return cJSON* Event message, or NULL on error
+ * @param body Event body (cJSON object) - this function takes ownership of the body
+ * @return cJSON* JSON object (caller must free)
  */
 cJSON* dap_create_event(DAPEventType event_type, cJSON* body);
 

@@ -5,7 +5,7 @@
 BUILD_DIR = build
 BUILD_DIR_DEBUG = build
 BUILD_DIR_RELEASE = build
-BUILD_DIR_SANITIZE = build
+BUILD_DIR_SANITIZE = build_sane
 
 
 # Commands with full paths
@@ -13,7 +13,7 @@ CMAKE := $(shell command -v cmake 2>/dev/null)
 
 # Default target is debug
 .PHONY: all
-all: sanitize
+all: debug
 
 # Build targets
 .PHONY: debug release sanitize clean rundbg runsrv help
@@ -28,10 +28,10 @@ release:
 	$(CMAKE) -B $(BUILD_DIR_RELEASE) -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_EXECUTABLES=ON
 	$(CMAKE) --build $(BUILD_DIR_RELEASE) -- -j$$(nproc 2>/dev/null || echo 4)
 
-sanitize:
-	@echo "Building with sanitizers..."
-	$(CMAKE) -B $(BUILD_DIR_SANITIZE) -S . -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DBUILD_EXECUTABLES=ON
-	$(CMAKE) --build $(BUILD_DIR_SANITIZE) -- -j$$(nproc 2>/dev/null || echo 4) 
+#sanitize:
+	#@echo "Building with sanitizers..."
+	#$(CMAKE) -B $(BUILD_DIR_SANITIZE) -S . -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" -DBUILD_EXECUTABLES=ON
+	#$(CMAKE) --build $(BUILD_DIR_SANITIZE) -- -j$$(nproc 2>/dev/null || echo 4) 
 
 clean:
 	@echo "Cleaning build directories..."
@@ -39,11 +39,11 @@ clean:
 
 runsrv: debug	
 	@echo "Running mock server..."
-	valgrind --leak-check=full $(BUILD_DIR_SANITIZE)/bin/dap_mock_server 
+	valgrind --leak-check=full $(BUILD_DIR_DEBUG)/bin/dap_mock_server  --debug
 
 run: debug	
 	@echo "Running debugger..."
-	valgrind --leak-check=full  $(BUILD_DIR_SANITIZE)/bin/dap_debugger ../tests/test_program.exe
+	valgrind --leak-check=full  $(BUILD_DIR)/bin/dap_debugger ../tests/test_program.exe --debug
 
 help:
 	@echo "libDAP makefile - CMake wrapper"	

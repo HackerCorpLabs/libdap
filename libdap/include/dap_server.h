@@ -163,6 +163,8 @@ typedef struct
     char *data;          /**< Response data (JSON string) */
     size_t data_size;    /**< Size of response data */
     char *error_message; /**< Error message if failed, NULL if succeeded */
+    int request_seq;     /**< Sequence number of the original request */
+    int sequence;        /**< Sequence number of the response */
 } DAPResponse;
 
 // Source line mapping structure
@@ -208,11 +210,88 @@ typedef struct
     DAPTransportConfig transport;             /**< Transport configuration */
 } DAPServerConfig;
 
+
+
+/**
+ * @enum StepGranularity
+ * @brief Granularity options for stepping commands (per DAP spec)
+ */
+typedef enum {
+    DAP_STEP_GRANULARITY_INSTRUCTION,  /**< Step by a single instruction */
+    DAP_STEP_GRANULARITY_LINE,         /**< Step by source line */
+    DAP_STEP_GRANULARITY_STATEMENT     /**< Step by statement (default) */
+} StepGranularity;
+
+
 /**
  * @struct DAPCommandHandler
  * @brief Command handler function type
  */
 typedef int (*DAPCommandHandler)(DAPServer *server, cJSON *args, DAPResponse *resp);
+
+/**
+ * @struct StepCommandContext
+ * @brief Context for step commands (stepIn, stepOut, next)
+ */
+typedef struct {
+    int thread_id;               /**< Thread ID to step */
+    bool single_thread;          /**< Whether to step only the specified thread */
+    const char* granularity;     /**< Step granularity (instruction, line, statement) */
+    int target_id;               /**< Target ID (used for stepIn) */
+} StepCommandContext;
+
+/**
+ * @struct BreakpointCommandContext
+ * @brief Context for breakpoint commands
+ */
+typedef struct {
+    const char* source_path;           /**< Source file path */
+    const char* source_name;           /**< Source file name */
+    bool source_modified;              /**< Whether the source file has been modified */
+    const DAPBreakpoint* breakpoints;  /**< Array of breakpoint objects */
+    int breakpoint_count;              /**< Number of breakpoints */
+    //int* lines;                        /**< Legacy: Simple line array */
+    //bool use_lines_array;              /**< Whether to use simplified lines array */
+} BreakpointCommandContext;
+
+/**
+ * @struct ExceptionBreakpointCommandContext
+ * @brief Context for exception breakpoint commands
+ */
+typedef struct {
+    const char** filters;        /**< Array of exception filter IDs */
+    size_t filter_count;         /**< Number of filters */
+    const char** conditions;     /**< Array of filter conditions */
+    size_t condition_count;      /**< Number of conditions */
+} ExceptionBreakpointCommandContext;
+
+/**
+ * @typedef DAPCommandCallback
+ * @brief Generic callback function for DAP command implementation
+ * @param server The DAP server instance that contains all necessary context
+ * @return 0 on success, non-zero on failure
+ */
+typedef int (*DAPCommandCallback)(struct DAPServer *server);
+
+/**
+ * @struct DebuggerState
+ * @brief Information about the current debugger state
+ */
+typedef struct {
+    int program_counter;     /**< Current program counter value */
+    int source_line;         /**< Current source line */
+    int source_column;       /**< Current source column */
+    const char* source_path; /**< Current source file path */
+    const char* program_path; /**< Current program file path */
+    int current_thread_id; /**< Current thread ID for execution control */
+
+    bool has_stopped;        /**< Whether execution has stopped */
+    char* stop_reason;       /**< Reason for stopping (if has_stopped is true) */    
+    char* stop_description;  /**< Description for stopping (if has_stopped is true) */
+
+    void* user_data;         /**< User-defined data for the current state */
+
+} DebuggerState;
 
 /**
  * @struct DAPServer
@@ -224,16 +303,19 @@ struct DAPServer
     DAPTransport *transport; /**< Transport instance */
     bool is_running;         /**< Whether server is running */
     bool is_initialized;     /**< Whether server is initialized */
-    bool attached;           /**< Whether debugger is attached to target */
-    bool paused;             /**< Whether execution is currently paused */
+    bool attached;           /**< Whether debugger is attached to target */        
+    int sequence;            /**< Current sequence number */
 
-    int sequence;          /**< Current sequence number */
-    int current_thread_id; /**< Current thread ID for execution control */
-    int current_line;      /**< Current source line */
-    int current_column;    /**< Current source column */
-    int current_pc;        /**< Current program counter */
+
+    //int current_thread_id; /**< Current thread ID for execution control */
+    //int current_line;      /**< Current source line */
+    //int current_column;    /**< Current source column */
+    //int current_pc;        /**< Current program counter */
     
-    char *program_path;
+    //char *program_path;
+
+    // Debugging state information structure for storing callback results
+    DebuggerState debugger_state;  /**< Current debugger state, updated by callbacks */
 
     const DAPSource *current_source;
 
@@ -245,21 +327,46 @@ struct DAPServer
     int line_map_count;
     int line_map_capacity;
 
-    // Command handler array
-    DAPCommandHandler command_handlers[DAP_CMD_MAX]; /**< Array of command handlers */
+    // Generic callback array for command implementations. MUST be set up the the DEBUGGER implementation.
+    DAPCommandCallback command_callbacks[DAP_CMD_MAX]; /**< Callback functions for command implementation */
     
-    ///Steps to the next machine instruction. This is useful for assembly debugging, 
-    ///but we need to be careful with the order of breakpoint evaluation.
-    bool step_to_next_instruction;
+    // Keep existing command handlers for protocol parsing
+    DAPCommandHandler command_handlers[DAP_CMD_MAX]; /**< Command handlers for protocol parsing */
+    
 
-    // Stepping functions
-    int (*step_cpu)(struct DAPServer *server);               /**< Step one CPU instruction */
-    int (*step_cpu_line)(struct DAPServer *server);          /**< Step to next source line */
-    int (*step_cpu_statement)(struct DAPServer *server);     /**< Step to next statement */
+    
+    // Current command context - set before calling command_callbacks
+    struct {
+        DAPCommandType type;           /**< Current command type being processed */
+        int request_seq;               /**< Request sequence number */
+        
+        // Command-specific data stored in a union to avoid using cJSON directly
+        union {
+            StepCommandContext step;                /**< Context for step commands */
+            BreakpointCommandContext breakpoint;    /**< Context for breakpoint commands */
+            ExceptionBreakpointCommandContext exception; /**< Context for exception breakpoints */
+            // Add more command-specific contexts as needed
+        } context;
+    } current_command;
 
     // Client capabilities
     DAPClientCapabilities client_capabilities; /**< Capabilities reported by the client */
 };
+
+/**
+ * @brief Output category enum for dap_server_send_output functions
+ * 
+ * The category determines how messages are styled and where they're displayed in the client.
+ */
+typedef enum {
+    DAP_OUTPUT_CONSOLE,    // Normal debugger console output (default). Shows in Debug Console.
+    DAP_OUTPUT_STDOUT,     // Standard output from the debuggee. Shows in Debug Console (often blue).
+    DAP_OUTPUT_STDERR,     // Standard error from the debuggee. Shows in Debug Console (often red).
+    DAP_OUTPUT_TELEMETRY,  // Telemetry data. Usually not displayed to users in Debug Console.
+    DAP_OUTPUT_IMPORTANT,  // High-visibility output, often highlighted. Shows in Debug Console.
+    DAP_OUTPUT_PROGRESS,   // Progress information (often with spinner/indicator). Shows in Debug UI.
+    DAP_OUTPUT_LOG         // Log output from debugger itself. Shows in Debug Console (subdued).
+} DAPOutputCategory;
 
 /**
  * @brief Create a new DAP server
@@ -341,38 +448,28 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
 int dap_server_register_command(DAPServer *server, int command_id, DAPCommandHandler handler);
 
 /**
- * @brief Send a response to a client request
+ * @brief Send a DAP response to a client request
  * 
- * This is the primary function for sending standard DAP responses back to the client.
- * It constructs a properly formatted response message with all required DAP fields.
- * 
+ * Creates a properly formatted response object and sends it to the client.
+ * This function handles the complete lifecycle of creating and sending the response:
+ * 1. Creates the response JSON structure with proper fields
+ * 2. Attaches the body to the response
+ * 3. Serializes to string and sends via transport
+ * 4. Cleans up temporary objects
+ *
  * @param server Server instance
- * @param command Command type (must match the request being responded to)
- * @param sequence Sequence number (must match the request being responded to)
+ * @param command Command type (must match the originating request)
+ * @param sequence Sequence number (unique for each request)
+ * @param request_seq Sequence number from the request (must match the originating request)
  * @param success Whether the request was successfully processed
- * @param body JSON object containing the response body (takes ownership and will free it)
- * @return 0 on success, non-zero on failure
+ * @param body Response body as a JSON object
+ * @return int 0 on success, -1 on error
  * 
- * @note This function takes ownership of the body cJSON object and will free it.
- *       Callers should not access or free the body after calling this function.
+ * @note IMPORTANT: This function takes ownership of the body cJSON object and will free it.
+ *       Do not access or free the body after calling this function.
  */
-int dap_server_send_response(DAPServer *server, DAPCommandType command,
-                             int sequence, bool success, cJSON *body);
+int dap_server_send_response(DAPServer *server, DAPCommandType command, int sequence, int request_seq, bool success, cJSON *body);
 
-/**
- * @brief Send a response using the DAPResponse structure
- * 
- * Alternative response sender that uses the DAPResponse struct rather than individual parameters.
- * Useful for command handlers that prepare responses in the DAPResponse format.
- * 
- * @param server Server instance
- * @param response Response data structure containing success status, data (as JSON string), and error message
- * @return 0 on success, non-zero on failure
- * 
- * @note This function parses the response->data string into a cJSON object internally
- *       and manages its lifecycle, so callers only need to free the response struct's fields.
- */
-int dap_server_send_response_struct(DAPServer *server, const DAPResponse *response);
 
 /**
  * @brief Send an event to the client
@@ -391,24 +488,7 @@ int dap_server_send_response_struct(DAPServer *server, const DAPResponse *respon
  */
 int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body);
 
-/**
- * @brief Send an event using enum type (deprecated)
- * 
- * Legacy function that uses enum-based event types instead of strings.
- * Maintained for backward compatibility with older code.
- * 
- * @param server Server instance
- * @param event_type Event type as an enum value
- * @param body Event body as a JSON object (duplicated internally)
- * @return 0 on success, non-zero on failure
- * 
- * @deprecated Use dap_server_send_event() instead, which follows the DAP specification
- *             by using string-based event types.
- * 
- * @note This function duplicates the body internally, caller retains ownership
- *       of the original body and must free it if necessary.
- */
-int dap_server_send_event_enum(DAPServer *server, DAPEventType event_type, cJSON *body);
+
 
 /**
  * @brief Send an output event to display console text
@@ -428,6 +508,20 @@ int dap_server_send_event_enum(DAPServer *server, DAPEventType event_type, cJSON
  */
 int dap_server_send_output_event(DAPServer *server, const char *category, const char *output);
 
+
+/**
+ * @brief Send an output event with specified category using enum
+ * 
+ * Creates and sends an output event using a category specified by the DAPOutputCategory enum.
+ * This is a convenience wrapper around dap_server_send_output_event that converts
+ * the enum value to the corresponding string.
+ * 
+ * @param server Server instance
+ * @param category Output category from DAPOutputCategory enum
+ * @param output The text content to display
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
 /**
  * @brief Send a stopped event to indicate execution has paused
  * 
@@ -527,5 +621,59 @@ int get_line_for_address(DAPServer *server, uint32_t address);
  * @param address Memory address
  */
 void add_line_map(DAPServer *server, const char *file_path, int line, uint32_t address);
+
+/**
+ * @brief Send a process event to the client
+ * 
+ * Creates and sends a process event to notify the client about a process.
+ * This is typically sent after initialized event to indicate the debugger
+ * has started a new process or attached to an existing one.
+ * 
+ * @param server Server instance
+ * @param name Name of the process
+ * @param system_process_id System process ID (0 if not applicable)
+ * @param is_local_process Whether the process is local
+ * @param start_method How the process was started ("launch", "attach", "attachForSuspendedLaunch")
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_process_event(DAPServer *server, const char *name, int system_process_id, 
+                                bool is_local_process, const char *start_method);
+
+/**
+ * @brief Send a thread event to the client
+ * 
+ * Creates and sends a thread event to notify the client about thread status.
+ * Used to indicate when a thread has started or exited.
+ * 
+ * @param server Server instance
+ * @param reason The reason for the event ("started" or "exited")
+ * @param thread_id The identifier of the thread
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_thread_event(DAPServer *server, const char *reason, int thread_id);
+
+
+/**
+ * @brief Register a command implementation callback
+ * @param server Server instance
+ * @param command_id Command ID to register the callback for
+ * @param callback The implementation callback function
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_register_command_callback(DAPServer *server, DAPCommandType command_id, DAPCommandCallback callback);
+
+/**
+ * @brief Clean up resources used by the current command context
+ * 
+ * This function should be called after a command and its implementation have completed
+ * to free any dynamically allocated memory in the command context.
+ * 
+ * @param server The DAP server instance
+ */
+void cleanup_command_context(DAPServer *server);
+
+/**
+ * @brief Send a welcome message when a client connects
+ */
 
 #endif // ND100X_DAP_SERVER_H

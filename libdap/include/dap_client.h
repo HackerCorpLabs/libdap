@@ -523,4 +523,17 @@ int dap_client_stack_trace(DAPClient* client, int thread_id, DAPStackFrame** fra
  */
 int dap_client_handle_event(DAPClient* client, cJSON* event_json);
 
+/**
+ * @brief Set exception breakpoints
+ *
+ * @param client Pointer to the client
+ * @param filters Array of exception filter IDs
+ * @param num_filters Number of filters
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_set_exception_breakpoints(DAPClient* client, 
+                                       const char** filters, size_t num_filters,
+                                       DAPSetExceptionBreakpointsResult* result);
+
 #endif /* DAP_CLIENT_H */ 

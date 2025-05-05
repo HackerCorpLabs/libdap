@@ -26,6 +26,15 @@ static void handle_signal(int sig) {
         printf("\nReceived signal %d, shutting down...\n", sig);
         dbg_mock_cleanup();
         exit(EXIT_SUCCESS);
+    } else if (sig == SIGUSR1) {
+        // Trigger a test exception
+        printf("\nReceived SIGUSR1, triggering test exception...\n");
+        dbg_mock_test_exception(true); // Simulate an uncaught exception
+    } else if (sig == SIGUSR2) {
+        // Trigger a test stop at line
+        printf("\nReceived SIGUSR2, simulating stop at line...\n");
+        const char* test_file = "/path/to/test/file.c";
+        dbg_mock_test_stop_at_line(42, test_file);
     }
 }
 
@@ -84,6 +93,8 @@ int main(int argc, char* argv[]) {
     // Set up signal handlers
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
+    signal(SIGUSR1, handle_signal);
+    signal(SIGUSR2, handle_signal);
     
     // Initialize the mock debugger
     if (dbg_mock_init(port) != 0) {
@@ -107,7 +118,8 @@ int main(int argc, char* argv[]) {
     printf("Mock debugger listening on port %d...\n", port);
     printf("Press Ctrl+C to exit\n");
         
-    // Run the server's message processing loop
+    // Run the server's message processing loop with our custom handler
+    // that sends welcome messages
     if (dap_server_run(mock_debugger.server) != 0) {
         fprintf(stderr, "Error: Server message loop failed.\n");
         dbg_mock_cleanup();

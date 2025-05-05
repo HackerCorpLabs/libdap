@@ -281,10 +281,10 @@ int dap_transport_send(DAPTransport* transport, const char* message) {
     ssize_t remaining = header_length;
     const char* curr_ptr = header;
 
-    if (transport->debuglog) {
+    if (transport->debuglog) {        
+        fprintf(stderr,"------------------------------>>>>>\r\n");
         fprintf(stderr, "[DAP TRANSPORT %s:%d] Sending message - Header length: %d, Content length: %zu\n", 
-                __func__, __LINE__, header_length, content_length);
-        fprintf(stderr, "[DAP TRANSPORT %s:%d] Header: '%s'\n", __func__, __LINE__, header);
+                __func__, __LINE__, header_length, content_length);        
         fprintf(stderr, "[DAP TRANSPORT %s:%d] Content: '%s'\n", __func__, __LINE__, message);
     }
 
@@ -429,7 +429,7 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
     size_t header_content_len = header_received - (content_start - header_buffer);
     
     // Make sure we don't exceed the header buffer
-    if (header_content_len > header_received) {
+    if (header_content_len > (size_t)header_received) {
         if (transport->debuglog) {
             DEBUG_LOG("Invalid header format - content calculation error");
         }
@@ -483,9 +483,10 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
     *message = buffer;
 
     if (transport->debuglog) {
+        DEBUG_LOG("\r\n<<<<<------------------------------");
         DEBUG_LOG("Received message: %zu bytes", content_length);
         // Log the full message content
-        DEBUG_LOG("Message content: %s", buffer);
+        DEBUG_LOG("Message content: %s", buffer);        
     }
 
     return 0;

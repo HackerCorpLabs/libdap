@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <ctype.h>
 #include "dap_client.h"
 #include "dap_debugger_types.h"
 #include "dap_debugger_help.h"
@@ -742,5 +743,118 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
 
     // Free the result
     dap_disassemble_result_free(&result);
+    return 0;
+}
+
+/**
+ * @brief Set exception breakpoints
+ * 
+ * @param client The DAP client
+ * @param args Command arguments (comma-separated filter names)
+ * @return int 0 on success, non-zero on failure
+ */
+int handle_exception_command(DAPClient* client, const char* args) {
+    if (!client) {
+        fprintf(stderr, "Error: Client not initialized\n");
+        return 1;
+    }
+    
+    // Tokenize the arguments by commas
+    // If no arguments, then use 'uncaught' as the default filter
+    char* args_copy = args ? strdup(args) : strdup("uncaught");
+    if (!args_copy) {
+        fprintf(stderr, "Error: Failed to allocate memory\n");
+        return 1;
+    }
+    
+    // Count the number of filters
+    size_t num_filters = 0;
+    char* p = args_copy;
+    while (*p) {
+        if (*p == ',') {
+            num_filters++;
+        }
+        p++;
+    }
+    num_filters++; // For the last filter
+    
+    // Allocate memory for the filters
+    const char** filters = calloc(num_filters, sizeof(char*));
+    if (!filters) {
+        fprintf(stderr, "Error: Failed to allocate memory for filters\n");
+        free(args_copy);
+        return 1;
+    }
+    
+    // Parse the filters
+    char* token = strtok(args_copy, ",");
+    size_t i = 0;
+    while (token && i < num_filters) {
+        // Trim whitespace
+        while (*token && isspace(*token)) {
+            token++;
+        }
+        char* end = token + strlen(token) - 1;
+        while (end > token && isspace(*end)) {
+            *end-- = '\0';
+        }
+        
+        filters[i++] = token;
+        token = strtok(NULL, ",");
+    }
+    
+    // Set exception breakpoints
+    DAPSetExceptionBreakpointsResult result = {0};
+    int error = dap_client_set_exception_breakpoints(client, filters, i, &result);
+    
+    // Free memory
+    free(filters);
+    
+    if (error != DAP_ERROR_NONE) {
+        fprintf(stderr, "Error setting exception breakpoints: %s\n", dap_error_message(error));
+        free(args_copy);
+        return 1;
+    }
+    
+    // Show result
+    printf("Set %zu exception breakpoint filters\n", i);
+    for (size_t j = 0; j < i; j++) {
+        printf("  - %s\n", filters[j]);
+    }
+    
+    // Free result resources
+    if (result.breakpoints) {
+        for (size_t j = 0; j < result.num_breakpoints; j++) {
+            free(result.breakpoints[j].message);
+        }
+        free(result.breakpoints);
+    }
+    
+    free(args_copy);
+    return 0;
+}
+
+/**
+ * @brief Handle the info command
+ * 
+ * @param client The DAP client
+ * @param args Command arguments
+ * @return int 0 on success, non-zero on failure
+ */
+int handle_info_command(DAPClient* client, const char* args) {
+    (void)args; // Unused for now
+    
+    if (!client) {
+        fprintf(stderr, "Error: No active debug session\n");
+        return 1;
+    }
+
+    printf("Debug session information:\n");
+    printf("  Connection status: %s\n", client->connected ? "Connected" : "Disconnected");
+    
+    if (client->program_path) {
+        printf("  Program: %s\n", client->program_path);
+    }
+    
     return 0;
 } 

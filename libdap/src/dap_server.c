@@ -67,17 +67,15 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
     server->is_initialized = false; // Will be set to true after receiving initialize request
     server->is_running = false;
     server->attached = false;
-    server->paused = false;
+    //server->paused = false;
     server->sequence = 0;
-    server->current_thread_id = 0;
-    server->current_line = 0;
-    server->current_column = 0;
-    server->current_pc = 0;
+    //server->current_thread_id = 0;
+    //server->current_line = 0;
+    //    server->current_column = 0;
+    //server->current_pc = 0;
     
-    // Initialize the stepping function pointers
-    server->step_cpu = NULL;
-    server->step_cpu_line = NULL; 
-    server->step_cpu_statement = NULL;
+    // Initialize the debugger state
+    memset(&server->debugger_state, 0, sizeof(DebuggerState));
 
     // Initialize client capabilities with default values
     server->client_capabilities.clientID = NULL;
@@ -100,6 +98,13 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
 
     // Initialize command handlers on server init
     initialize_command_handlers(server);
+
+    // Initialize command callbacks array to NULL
+    memset(server->command_callbacks, 0, sizeof(server->command_callbacks));
+    
+    // Initialize current command context
+    memset(&server->current_command, 0, sizeof(server->current_command));
+    server->current_command.type = DAP_CMD_INVALID;
 
     return 0;
 }
@@ -193,12 +198,6 @@ void dap_server_cleanup(DAPServer *server)
         server->transport = NULL;
     }
 
-    if (server->program_path)
-    {
-        free(server->program_path);
-        server->program_path = NULL;
-    }
-
     // Clean up current source information
     if (server->current_source)
     {
@@ -214,9 +213,20 @@ void dap_server_cleanup(DAPServer *server)
         server->current_source = NULL;
     }
 
+    // TODO cleanup_debugger_state
+    if (server->debugger_state.program_path)
+    {
+        free((void *)server->debugger_state.program_path);
+        server->debugger_state.program_path = NULL;
+    }
+    
+
     // Clean up breakpoints and line maps
     cleanup_breakpoints(server);
     cleanup_line_maps(server);
+
+
+
 }
 
 /**
@@ -255,6 +265,83 @@ int dap_server_process_message(DAPServer *server, const char *message)
 }
 
 /**
+ * @brief Clean up resources used by the current command context
+ * 
+ * This function should be called after a command and its implementation have completed
+ * to free any dynamically allocated memory in the command context.
+ * 
+ * @param server The DAP server instance
+ */
+void cleanup_command_context(DAPServer *server)
+{
+    if (!server) return;
+    
+    switch (server->current_command.type) {
+        case DAP_CMD_STEP_IN:
+        case DAP_CMD_STEP_OUT:
+        case DAP_CMD_NEXT:
+            // Clean up step context - only free granularity if it was dynamically allocated
+            if (server->current_command.context.step.granularity && 
+                server->current_command.context.step.granularity != "statement") { // Don't free string literal
+                free((void*)server->current_command.context.step.granularity);
+            }
+            break;
+            
+        case DAP_CMD_SET_BREAKPOINTS:
+            // Clean up breakpoint context
+            if (server->current_command.context.breakpoint.source_path) {
+                free((void*)server->current_command.context.breakpoint.source_path);
+                server->current_command.context.breakpoint.source_path = NULL;
+            }
+            
+            if (server->current_command.context.breakpoint.source_name) {
+                free((void*)server->current_command.context.breakpoint.source_name);
+                server->current_command.context.breakpoint.source_name = NULL;
+            }
+            
+            // Only free the breakpoints array if it was dynamically allocated
+            // Note: Don't free the individual breakpoints here since they're managed by
+            // the implementation callback, not by the protocol layer
+            if (server->current_command.context.breakpoint.breakpoints && 
+                (uintptr_t)server->current_command.context.breakpoint.breakpoints > 1024) {
+                // Simple safety check to avoid freeing static/invalid memory
+                free((void*)server->current_command.context.breakpoint.breakpoints);
+                server->current_command.context.breakpoint.breakpoints = NULL;
+            }
+            
+            break;
+            
+        case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
+            // Clean up exception breakpoint context
+            if (server->current_command.context.exception.filters) {
+                for (size_t i = 0; i < server->current_command.context.exception.filter_count; i++) {
+                    if (server->current_command.context.exception.filters[i]) {
+                        free((void*)server->current_command.context.exception.filters[i]);
+                    }
+                }
+                free(server->current_command.context.exception.filters);
+            }
+            
+            if (server->current_command.context.exception.conditions) {
+                for (size_t i = 0; i < server->current_command.context.exception.condition_count; i++) {
+                    if (server->current_command.context.exception.conditions[i]) {
+                        free((void*)server->current_command.context.exception.conditions[i]);
+                    }
+                }
+                free(server->current_command.context.exception.conditions);
+            }
+            break;
+            
+        default:
+            // No cleanup needed for other command types yet
+            break;
+    }
+    
+    // Reset the command type to indicate no command is in progress
+    server->current_command.type = DAP_CMD_INVALID;
+}
+
+/**
  * @brief Handle a specific DAP command by calling the appropriate handler
  *
  * @param server Server instance
@@ -272,7 +359,7 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
         return -1;
     }
 
-    DAP_SERVER_DEBUG_LOG("Handling command: %d", (int)command);
+    DAP_SERVER_DEBUG_LOG("Handling command: %d %s", (int)command, get_command_string(command));
 
     // Convert args string to cJSON if needed
     if (!json_args && args_str)
@@ -302,19 +389,22 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     response->success = false;
     response->error_message = NULL;
     response->data = NULL;
+    
+    // Store command information for callbacks to access
+    server->current_command.type = command;
+    server->current_command.request_seq = response->request_seq;
 
-    // Get appropriate handler
-    DAPCommandHandler handler = NULL;
+    // Call protocol-level handler if available
+    DAPCommandHandler command_handler = NULL;
     if (command >= 0 && command < DAP_CMD_MAX)
     {
-        handler = server->command_handlers[command];
+        command_handler = server->command_handlers[command];
     }
 
-    // Call handler if available
     int result = -1;
-    if (handler)
+    if (command_handler)
     {
-        result = handler(server, json_args, response);
+        result = command_handler(server, json_args, response);
     }
     else
     {
@@ -329,6 +419,9 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     {
         cJSON_Delete(json_args);
     }
+    
+    // Clean up command context resources
+    cleanup_command_context(server);
 
     return result;
 }
@@ -350,11 +443,11 @@ int dap_server_handle_request(DAPServer *server, const char *request)
 
     // Parse message
     DAPMessageType type;
-    DAPCommandType command;
-    int sequence;
+    DAPCommandType command;    
+    int request_seq;
     cJSON *content = NULL;
 
-    if (dap_parse_message(request, &type, &command, &sequence, &content) < 0)
+    if (dap_parse_message(request, &type, &command, &request_seq, &content) < 0)
     {
         return -1;
     }
@@ -369,6 +462,9 @@ int dap_server_handle_request(DAPServer *server, const char *request)
     // Handle request
     DAPResponse response = {0};
     
+    // Store the request's sequence number in the response structure
+    response.request_seq = request_seq;
+    response.sequence = server->sequence++;
     // Call the appropriate command handler - dap_server_handle_command takes ownership of content
     // It will free content when done, so we don't need to free it here
     int result = dap_server_handle_command(server, command, NULL, content, &response);
@@ -377,15 +473,22 @@ int dap_server_handle_request(DAPServer *server, const char *request)
     if (result >= 0)
     {
         cJSON *response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
-        dap_server_send_response(server, command, sequence, response.success, response_body);
+        dap_server_send_response(server, command, response.sequence, request_seq, response.success, response_body);
         //cJSON_Delete(response_body); (double free)
         
         // If this was an initialize request and it was successful, send the 'initialized' event
         if (command == DAP_CMD_INITIALIZE && response.success) {
             cJSON *event_body = cJSON_CreateObject();
             if (event_body) {
+                // dap_server_send_event takes ownership of event_body and will free it
                 dap_server_send_event(server, "initialized", event_body);
-                cJSON_Delete(event_body);
+                // Don't delete event_body here - it's owned by dap_server_send_event
+
+                // DEBUG, HACK!!
+                // Send process event and thread event after initialized event
+                // These events help clients proceed with the debug session                
+                //dap_server_send_thread_event(server, "started", 1);
+                //dap_server_send_process_event(server, "nd100x DAP", 1, true, "launch");
             }
         }
     }
@@ -404,88 +507,6 @@ int dap_server_handle_request(DAPServer *server, const char *request)
 }
 
 /**
- * @brief Send a response to a request based on DAPResponse struct
- *
- * @param server Server instance
- * @param response Response data structure
- * @return int 0 on success, -1 on error
- */
-int dap_server_send_response_struct(DAPServer *server, const DAPResponse *response)
-{
-    if (!server || !response)
-    {
-        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
-        return -1;
-    }
-
-    // Create JSON object from response data if available
-    cJSON *response_obj = NULL;
-    if (response->data)
-    {
-        response_obj = cJSON_Parse(response->data);
-        if (!response_obj)
-        {
-            dap_error_set(DAP_ERROR_PARSE_ERROR, "Failed to parse response data");
-            return -1;
-        }
-    }
-    else
-    {
-        response_obj = cJSON_CreateObject();
-        if (!response_obj)
-        {
-            dap_error_set(DAP_ERROR_MEMORY, "Failed to create response object");
-            return -1;
-        }
-    }
-
-    // Create response JSON with status and body
-    cJSON *full_response = cJSON_CreateObject();
-    if (!full_response)
-    {
-        cJSON_Delete(response_obj);
-        dap_error_set(DAP_ERROR_MEMORY, "Failed to create full response object");
-        return -1;
-    }
-
-    // Add common fields
-    cJSON_AddStringToObject(full_response, "type", "response");
-    cJSON_AddBoolToObject(full_response, "success", response->success);
-    
-    // Add error message if failed
-    if (!response->success && response->error_message)
-    {
-        cJSON *message = cJSON_CreateObject();
-        cJSON_AddStringToObject(message, "message", response->error_message);
-        cJSON_AddItemToObject(full_response, "message", message);
-    }
-
-    // Add body
-    cJSON_AddItemToObject(full_response, "body", response_obj);
-
-    // Convert to string and send
-    char *response_str = cJSON_PrintUnformatted(full_response);
-    cJSON_Delete(full_response);
-
-    if (!response_str)
-    {
-        dap_error_set(DAP_ERROR_MEMORY, "Failed to convert response to string");
-        return -1;
-    }
-
-    int result = dap_transport_send(server->transport, response_str);
-    free(response_str);
-
-    if (result < 0)
-    {
-        dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send response");
-        return -1;
-    }
-
-    return 0;
-}
-
-/**
  * @brief Send an event to the client with a string event type
  *
  * Creates a properly formatted DAP event and sends it to the client.
@@ -496,7 +517,7 @@ int dap_server_send_response_struct(DAPServer *server, const DAPResponse *respon
  * 1. Creates a new event JSON structure
  * 2. Sets the common fields (type="event", event=event_type)
  * 3. Assigns a sequence number from the server
- * 4. Duplicates and attaches the body (if provided)
+ * 4. Adds the provided body to the event
  * 5. Serializes and sends via transport
  *
  * @param server Server instance
@@ -504,8 +525,9 @@ int dap_server_send_response_struct(DAPServer *server, const DAPResponse *respon
  * @param body Event body (JSON object) containing event-specific data
  * @return 0 on success, non-zero on failure
  * 
- * @note This function DUPLICATES the provided body, so the caller
- *       maintains ownership and must free the original body if needed.
+ * @note IMPORTANT: This function TAKES OWNERSHIP of the provided body.
+ *       The caller should not access or free the body after calling this function.
+ *       The body will be freed by this function when the event is deleted.
  */
 int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body)
 {
@@ -528,9 +550,10 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
     cJSON_AddNumberToObject(event, "seq", server->sequence++);
     cJSON_AddStringToObject(event, "event", event_type);
 
-    // Add body if provided
+    // Add body if provided - take ownership of body parameter
     if (body)
     {
+        // Add a reference to body rather than duplicating it
         cJSON_AddItemToObject(event, "body", body);
     }
     else
@@ -540,7 +563,7 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
 
     // Convert to string and send
     char *event_str = cJSON_PrintUnformatted(event);
-    cJSON_Delete(event);
+    cJSON_Delete(event); // This will also free the body since we added the reference above
     
     if (!event_str)
     {
@@ -548,8 +571,6 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
         return -1;
     }
 
-    // Log the full event content
-    DAP_SERVER_DEBUG_LOG("Sending event: %s", event_str);
 
     if (dap_transport_send(server->transport, event_str) < 0)
     {
@@ -562,55 +583,6 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
     return 0;
 }
 
-/**
- * @brief Send an event using enum type instead of string (deprecated)
- * 
- * Legacy implementation that uses enum values for event types instead of
- * the string-based approach defined in the DAP specification.
- * 
- * This function has the same basic functionality as dap_server_send_event()
- * but uses the older enum-based event type system. It's maintained for
- * backward compatibility with code that hasn't been updated to use
- * string-based event types.
- * 
- * @deprecated Use dap_server_send_event() instead which follows the DAP specification
- *             by using string-based event types. This function may be removed in future versions.
- * 
- * @note Like dap_server_send_event(), this function duplicates the body object,
- *       so the caller retains ownership of the original body.
- */
-int dap_server_send_event_enum(DAPServer *server, DAPEventType event_type, cJSON *body)
-{
-    if (!server)
-    {
-        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
-        return -1;
-    }
-
-    cJSON *event = dap_create_event(event_type, body);
-    if (!event)
-    {
-        return -1;
-    }
-
-    char *event_str = cJSON_PrintUnformatted(event);
-    cJSON_Delete(event);
-
-    if (!event_str)
-    {
-        return -1;
-    }
-
-    if (dap_transport_send(server->transport, event_str) < 0)
-    {
-        dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send event");
-        free(event_str);
-        return -1;
-    }
-
-    free(event_str);
-    return 0;
-}
 
 /**
  * @brief Clean up breakpoints and associated resources
@@ -730,69 +702,20 @@ void add_line_map(DAPServer *server, const char *file_path, int line, uint32_t a
 }
 
 /**
- * @brief Special handler for launch command to preserve the existing behavior
- * @param server Server instance
- * @param json_args JSON arguments
- * @param response Response structure to fill
- * @return 0 on success, non-zero on failure
- */
-static int handle_launch_wrapper(DAPServer *server, cJSON *json_args, DAPResponse *response) {
-    DAP_SERVER_DEBUG_LOG("About to handle launch request");
-    int result = handle_launch(server, json_args, response);
-    DAP_SERVER_DEBUG_LOG("Launch request handled, result=%d", result);
-
-    // Always return 0 for launch even if there was an error
-    // This ensures that the response is sent back to the client
-    if (result != 0) {
-        DAP_SERVER_DEBUG_LOG("Converting error result %d to success 0 to ensure response is sent", result);
-        result = 0;
-    }
-
-    // Store a copy of the args for later sending the event
-    cJSON *program = json_args ? cJSON_GetObjectItem(json_args, "program") : NULL;
-    cJSON *args_array = json_args ? cJSON_GetObjectItem(json_args, "args") : NULL;
-
-    // Schedule the event to be sent after response
-    if (response->success && program && cJSON_IsString(program)) {
-        // Small delay to ensure response is processed first
-        usleep(10000); // 10ms delay
-        
-        DAP_SERVER_DEBUG_LOG("Sending stopped event after launch response");
-    
-        cJSON* event_body = cJSON_CreateObject();
-        if (!event_body) {
-            return -1;
-        }
-    
-        cJSON_AddStringToObject(event_body, "reason", "entry");
-        cJSON_AddNumberToObject(event_body, "threadId", 1);
-        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
-    
-        // Add program info to event
-        cJSON_AddStringToObject(event_body, "program", program->valuestring);
-        if (args_array) {
-            cJSON_AddItemToObject(event_body, "args", cJSON_Duplicate(args_array, 1));
-        }
-
-        dap_server_send_event(server, "stopped", event_body);
-        cJSON_Delete(event_body);
-    }
-
-    return result;
-}
-
-/**
  * @brief Initialize the command handlers array in the server struct
  * @param server Server instance to initialize handlers for
  */
 void initialize_command_handlers(DAPServer *server) {
     // Clear the array first
     memset(server->command_handlers, 0, sizeof(server->command_handlers));
+    
+    // Also clear the command callbacks array
+    memset(server->command_callbacks, 0, sizeof(server->command_callbacks));
 
     // Set up the handlers for each command type - explicitly listing all handlers
     // for better documentation and maintainability
     server->command_handlers[DAP_CMD_INITIALIZE] = &handle_initialize;
-    server->command_handlers[DAP_CMD_LAUNCH] = &handle_launch_wrapper;
+    server->command_handlers[DAP_CMD_LAUNCH] = &handle_launch;
     server->command_handlers[DAP_CMD_ATTACH] = &handle_attach;
     server->command_handlers[DAP_CMD_DISCONNECT] = &handle_disconnect;
     server->command_handlers[DAP_CMD_TERMINATE] = &handle_terminate;
@@ -800,7 +723,7 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_SET_BREAKPOINTS] = &handle_set_breakpoints;
     server->command_handlers[DAP_CMD_CLEAR_BREAKPOINTS] = NULL;  // Not implemented
     server->command_handlers[DAP_CMD_SET_FUNCTION_BREAKPOINTS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_SET_EXCEPTION_BREAKPOINTS] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_SET_EXCEPTION_BREAKPOINTS] = &handle_set_exception_breakpoints;
     server->command_handlers[DAP_CMD_CONTINUE] = &handle_continue;
     server->command_handlers[DAP_CMD_NEXT] = &handle_next;
     server->command_handlers[DAP_CMD_STEP_IN] = &handle_step_in;
@@ -836,6 +759,36 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_SET_EXCEPTION_FILTERS] = NULL;  // Not implemented
 }
 
+
+/**
+ * @brief Register a command implementation callback
+ * @param server Server instance
+ * @param command_id Command ID to register the callback for
+ * @param callback The implementation callback function
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_register_command_callback(DAPServer *server, DAPCommandType command_id, DAPCommandCallback callback)
+{
+    if (!server || command_id < 0 || command_id >= DAP_CMD_MAX)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+    
+
+    // The key principle of memory management in the DAP server is:
+    //
+    // Each function is responsible for cleaning up its own allocations
+    // Callbacks only read data, they never free or take ownership
+    // Memory is always freed whether callbacks succeed or fail
+    // Helper functions for cleaning up complex data structures
+    // This consistent approach will prevent memory leaks and ensure clear ownership boundaries between the DAP server and the mock debugger implementation.
+
+    server->command_callbacks[command_id] = callback;
+    return 0;
+}
+
+
 /**
  * @brief Send a DAP response to a client request
  * 
@@ -848,7 +801,8 @@ void initialize_command_handlers(DAPServer *server) {
  *
  * @param server Server instance
  * @param command Command type (must match the originating request)
- * @param sequence Sequence number (must match the originating request)
+ * @param sequence Sequence number (unique for each request)
+ * @param request_seq Sequence number from the request (must match the originating request)
  * @param success Whether the request was successfully processed
  * @param body Response body as a JSON object
  * @return int 0 on success, -1 on error
@@ -857,7 +811,7 @@ void initialize_command_handlers(DAPServer *server) {
  *       Do not access or free the body after calling this function.
  */
 int dap_server_send_response(DAPServer *server, DAPCommandType command,
-                             int sequence, bool success, cJSON *body)
+                             int sequence, int request_seq, bool success, cJSON *body)
 {
     if (!server)
     {
@@ -865,7 +819,7 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
         return -1;
     }
 
-    cJSON *response = dap_create_response(command, sequence, success, body);
+    cJSON *response = dap_create_response(command, sequence, request_seq, success, body);
     if (!response)
     {
         return -1;
@@ -893,6 +847,26 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
     return 0;
 }
 
+
+/**
+ * @brief Send a welcome message when a client connects
+ * 
+ * @param server The DAP server instance
+ */
+static void dap_server_send_welcome_message(DAPServer *server)
+{
+    if (!server) {
+        return;
+    }
+        
+    // Send an important welcome message
+    dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, "Connected to DAP debugger\n");
+    
+    // Also send a regular console message with version info
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Mock DAP server version 1.0\n");
+}
+
+
 /**
  * @brief Run the DAP server main loop
  * 
@@ -914,6 +888,8 @@ int dap_server_run(DAPServer *server)
         {
             continue;
         }
+
+        dap_server_send_welcome_message(server);
 
         while (server->is_running)
         {
@@ -945,3 +921,232 @@ int dap_server_run(DAPServer *server)
 
     return 0;
 }
+
+
+/**
+ * @brief Send an output event to display text in the debug console
+ * 
+ * Creates and sends a properly formatted DAP output event to the client.
+ * Output events are used to show text in the debug console of the IDE.
+ * 
+ * @param server Server instance
+ * @param category Output category ("console", "stdout", "stderr", or "telemetry")
+ * @param output The text content to display
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_output_event(DAPServer *server, const char *category, const char *output)
+{
+    if (!server || !output)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+    // Default category if not provided
+    if (!category)
+    {
+        category = "console";
+    }
+
+    // Create output event body
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        dap_error_set(DAP_ERROR_MEMORY, "Failed to create output event body");
+        return -1;
+    }
+
+    // Add category and output to body
+    cJSON_AddStringToObject(body, "category", category);
+    cJSON_AddStringToObject(body, "output", output);
+
+    // Send output event (function takes ownership of body)
+    int result = dap_server_send_event(server, "output", body);
+    
+    return result;
+}
+
+/**
+ * @brief Send an output message to the debug console
+ * 
+ * Simplified version of dap_server_send_output_event that uses "console" as the category.
+ * Useful for quick debug messages or informational output.
+ * 
+ * @param server Server instance
+ * @param message The message to display in the debug console
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_output(DAPServer *server, const char *message)
+{
+    return dap_server_send_output_event(server, "console", message);
+}
+
+/**
+ * @brief Send an output event with specified category using enum
+ * 
+ * Creates and sends an output event using a category specified by the DAPOutputCategory enum.
+ * This is a convenience wrapper around dap_server_send_output_event that converts
+ * the enum value to the corresponding string.
+ * 
+ * @param server Server instance
+ * @param category Output category from DAPOutputCategory enum
+ * @param output The text content to display
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output)
+{
+    if (!server || !output)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+    // Convert enum to string category
+    const char *category_str = NULL;
+    switch (category) {
+        case DAP_OUTPUT_CONSOLE:
+            category_str = "console";
+            break;
+        case DAP_OUTPUT_STDOUT:
+            category_str = "stdout";
+            break;
+        case DAP_OUTPUT_STDERR:
+            category_str = "stderr";
+            break;
+        case DAP_OUTPUT_TELEMETRY:
+            category_str = "telemetry";
+            break;
+        case DAP_OUTPUT_IMPORTANT:
+            category_str = "important";
+            break;
+        case DAP_OUTPUT_PROGRESS:
+            category_str = "progress";
+            break;
+        case DAP_OUTPUT_LOG:
+            category_str = "log";
+            break;
+        default:
+            category_str = "console"; // Default to console for unknown values
+            break;
+    }
+
+    return dap_server_send_output_event(server, category_str, output);
+}
+
+/**
+ * @brief Send a process event to the client
+ * 
+ * Creates and sends a process event to notify the client about a process.
+ * This is typically sent after initialized event to indicate the debugger
+ * has started a new process or attached to an existing one.
+ * 
+ * @param server Server instance
+ * @param name Name of the process
+ * @param system_process_id System process ID (0 if not applicable)
+ * @param is_local_process Whether the process is local
+ * @param start_method How the process was started ("launch", "attach", "attachForSuspendedLaunch")
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_process_event(DAPServer *server, const char *name, int system_process_id, 
+                                bool is_local_process, const char *start_method)
+{
+    if (!server || !name || !start_method)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+    // Create process event body
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        dap_error_set(DAP_ERROR_MEMORY, "Failed to create process event body");
+        return -1;
+    }
+
+    // Add required fields
+    cJSON_AddStringToObject(body, "name", name);
+    cJSON_AddNumberToObject(body, "systemProcessId", system_process_id);
+    cJSON_AddBoolToObject(body, "isLocalProcess", is_local_process);
+    cJSON_AddStringToObject(body, "startMethod", start_method);
+    
+    // Send the process event (function takes ownership of body)
+    return dap_server_send_event(server, "process", body);
+}
+
+/**
+ * @brief Send a thread event to the client
+ * 
+ * Creates and sends a thread event to notify the client about thread status.
+ * Used to indicate when a thread has started or exited.
+ * 
+ * @param server Server instance
+ * @param reason The reason for the event ("started" or "exited")
+ * @param thread_id The identifier of the thread
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_thread_event(DAPServer *server, const char *reason, int thread_id)
+{
+    if (!server || !reason)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+    // Create thread event body
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        dap_error_set(DAP_ERROR_MEMORY, "Failed to create thread event body");
+        return -1;
+    }
+
+    // Add required fields - the thread event requires both reason and threadId
+    cJSON_AddStringToObject(body, "reason", reason);
+    cJSON_AddNumberToObject(body, "threadId", thread_id);
+    
+    // Send the thread event (function takes ownership of body)
+    return dap_server_send_event(server, "thread", body);
+}
+
+
+int dap_server_send_stopped_event(DAPServer *server, const char *reason, const char *description)
+{
+    if (!server || !reason)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+
+    cJSON *event_body = cJSON_CreateObject();
+    if (event_body) {        
+        cJSON_AddNumberToObject(event_body, "threadId", server->current_command.context.step.thread_id);
+        
+        // REQUIRED by the spec!!!
+        cJSON_AddStringToObject(event_body, "reason", reason);
+
+        if (description) {
+            // Add description
+            cJSON_AddStringToObject(event_body, "description", description);
+        }
+
+        // Optional by the spec
+        //      description?: string;             // OPTIONAL
+        //      threadId?: number;                // OPTIONAL
+        //      preserveFocusHint?: boolean;      // OPTIONAL
+        //      text?: string;                    // OPTIONAL
+        //      allThreadsStopped?: boolean;      // OPTIONAL
+        //      hitBreakpointIds?: number[];      // OPTIONAL
+
+        // Send the event
+        dap_server_send_event(server, "stopped", event_body);
+
+        return 0;
+    }
+    
+    return -1;
+}
+
+
+

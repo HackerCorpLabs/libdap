@@ -281,19 +281,21 @@ int dap_parse_message(const char* json, DAPMessageType* type_out, DAPCommandType
  * @brief Create a DAP response message
  * 
  * @param command Command type
- * @param sequence Sequence number
+ * @param sequence Sequence number from the request
+ * @param request_seq Sequence number from the request
  * @param success Whether the command succeeded
  * @param body Response body (cJSON object)
  * @return cJSON* JSON object (caller must free)
  */
-cJSON* dap_create_response(DAPCommandType command, int sequence, bool success, cJSON* body) {
+cJSON* dap_create_response(DAPCommandType command, int sequence, int request_seq, bool success, cJSON* body) {
     cJSON* root = cJSON_CreateObject();
     if (!root) {
         return NULL;
     }
 
-    cJSON_AddStringToObject(root, "type", "response");
-    cJSON_AddNumberToObject(root, "seq", sequence);
+    cJSON_AddStringToObject(root, "type", "response");    
+    cJSON_AddNumberToObject(root, "seq", sequence);  // Add the request_seq field
+    cJSON_AddNumberToObject(root, "request_seq", request_seq);  // Add the request_seq field
     cJSON_AddStringToObject(root, "command", get_command_string(command));
     cJSON_AddBoolToObject(root, "success", success);
     
@@ -310,6 +312,10 @@ cJSON* dap_create_response(DAPCommandType command, int sequence, bool success, c
  * @param event_type Event type
  * @param body Event body (cJSON object)
  * @return cJSON* JSON object (caller must free)
+ * 
+ * @note IMPORTANT: This function TAKES OWNERSHIP of the body parameter.
+ *       The caller should not access or free the body after calling this function.
+ *       The body will be freed when the returned event object is deleted.
  */
 cJSON* dap_create_event(DAPEventType event_type, cJSON* body) {
     cJSON* root = cJSON_CreateObject();
@@ -321,6 +327,7 @@ cJSON* dap_create_event(DAPEventType event_type, cJSON* body) {
     cJSON_AddStringToObject(root, "event", get_event_string(event_type));
     
     if (body) {
+        // Add the body directly to the event (taking ownership)
         cJSON_AddItemToObject(root, "body", body);
     }
 

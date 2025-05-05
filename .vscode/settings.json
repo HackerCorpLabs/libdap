@@ -10,6 +10,7 @@
         "dap_transport.h": "c",
         "cjson.h": "c",
         "dap_mock_server_commands.h": "c",
-        "dap_types.h": "c"
+        "dap_types.h": "c",
+        "ranges": "c"
     }
 }

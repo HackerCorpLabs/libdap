@@ -84,7 +84,6 @@ int handle_source(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_threads(DAPServer* server,   cJSON* args, DAPResponse* response);
 int handle_stack_trace(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_disassemble(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_loaded_sources(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_break(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_scopes(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_variables(DAPServer* server, cJSON* args, DAPResponse* response);
@@ -93,8 +92,6 @@ int handle_evaluate(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_configuration_done(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_read_memory(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_write_memory(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_read_registers(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_write_register(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response);
 

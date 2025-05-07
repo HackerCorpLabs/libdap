@@ -198,27 +198,14 @@ void dap_server_cleanup(DAPServer *server)
         server->transport = NULL;
     }
 
-    // Clean up current source information
-    if (server->current_source)
-    {
-        if (server->current_source->path)
-        {
-            free((void *)server->current_source->path);
-        }
-        if (server->current_source->name)
-        {
-            free((void *)server->current_source->name);
-        }
-        free((void *)server->current_source);
-        server->current_source = NULL;
-    }
+
 
     // Clean up debugger state
     cleanup_debugger_state(server);
 
     // Clean up breakpoints and line maps
     cleanup_breakpoints(server);
-    cleanup_line_maps(server);
+
 
 }
 
@@ -276,11 +263,7 @@ void cleanup_command_context(DAPServer *server)
         case DAP_CMD_STEP_IN:
         case DAP_CMD_STEP_OUT:
         case DAP_CMD_NEXT:
-            // Only free the granularity string if it's not the default static string "statement"
-            if (server->current_command.context.step.granularity != NULL && 
-                strcmp(server->current_command.context.step.granularity, "statement") != 0) {
-                free((void*)server->current_command.context.step.granularity);
-            }
+            // No cleanup needed for step commands now that granularity is an enum
             break;
             
         case DAP_CMD_SET_BREAKPOINTS:
@@ -382,6 +365,45 @@ void cleanup_command_context(DAPServer *server)
                 free((void*)server->current_command.context.set_variable.format);
             }
             break;
+            
+        case DAP_CMD_STACK_TRACE:
+            // Free the frame name if allocated by the callback
+            if (server->current_command.context.stack_trace.frames) {
+                // Free each frame in the array
+                for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++) {
+                    DAPStackFrame *frame = &server->current_command.context.stack_trace.frames[i];
+                    
+                    // Free dynamically allocated strings
+                    if (frame->name) {
+                        free(frame->name);
+                    }
+                    
+                    if (frame->source_path) {
+                        free(frame->source_path);
+                    }
+                    
+                    if (frame->source_name) {
+                        free(frame->source_name);
+                    }
+                    
+                    if (frame->instruction_pointer_reference) {
+                        free(frame->instruction_pointer_reference);
+                    }
+                    
+                    if (frame->module_id) {
+                        free(frame->module_id);
+                    }
+                }
+                
+                // Free the array itself
+                free(server->current_command.context.stack_trace.frames);
+                server->current_command.context.stack_trace.frames = NULL;
+                server->current_command.context.stack_trace.frame_count = 0;
+                server->current_command.context.stack_trace.total_frames = 0;
+            }
+            break;
+            
+      
             
         default:
             // No cleanup needed for other command types
@@ -635,122 +657,7 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
 }
 
 
-/**
- * @brief Clean up breakpoints and associated resources
- * 
- * @param dap_server Server instance
- */
-void cleanup_breakpoints(DAPServer *dap_server)
-{
-    if (!dap_server || !dap_server->breakpoints)
-        return;
 
-    for (int i = 0; i < dap_server->breakpoint_count; i++)
-    {
-        if (dap_server->breakpoints[i].source)
-        {
-            free((void *)dap_server->breakpoints[i].source->path);
-            free((void *)dap_server->breakpoints[i].source->name);
-            free(dap_server->breakpoints[i].source);
-        }
-        
-        // Free any condition strings if they exist
-        if (dap_server->breakpoints[i].condition)
-            free((void *)dap_server->breakpoints[i].condition);
-        
-        if (dap_server->breakpoints[i].hit_condition)
-            free((void *)dap_server->breakpoints[i].hit_condition);
-        
-        if (dap_server->breakpoints[i].log_message)
-            free((void *)dap_server->breakpoints[i].log_message);
-    }
-    
-    free(dap_server->breakpoints);
-    dap_server->breakpoints = NULL;
-    dap_server->breakpoint_count = 0;
-}
-
-/**
- * @brief Clean up line maps and associated resources
- * 
- * @param dap_server Server instance
- */
-void cleanup_line_maps(DAPServer *dap_server)
-{
-    if (!dap_server || !dap_server->line_maps)
-        return;
-
-    for (int i = 0; i < dap_server->line_map_count; i++)
-    {
-        if (dap_server->line_maps[i].file_path)
-            free((void *)dap_server->line_maps[i].file_path);
-    }
-    
-    free(dap_server->line_maps);
-    dap_server->line_maps = NULL;
-    dap_server->line_map_count = 0;
-    dap_server->line_map_capacity = 0;
-}
-
-/**
- * @brief Get source line for a memory address
- * 
- * @param server Server instance
- * @param address Memory address to look up
- * @return int Line number or -1 if not found
- */
-int get_line_for_address(DAPServer *server, uint32_t address)
-{
-    if (!server || !server->line_maps)
-    {
-        return -1;
-    }
-
-    for (int i = 0; i < server->line_map_count; i++)
-    {
-        if (server->line_maps[i].address == address)
-        {
-            return server->line_maps[i].dap_line;
-        }
-    }
-    return -1;
-}
-
-/**
- * @brief Add a source line mapping with address information
- * 
- * @param server Server instance
- * @param file_path Source file path
- * @param line Line number
- * @param address Memory address
- */
-void add_line_map(DAPServer *server, const char *file_path, int line, uint32_t address)
-{
-    if (!server || !file_path)
-    {
-        return;
-    }
-
-    // Resize the line maps array if needed
-    if (server->line_map_count >= server->line_map_capacity)
-    {
-        size_t new_capacity = server->line_map_capacity == 0 ? 16 : server->line_map_capacity * 2;
-        SourceLineMap *new_maps = realloc(server->line_maps, new_capacity * sizeof(SourceLineMap));
-        if (!new_maps)
-        {
-            return;
-        }
-        server->line_maps = new_maps;
-        server->line_map_capacity = new_capacity;
-    }
-
-    // Initialize the new line map
-    server->line_maps[server->line_map_count].file_path = strdup(file_path);
-    server->line_maps[server->line_map_count].original_line = line;
-    server->line_maps[server->line_map_count].dap_line = line;  // Use the same line by default
-    server->line_maps[server->line_map_count].address = address;
-    server->line_map_count++;
-}
 
 /**
  * @brief Initialize the command handlers array in the server struct
@@ -788,12 +695,10 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_THREADS] = &handle_threads;
     server->command_handlers[DAP_CMD_EVALUATE] = &handle_evaluate;
     server->command_handlers[DAP_CMD_SET_EXPRESSION] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_LOADED_SOURCES] = &handle_loaded_sources;
+    server->command_handlers[DAP_CMD_LOADED_SOURCES] = NULL; // not implemented
     server->command_handlers[DAP_CMD_READ_MEMORY] = &handle_read_memory;
     server->command_handlers[DAP_CMD_WRITE_MEMORY] = &handle_write_memory;
-    server->command_handlers[DAP_CMD_DISASSEMBLE] = &handle_disassemble;
-    server->command_handlers[DAP_CMD_READ_REGISTERS] = &handle_read_registers;
-    server->command_handlers[DAP_CMD_WRITE_REGISTERS] = &handle_write_register;
+    server->command_handlers[DAP_CMD_DISASSEMBLE] = &handle_disassemble;        
     server->command_handlers[DAP_CMD_CANCEL] = NULL;  // Not implemented
     server->command_handlers[DAP_CMD_CONFIGURATION_DONE] = &handle_configuration_done;
     server->command_handlers[DAP_CMD_TERMINATE_THREADS] = NULL;  // Not implemented

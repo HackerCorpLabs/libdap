@@ -1047,6 +1047,32 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
                 cJSON_AddStringToObject(var, "value", status_flags[i].value ? "1" : "0");
                 cJSON_AddStringToObject(var, "type", status_flags[i].type);
                 cJSON_AddNumberToObject(var, "variablesReference", 0);
+                
+                // Create proper presentationHint object instead of string
+                cJSON *presentation_hint = cJSON_CreateObject();
+                if (presentation_hint) {
+                    // Add kind (property for registers)
+                    cJSON_AddStringToObject(presentation_hint, "kind", "property");
+                    
+                    // Add attributes array
+                    cJSON *attributes = cJSON_CreateArray();
+                    if (attributes) {
+                        // Registers are typically read-only in UI
+                        cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
+                        
+                        // Add static attribute for registers
+                        cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
+                        
+                        cJSON_AddItemToObject(presentation_hint, "attributes", attributes);
+                    }
+                    
+                    // Add visibility (public for registers)
+                    cJSON_AddStringToObject(presentation_hint, "visibility", "public");
+                    
+                    // Add presentationHint object to variable
+                    cJSON_AddItemToObject(var, "presentationHint", presentation_hint);
+                }
+                
                 cJSON_AddItemToArray(variables, var);
             }
         }
@@ -1108,7 +1134,32 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
                 cJSON_AddStringToObject(var, "value", value_str);
                 cJSON_AddStringToObject(var, "type", reg_array[i].type);
                 cJSON_AddNumberToObject(var, "variablesReference", reg_array[i].nested_ref);
-                cJSON_AddStringToObject(var, "presentationHint", "register");
+                
+                // Create proper presentationHint object instead of string
+                cJSON *presentation_hint = cJSON_CreateObject();
+                if (presentation_hint) {
+                    // Add kind (property for registers)
+                    cJSON_AddStringToObject(presentation_hint, "kind", "property");
+                    
+                    // Add attributes array
+                    cJSON *attributes = cJSON_CreateArray();
+                    if (attributes) {
+                        // Registers are typically read-only in UI
+                        cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
+                        
+                        // Add static attribute for registers
+                        cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
+                        
+                        cJSON_AddItemToObject(presentation_hint, "attributes", attributes);
+                    }
+                    
+                    // Add visibility (public for registers)
+                    cJSON_AddStringToObject(presentation_hint, "visibility", "public");
+                    
+                    // Add presentationHint object to variable
+                    cJSON_AddItemToObject(var, "presentationHint", presentation_hint);
+                }
+                
                 cJSON_AddItemToArray(variables, var);
             }
         }

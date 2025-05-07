@@ -60,6 +60,7 @@ static int cmd_disconnect(DAPServer* server);
 static int cmd_disassemble(DAPServer* server);
 static int cmd_set_variable(DAPServer *server);
 static int cmd_write_memory(DAPServer *server);
+static int setup_server_callbacks(DAPServer *server);
 
 // Forward declaration for functions from libdap that we need
 int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
@@ -77,6 +78,87 @@ MockDebugger mock_debugger = {
     .exception_filters = NULL,
     .exception_filter_count = 0
 };
+
+// Define scope reference constants
+#define SCOPE_ID_LOCALS 1000
+#define SCOPE_ID_REGISTERS 1001
+#define SCOPE_ID_MEMORY 1002
+#define SCOPE_ID_STATUS_FLAGS 1101  // For status register flags
+
+// Define CPU registers for ND-100
+static Register cpu_registers[] = {
+    {"STS", 0x0000, "bitmask", true, SCOPE_ID_STATUS_FLAGS}, // Status register with nested flags
+    {"D", 0x0000, "integer", false, 0},     // Data register
+    {"P", 0x1000, "integer", false, 0},     // Program counter
+    {"B", 0x0000, "integer", false, 0},     // Base register
+    {"L", 0x0000, "integer", false, 0},     // Link register
+    {"A", 0x0000, "integer", false, 0},     // Accumulator
+    {"T", 0x0000, "integer", false, 0},     // Temporary register
+    {"X", 0x0000, "integer", false, 0}      // Index register
+};
+
+#define NUM_REGISTERS (sizeof(cpu_registers) / sizeof(Register))
+
+// Define internal registers for read
+static Register internal_read_registers[] = {
+    {"PANC", 0x0000, "octal", false, 0}, // Panel control
+    {"STS", 0x0001, "octal", false, 0},  // Status register
+    {"LMP", 0x0002, "octal", false, 0},  // Panel data display buffer register
+    {"PCR", 0x0003, "octal", false, 0},  // Paging control register
+    {"IIE", 0x0005, "octal", false, 0},  // Internal interrupt enable register
+    {"PID", 0x0006, "octal", false, 0},  // Priority interrupt detect register
+    {"PIE", 0x0007, "octal", false, 0},  // Priority interrupt enable register
+    {"CCL", 0x0010, "octal", false, 0},  // Cache clear register
+    {"LCIL", 0x0011, "octal", false, 0}, // Lower cache inhibit limit register
+    {"UCIL", 0x0012, "octal", false, 0}, // Upper cache inhibit limit register
+    {"CILP", 0x0013, "octal", false, 0}, // Cache inhibit page register
+    {"ECCR", 0x0015, "octal", false, 0}, // Error correction control register
+    {"CS", 0x0017, "octal", false, 0}    // Control Store
+};
+
+#define NUM_INTERNAL_READ_REGISTERS (sizeof(internal_read_registers) / sizeof(Register))
+
+// Define internal registers for write
+static Register internal_write_registers[] = {
+    {"PANS", 0x0000, "octal", false, 0}, // Panel status
+    {"STS", 0x0001, "octal", false, 0},  // Status register
+    {"OPR", 0x0002, "octal", false, 0},  // Operator's panel switch register
+    {"PSR", 0x0003, "octal", false, 0},  // Paging status register
+    {"PVL", 0x0004, "octal", false, 0},  // Previous level code register
+    {"IIC", 0x0005, "octal", false, 0},  // Internal interrupt code register
+    {"PID", 0x0006, "octal", false, 0},  // Priority interrupt detect register
+    {"PIE", 0x0007, "octal", false, 0},  // Priority enable detect register
+    {"CSR", 0x0010, "octal", false, 0},  // Cache status register
+    {"ACTL", 0x0011, "octal", false, 0}, // Active level register
+    {"ALD", 0x0012, "octal", false, 0},  // Automatic load descriptor
+    {"PES", 0x0013, "octal", false, 0},  // Parity error status register
+    {"PGC", 0x0014, "octal", false, 0},  // Paging control register
+    {"PEA", 0x0015, "octal", false, 0},  // Parity error address register
+    {"CS", 0x0017, "octal", false, 0}    // Control store
+};
+
+#define NUM_INTERNAL_WRITE_REGISTERS (sizeof(internal_write_registers) / sizeof(Register))
+
+
+// Define status flags for the status register
+static StatusFlag status_flags[] = {
+    {"PTM", false, "flag"},  // Page Table Flag
+    {"TG", false, "flag"},   // Floating point rounding flag
+    {"K", false, "flag"},    // Accumulator
+    {"Z", false, "flag"},    // Error flag
+    {"Q", false, "flag"},    // Dynamic overflow flag
+    {"O", false, "flag"},    // Static overflow flag
+    {"C", false, "flag"},    // Carry flag
+    {"M", false, "flag"},    // Multi-shift link flag
+    {"PIL", false, "level"}, // Program Level (4 bits) - changed to bool for compatibility
+    {"N100", true, "flag"},  // ND-100 flag (always 1)
+    {"SEXI", false, "flag"}, // Memory management extended mode
+    {"PONI", false, "flag"}, // Memory management ON flag
+    {"IONI", false, "flag"}  // Interrupt system ON flag
+};
+
+#define NUM_STATUS_FLAGS (sizeof(status_flags) / sizeof(StatusFlag))
+
 
 /**
  * @brief Mock memory for the debugger
@@ -134,7 +216,7 @@ static void initialize_mock_memory() {
  * 1. Extracting the memory reference, offset, and count from the command context
  * 2. Converting the memory reference to an address
  * 3. Reading the requested data from the mock memory
- * 4. Setting up a response with the data in base64 encoding
+ * 4. Sending informative messages about the memory being read
  * 
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
@@ -163,6 +245,7 @@ static int cmd_read_memory(DAPServer *server) {
     uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
     if (endptr == memory_reference || *endptr != '\0') {
         DBG_MOCK_LOG("Invalid memory reference format: %s", memory_reference);
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: Invalid memory reference format\n");
         return -1;
     }
     
@@ -172,6 +255,7 @@ static int cmd_read_memory(DAPServer *server) {
     // Ensure the address is within range
     if (address >= sizeof(mock_memory)) {
         DBG_MOCK_LOG("Address out of range: 0x%x", address);
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: Address out of range\n");
         return -1;
     }
     
@@ -180,86 +264,46 @@ static int cmd_read_memory(DAPServer *server) {
     size_t bytes_to_read = (count <= available_bytes) ? count : available_bytes;
     size_t unreadable_bytes = count - bytes_to_read;
     
-    // Create a copy of the data to send (we don't want to modify our mock memory)
-    uint8_t* data = malloc(bytes_to_read);
-    if (!data) {
-        DBG_MOCK_LOG("Failed to allocate memory for data");
-        return -1;
+    // Send informative message about the memory being read
+    char info_message[256];
+    snprintf(info_message, sizeof(info_message), 
+             "Reading %zu bytes from address 0x%08x (reference: %s, offset: 0x%llx)\n", 
+             bytes_to_read, address, memory_reference, (unsigned long long)offset);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
+    
+    if (unreadable_bytes > 0) {
+        snprintf(info_message, sizeof(info_message),
+                "Note: %zu bytes were unreadable (beyond memory limit)\n", unreadable_bytes);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     }
     
-    // Copy the data from mock memory
-    memcpy(data, &mock_memory[address], bytes_to_read);
-    
-    // Format address as a string (per DAP spec)
+    // Format address as a string for the human-readable output
     char address_str[32];
     snprintf(address_str, sizeof(address_str), "0x%08x", address);
     
-    // Create response body
-    cJSON* body = cJSON_CreateObject();
-    if (!body) {
-        free(data);
-        DBG_MOCK_LOG("Failed to create response body");
-        return -1;
-    }
-    
-    // Add address to response
-    cJSON_AddStringToObject(body, "address", address_str);
-    
-    // Add unreadableBytes if any
-    if (unreadable_bytes > 0) {
-        cJSON_AddNumberToObject(body, "unreadableBytes", (int)unreadable_bytes);
-        DBG_MOCK_LOG("Some bytes were unreadable: %zu", unreadable_bytes);
-    }
-    
-    // Convert data to base64 using DAP server's base64_encode function
-    char* encoded = NULL;
+    // Show a summary of the data for informative purposes
     if (bytes_to_read > 0) {
-        // We can't directly call the base64_encode function from dap_server_cmds.c
-        // because it's static, so we'll have to rely on the library's encoder
-        // For this mock implementation, we'll simulate the encoding with a simple approach
+        // Show a brief hex dump for the first few bytes
+        size_t display_bytes = bytes_to_read > 16 ? 16 : bytes_to_read;
+        char hex_dump[100] = "Data preview: ";
+        size_t pos = strlen(hex_dump);
         
-        // Allocate memory for base64 (4 chars for every 3 bytes plus padding)
-        size_t encoded_len = 4 * ((bytes_to_read + 2) / 3) + 1; // +1 for null terminator
-        encoded = malloc(encoded_len);
-        if (encoded) {
-            // Simple implementation for common hex chars
-            char* p = encoded;
-            for (size_t i = 0; i < bytes_to_read; i++) {
-                snprintf(p, 3, "%02x", data[i]);
-                p += 2;
-            }
-            *p = '\0';
+        for (size_t i = 0; i < display_bytes && pos < sizeof(hex_dump) - 5; i++) {
+            snprintf(hex_dump + pos, sizeof(hex_dump) - pos, "%02x ", mock_memory[address + i]);
+            pos = strlen(hex_dump);
         }
+        
+        if (bytes_to_read > display_bytes) {
+            strcat(hex_dump, "...");
+        }
+        
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, hex_dump);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "\n");
     }
     
-    if (encoded) {
-        cJSON_AddStringToObject(body, "data", encoded);
-        free(encoded);
-    } else {
-        cJSON_AddStringToObject(body, "data", "");
-        DBG_MOCK_LOG("Failed to encode data as base64");
-    }
+    // The actual response with the memory data will be handled by the main handler in dap_server_cmds.c
     
-    free(data);
-    
-    // Set the response
-    DAPResponse response = {0};
-    response.success = true;
-    response.data = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    
-    if (!response.data) {
-        DBG_MOCK_LOG("Failed to format response body");
-        return -1;
-    }
-    
-    // Send the response
-    int seq = server->current_command.request_seq;
-    int result = dap_server_send_response(server, DAP_CMD_READ_MEMORY, server->sequence++, seq, true, cJSON_Parse(response.data));
-    
-    free(response.data);
-    
-    return (result == 0) ? 0 : -1;
+    return 0;
 }
 
 /**
@@ -268,8 +312,7 @@ static int cmd_read_memory(DAPServer *server) {
  * This function handles the writeMemory command from DAP by:
  * 1. Extracting the memory reference, offset, and data from the command context
  * 2. Converting the memory reference to an address
- * 3. Writing the data to the mock memory
- * 4. Setting up a response with the number of bytes written
+ * 3. Sending informative messages about the memory operation
  * 
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
@@ -313,139 +356,124 @@ static int cmd_write_memory(DAPServer *server) {
         return -1;
     }
     
-    // Decode base64 data
-    size_t data_len = strlen(data);
-    size_t decoded_len = 0;
-    uint8_t* decoded_data = NULL;
+    // Send informative message about the memory being written
+    char info_message[256];
+    snprintf(info_message, sizeof(info_message), 
+             "Writing to memory at address 0x%08x (reference: %s, offset: 0x%llx)\n", 
+             address, memory_reference, (unsigned long long)offset);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     
-    // Simple hex decoding for mock implementation
-    if (data_len % 2 != 0) {
-        DBG_MOCK_LOG("Invalid hex data length: %zu", data_len);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Invalid hex data length\n");
-        return -1;
+    // Indicate partial write status
+    if (allow_partial) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, 
+                                     "Note: Partial writes are allowed if memory boundary is reached\n");
     }
     
-    // Convert hex string to bytes
-    for (size_t i = 0; i < decoded_len; i++) {
-        char hex_byte[3] = {data[i*2], data[i*2+1], '\0'};
-        decoded_data[i] = (uint8_t)strtoul(hex_byte, NULL, 16);
-    }
+    // The actual memory writing and response creation will be handled by the main handler
     
-    // Determine how many bytes we can actually write
-    size_t available_bytes = sizeof(mock_memory) - address;
-    size_t bytes_to_write = (decoded_len <= available_bytes) ? decoded_len : available_bytes;
-    
-    // If we can't write all bytes and partial writes aren't allowed, fail
-    if (bytes_to_write < decoded_len && !allow_partial) {
-        free(decoded_data);
-        DBG_MOCK_LOG("Cannot write all bytes and partial writes not allowed");
-        return -1;
-    }
-    
-    // Write the data to mock memory
-    memcpy(&mock_memory[address], decoded_data, bytes_to_write);
-    free(decoded_data);
-    
-    // Create response body
-    cJSON* body = cJSON_CreateObject();
-    if (!body) {
-        DBG_MOCK_LOG("Failed to create response body");
-        return -1;
-    }
-    
-    // Add bytes written to response
-    cJSON_AddNumberToObject(body, "bytesWritten", bytes_to_write);
-    
-    // If partial write occurred, add offset
-    if (bytes_to_write < decoded_len) {
-        cJSON_AddNumberToObject(body, "offset", bytes_to_write);
-    }
-    
-    // Set the response
-    DAPResponse response = {0};
-    response.success = true;
-    response.data = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    
-    if (!response.data) {
-        DBG_MOCK_LOG("Failed to format response body");
-        return -1;
-    }
-    
-    // Send the response
-    int seq = server->current_command.request_seq;
-    int result = dap_server_send_response(server, DAP_CMD_WRITE_MEMORY, server->sequence++, seq, true, cJSON_Parse(response.data));
-    
-    free(response.data);
-    
-    return (result == 0) ? 0 : -1;
+    return 0;
 }
 
 /*** CALLBACKS ***/
 
-// Command callback wrappers (these match the DAPCommandCallback signature)
+/**
+ * @brief Common handler for step operations
+ * 
+ * This function handles the common logic for all step commands (next, step in, step out).
+ * It reads the granularity from the command context and performs the appropriate stepping.
+ * 
+ * @param server The DAP server instance
+ * @param step_type A string describing the step type for logging ("next", "step in", "step out")
+ * @return int 0 on success, non-zero on failure
+ */
+static int handle_step_command(DAPServer *server, const char* step_type) {
+    if (!server) {
+        return -1;
+    }
+    
+    // Access the step command context
+    StepCommandContext *ctx = &server->current_command.context.step;
+    
+    // Log the stepping action
+    char log_message[256];
+    snprintf(log_message, sizeof(log_message), 
+             "Handling %s command for thread %d", step_type, ctx->thread_id);
+    DBG_MOCK_LOG("%s", log_message);
+    dap_server_send_output(server, log_message);
+    
+    // Handle different granularity types
+    switch (ctx->granularity) {
+        case DAP_STEP_GRANULARITY_INSTRUCTION:
+            snprintf(log_message, sizeof(log_message), 
+                     "Stepping by instruction (%s)\n", step_type);
+            dap_server_send_output(server, log_message);
+            
+            // Increment PC by one instruction for instruction stepping
+            server->debugger_state.program_counter += 1;
+            break;
+            
+        case DAP_STEP_GRANULARITY_LINE:
+            snprintf(log_message, sizeof(log_message), 
+                     "Stepping by line (%s)\n", step_type);
+            dap_server_send_output(server, log_message);
+            
+            // For line stepping, increment PC and line
+            server->debugger_state.program_counter += 4;
+            server->debugger_state.source_line += 1;
+            break;
+            
+        case DAP_STEP_GRANULARITY_STATEMENT:
+        default:
+            snprintf(log_message, sizeof(log_message), 
+                     "Stepping by statement (%s)\n", step_type);
+            dap_server_send_output(server, log_message);
+            
+            // For statement stepping, increment PC and line (same as line in our mock)
+            server->debugger_state.program_counter += 4;
+            server->debugger_state.source_line += 1;
+            break;
+    }
+    
+    // Update the debugger state to indicate we've stopped
+    server->debugger_state.has_stopped = true;
+    
+    return 0;
+}
+
+/**
+ * @brief Step Next command handler
+ * 
+ * Handles the 'next' command by stepping over the current line/statement
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
 static int cmd_next(DAPServer *server) {
-    // Use the step context that was populated by the protocol handler
-    int thread_id = server->current_command.context.step.thread_id;
-    // Extract granularity from the context
-    StepGranularity granularity = DAP_STEP_GRANULARITY_STATEMENT;
-    if (server->current_command.context.step.granularity) {
-        if (strcmp(server->current_command.context.step.granularity, "instruction") == 0) {
-            granularity = DAP_STEP_GRANULARITY_INSTRUCTION;
-        } else if (strcmp(server->current_command.context.step.granularity, "line") == 0) {
-            granularity = DAP_STEP_GRANULARITY_LINE;
-        }
-    }
-    
-
-    // TODO: Implement step in
-    mock_debugger.pc++;
-
-    server->debugger_state.program_counter = mock_debugger.pc;
-    server->debugger_state.source_line++;
-
-    return 0;    
-
+    return handle_step_command(server, "next");
 }
 
+/**
+ * @brief Step In command handler
+ * 
+ * Handles the 'stepIn' command by stepping into a function call
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
 static int cmd_step_in(DAPServer *server) {
-    // Use the step context that was populated by the protocol handler
-    int thread_id = server->current_command.context.step.thread_id;
-    int target_id = server->current_command.context.step.target_id;
-    // Extract granularity from the context
-    StepGranularity granularity = DAP_STEP_GRANULARITY_INSTRUCTION;
-    if (server->current_command.context.step.granularity) {
-        if (strcmp(server->current_command.context.step.granularity, "statement") == 0) {
-            granularity = DAP_STEP_GRANULARITY_STATEMENT;
-        } else if (strcmp(server->current_command.context.step.granularity, "line") == 0) {
-            granularity = DAP_STEP_GRANULARITY_LINE;
-        }
-    }
-    
-
-    mock_debugger.pc++;
-    server->debugger_state.program_counter = mock_debugger.pc;
-    server->debugger_state.source_line++;
-
-    return 0;    
+    return handle_step_command(server, "step in");
 }
 
+/**
+ * @brief Step Out command handler
+ * 
+ * Handles the 'stepOut' command by stepping out of the current function
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
 static int cmd_step_out(DAPServer *server) {
-    // Use the step context that was populated by the protocol handler
-    int thread_id = server->current_command.context.step.thread_id;
-    // Extract granularity from the context
-    StepGranularity granularity = DAP_STEP_GRANULARITY_STATEMENT;
-    if (server->current_command.context.step.granularity) {
-        if (strcmp(server->current_command.context.step.granularity, "instruction") == 0) {
-            granularity = DAP_STEP_GRANULARITY_INSTRUCTION;
-        } else if (strcmp(server->current_command.context.step.granularity, "line") == 0) {
-            granularity = DAP_STEP_GRANULARITY_LINE;
-        }
-    }
-    
-    mock_debugger.pc++;
-    server->debugger_state.program_counter = mock_debugger.pc;
-    server->debugger_state.source_line++;
+    return handle_step_command(server, "step out");
 }
 
 /**
@@ -880,65 +908,8 @@ static int cmd_launch(DAPServer* server) {
     server->debugger_state.has_stopped = true;
     server->debugger_state.current_thread_id = 1; // make sure we have a thread id
     
-    // Clean up old source info
-    if (server->current_source) {
-        if (server->current_source->path) {
-            free((void *)server->current_source->path);
-        }
-        if (server->current_source->name) {
-            free((void *)server->current_source->name);
-        }
-        free((void *)server->current_source);
-        server->current_source = NULL;
-    }
     
-    // Create and set current source information
-    const char* display_source = source_path ? source_path : program_path;
-    if (display_source) {
-        DAPSource *source = malloc(sizeof(DAPSource));
-        if (source) {
-            memset(source, 0, sizeof(DAPSource));
-            source->path = strdup(display_source);
-            if (!source->path) {
-                DBG_MOCK_LOG("Error: Failed to allocate memory for source path");
-                free(source);
-                return -1;
-            }
-            
-            // Extract filename from path
-            const char *filename = strrchr(display_source, '/');
-            if (filename) {
-                source->name = strdup(filename + 1);
-            } else {
-                source->name = strdup(display_source);
-            }
-            
-            if (!source->name) {
-                DBG_MOCK_LOG("Error: Failed to allocate memory for source name");
-                free(source->path);
-                free(source);
-                return -1;
-            }
-            
-            source->presentation_hint = DAP_SOURCE_PRESENTATION_NORMAL;
-            source->origin = DAP_SOURCE_ORIGIN_UNKNOWN;
-            
-            server->current_source = source;
-            server->debugger_state.source_line = 1;   // Start at line 1
-            server->debugger_state.source_column = 1; // Start at column 1
-            
-            DBG_MOCK_LOG("Set current source: path=%s, name=%s", 
-                      source->path, source->name);
-        }
-    } else {
-        DBG_MOCK_LOG("Warning: No source or program path available for display");
-    }
-    
-    // If map file provided, try to load it
-    if (map_path) {
-        DBG_MOCK_LOG("Would load map file here: %s", map_path);
-        // TODO: Implement map file loading for debugging symbols
-    }
+    // TODO: Do something with the source_path and map_path
     
     // Send process event to indicate execution started
     dap_server_send_process_event(server, program_path, 1, true, "launch");
@@ -1353,7 +1324,7 @@ static int cmd_scopes(DAPServer *server) {
     cJSON *localsScope = cJSON_CreateObject();
     if (localsScope) {
         cJSON_AddStringToObject(localsScope, "name", "Locals");
-        cJSON_AddNumberToObject(localsScope, "variablesReference", 1000);
+        cJSON_AddNumberToObject(localsScope, "variablesReference", SCOPE_ID_LOCALS);
         cJSON_AddNumberToObject(localsScope, "namedVariables", 5); // Number of local variables
         cJSON_AddBoolToObject(localsScope, "expensive", false);
         cJSON_AddStringToObject(localsScope, "presentationHint", "locals");
@@ -1364,8 +1335,8 @@ static int cmd_scopes(DAPServer *server) {
     cJSON *registersScope = cJSON_CreateObject();
     if (registersScope) {
         cJSON_AddStringToObject(registersScope, "name", "CPU Registers");
-        cJSON_AddNumberToObject(registersScope, "variablesReference", 1001);
-        cJSON_AddNumberToObject(registersScope, "namedVariables", 8); // Number of CPU registers
+        cJSON_AddNumberToObject(registersScope, "variablesReference", SCOPE_ID_REGISTERS);
+        cJSON_AddNumberToObject(registersScope, "namedVariables", NUM_REGISTERS); // Use the actual number of CPU registers
         cJSON_AddBoolToObject(registersScope, "expensive", false);
         cJSON_AddStringToObject(registersScope, "presentationHint", "registers");
         cJSON_AddItemToArray(scopes, registersScope);
@@ -1375,7 +1346,7 @@ static int cmd_scopes(DAPServer *server) {
     cJSON *memoryScope = cJSON_CreateObject();
     if (memoryScope) {
         cJSON_AddStringToObject(memoryScope, "name", "Memory");
-        cJSON_AddNumberToObject(memoryScope, "variablesReference", 1002);
+        cJSON_AddNumberToObject(memoryScope, "variablesReference", SCOPE_ID_MEMORY);
         cJSON_AddNumberToObject(memoryScope, "namedVariables", 3); // Number of memory regions
         cJSON_AddBoolToObject(memoryScope, "expensive", true); // Memory access is expensive
         cJSON_AddItemToArray(scopes, memoryScope);
@@ -1407,321 +1378,311 @@ static int cmd_scopes(DAPServer *server) {
 }
 
 /**
- * @brief Variables command handler
- * 
- * This function handles the variables command by:
- * 1. Retrieving the variables_reference from the command context
- * 2. Creating a response with available variables for the reference
- * 3. Sending the response back to the client
+ * @brief Helper function to add a variable to the server's variable array
  * 
  * @param server The DAP server instance
- * @return int 0 on success, non-zero on failure
+ * @param name Variable name
+ * @param value Variable value
+ * @param type Variable type
+ * @param variables_reference Reference for child variables (0 for leaf variables)
+ * @param memory_reference Optional memory reference
+ * @param kind Variable kind (property, method, etc.)
+ * @param attributes Array of attribute flags
+ * @return DAPVariable* Pointer to the newly added variable or NULL on failure
  */
-static int cmd_variables(DAPServer *server) {
-    if (!server) {
-        return -1;
+static DAPVariable* add_variable_to_array(
+    DAPServer *server,
+    const char* name,
+    const char* value,
+    const char* type,
+    int variables_reference,
+    const char* memory_reference,
+    const char* kind,
+    const char** attributes,
+    int num_attributes
+) {
+    if (!server || !name || !value) {
+        return NULL;
     }
     
-    DBG_MOCK_LOG("Handling variables command");
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Retrieving variables...\n");
+    // Increase the count and reallocate the array
+    server->current_command.context.variables.count++;
+    server->current_command.context.variables.variable_array = realloc(
+        server->current_command.context.variables.variable_array, 
+        server->current_command.context.variables.count * sizeof(DAPVariable)
+    );
     
-    // Extract variables_reference from the command context
-    int variables_reference = server->current_command.context.variables.variables_reference;
-    int filter = server->current_command.context.variables.filter;
-    int start = server->current_command.context.variables.start;
-    int count = server->current_command.context.variables.count;
-    
-    DBG_MOCK_LOG("Variables reference: %d, filter: %d, start: %d, count: %d", 
-               variables_reference, filter, start, count);
-    
-    // Create a response body with variables
-    cJSON *body = cJSON_CreateObject();
-    if (!body) {
-        DBG_MOCK_LOG("Failed to create response body");
-        return -1;
+    if (!server->current_command.context.variables.variable_array) {
+        server->current_command.context.variables.count--;
+        return NULL;
     }
     
-    // Add variables array
-    cJSON *variables = cJSON_CreateArray();
-    if (!variables) {
-        cJSON_Delete(body);
-        DBG_MOCK_LOG("Failed to create variables array");
-        return -1;
-    }
+    // Get a pointer to the newly added variable
+    DAPVariable* var = &server->current_command.context.variables.variable_array[
+        server->current_command.context.variables.count - 1
+    ];
     
-    // Handle different variable references
-    switch (variables_reference) {
-        case 1000: // Locals scope
-            // Add some mock local variables
-            {
-                cJSON *var1 = cJSON_CreateObject();
-                if (var1) {
-                    cJSON_AddStringToObject(var1, "name", "counter");
-                    cJSON_AddStringToObject(var1, "value", "42");
-                    cJSON_AddStringToObject(var1, "type", "integer");
-                    cJSON_AddNumberToObject(var1, "variablesReference", 0);
-                    cJSON_AddItemToArray(variables, var1);
-                }
-                
-                cJSON *var2 = cJSON_CreateObject();
-                if (var2) {
-                    cJSON_AddStringToObject(var2, "name", "running");
-                    cJSON_AddStringToObject(var2, "value", "true");
-                    cJSON_AddStringToObject(var2, "type", "boolean");
-                    cJSON_AddNumberToObject(var2, "variablesReference", 0);
-                    cJSON_AddItemToArray(variables, var2);
-                }
-                
-                cJSON *var3 = cJSON_CreateObject();
-                if (var3) {
-                    cJSON_AddStringToObject(var3, "name", "message");
-                    cJSON_AddStringToObject(var3, "value", "\"Hello World\"");
-                    cJSON_AddStringToObject(var3, "type", "string");
-                    cJSON_AddNumberToObject(var3, "variablesReference", 0);
-                    cJSON_AddItemToArray(variables, var3);
-                }
-            }
-            break;
-            
-        case 1001: // CPU Registers
-            // Add CPU registers as variables
-            {
-                const char* regs[] = {"A", "B", "X", "P", "S", "D", "L", "T"};
-                const char* types[] = {"accumulator", "base", "index", "program counter", "status", "data", "link", "temporary"};
-                
-                for (int i = 0; i < 8; i++) {
-                    cJSON *var = cJSON_CreateObject();
-                    if (var) {
-                        cJSON_AddStringToObject(var, "name", regs[i]);
-                        char value[16];
-                        snprintf(value, sizeof(value), "0x%04X", 0x1000 + i * 0x100); // Mock values
-                        cJSON_AddStringToObject(var, "value", value);
-                        cJSON_AddStringToObject(var, "type", types[i]);
-                        cJSON_AddNumberToObject(var, "variablesReference", 0);
-                        cJSON_AddStringToObject(var, "presentationHint", "register");
-                        cJSON_AddItemToArray(variables, var);
-                    }
-                }
-            }
-            break;
-            
-        case 1002: // Memory regions
-            // Add memory region variables
-            {
-                cJSON *var1 = cJSON_CreateObject();
-                if (var1) {
-                    cJSON_AddStringToObject(var1, "name", "Stack");
-                    cJSON_AddStringToObject(var1, "value", "0x0000-0x1FFF");
-                    cJSON_AddStringToObject(var1, "type", "memory");
-                    cJSON_AddNumberToObject(var1, "variablesReference", 2000);
-                    cJSON_AddItemToArray(variables, var1);
-                }
-                
-                cJSON *var2 = cJSON_CreateObject();
-                if (var2) {
-                    cJSON_AddStringToObject(var2, "name", "Heap");
-                    cJSON_AddStringToObject(var2, "value", "0x2000-0x4FFF");
-                    cJSON_AddStringToObject(var2, "type", "memory");
-                    cJSON_AddNumberToObject(var2, "variablesReference", 2001);
-                    cJSON_AddItemToArray(variables, var2);
-                }
-                
-                cJSON *var3 = cJSON_CreateObject();
-                if (var3) {
-                    cJSON_AddStringToObject(var3, "name", "Code");
-                    cJSON_AddStringToObject(var3, "value", "0x5000-0xFFFF");
-                    cJSON_AddStringToObject(var3, "type", "memory");
-                    cJSON_AddNumberToObject(var3, "variablesReference", 2002);
-                    cJSON_AddItemToArray(variables, var3);
-                }
-            }
-            break;
-            
-        default:
-            // Unknown reference - return empty array
-            DBG_MOCK_LOG("Unknown variables reference: %d", variables_reference);
-            break;
-    }
+    // Initialize the variable with the provided values
+    if (name)
+        var->name = strdup(name);
+    else
+        var->name = NULL;
+        
+    if (value)
+        var->value = strdup(value);
+    else
+        var->value = NULL;
+        
+    if (type)
+        var->type = strdup(type);
+    else
+        var->type = NULL;
+        
+    var->variables_reference = variables_reference;
+    var->named_variables = 0;
+    var->indexed_variables = 0;
+    var->evaluate_name = NULL;
     
-    cJSON_AddItemToObject(body, "variables", variables);
+    if (memory_reference)
+        var->memory_reference = strdup(memory_reference);
+    else
+        var->memory_reference = NULL;
     
-    // Format the response
-    char *response_str = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
+    // Handle presentation hint
+    // Default initialization
+    var->presentation_hint.has_kind = false;
+    var->presentation_hint.has_visibility = false;
+    var->presentation_hint.attributes = DAP_VARIABLE_ATTR_NONE;
     
-    if (!response_str) {
-        DBG_MOCK_LOG("Failed to format response body");
-        return -1;
-    }
-    
-    // Create the response object
-    DAPResponse response = {0};
-    response.success = true;
-    response.data = response_str;
-    
-    // Send the response
-    int seq = server->current_command.request_seq;
-    int result = dap_server_send_response(server, DAP_CMD_VARIABLES, server->sequence++, seq, true, cJSON_Parse(response.data));
-    
-    free(response.data);
-    
-    return (result == 0) ? 0 : -1;
-}
-
-/**
- * @brief SetVariable command handler
- * 
- * This function handles the setVariable command by:
- * 1. Retrieving the variable information from the command context
- * 2. Updating the variable value in the mock debugger state
- * 3. Creating a response with the updated variable information
- * 
- * @param server The DAP server instance
- * @return int 0 on success, non-zero on failure
- */
-static int cmd_set_variable(DAPServer *server) {
-    if (!server) {
-        return -1;
-    }
-    
-    DBG_MOCK_LOG("Handling setVariable command");
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Setting variable value...\n");
-    
-    // Extract variable information from the command context
-    int variables_reference = server->current_command.context.set_variable.variables_reference;
-    const char* name = server->current_command.context.set_variable.name;
-    const char* value = server->current_command.context.set_variable.value;
-    const char* format = server->current_command.context.set_variable.format;
-    
-    DBG_MOCK_LOG("Setting variable: ref=%d, name=%s, value=%s, format=%s", 
-               variables_reference, name, value, format ? format : "none");
-    
-    // Create response body
-    cJSON *body = cJSON_CreateObject();
-    if (!body) {
-        DBG_MOCK_LOG("Failed to create response body");
-        return -1;
-    }
-    
-    // Add required fields
-    cJSON_AddStringToObject(body, "value", value);
-    
-    // Add type information based on the value format
-    if (format) {
-        if (strcmp(format, "hex") == 0) {
-            cJSON_AddStringToObject(body, "type", "hex");
-        } else if (strcmp(format, "binary") == 0) {
-            cJSON_AddStringToObject(body, "type", "binary");
+    // Set kind if provided
+    if (kind && kind[0] != '\0') {
+        var->presentation_hint.has_kind = true;
+        
+        // Map string kind to enum
+        if (strcmp(kind, "property") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_PROPERTY;
+        } else if (strcmp(kind, "method") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_METHOD;
+        } else if (strcmp(kind, "class") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_CLASS;
+        } else if (strcmp(kind, "data") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_DATA;
+        } else if (strcmp(kind, "event") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_EVENT;
+        } else if (strcmp(kind, "baseClass") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_BASE_CLASS;
+        } else if (strcmp(kind, "innerClass") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_INNER_CLASS;
+        } else if (strcmp(kind, "interface") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_INTERFACE;
+        } else if (strcmp(kind, "mostDerived") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_MOST_DERIVED;
+        } else if (strcmp(kind, "virtual") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_VIRTUAL;
+        } else if (strcmp(kind, "dataBreakpoint") == 0) {
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_DATABREAKPOINT;
         } else {
-            cJSON_AddStringToObject(body, "type", "string");
+            // Unknown kind
+            var->presentation_hint.has_kind = false;
         }
-    } else {
-        cJSON_AddStringToObject(body, "type", "string");
     }
     
-    // Add variable reference information
-    cJSON_AddNumberToObject(body, "variablesReference", 0); // No child variables by default
-    cJSON_AddNumberToObject(body, "namedVariables", 0);
-    cJSON_AddNumberToObject(body, "indexedVariables", 0);
-    
-    // Add memory reference if applicable
-    if (variables_reference >= 1000) { // Memory-related variables
-        char memory_ref[32];
-        snprintf(memory_ref, sizeof(memory_ref), "0x%x", variables_reference);
-        cJSON_AddStringToObject(body, "memoryReference", memory_ref);
+    // Set attributes if provided
+    if (attributes && num_attributes > 0) {
+        for (int i = 0; i < num_attributes; i++) {
+            if (!attributes[i]) continue;
+            
+            if (strcmp(attributes[i], "static") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_STATIC;
+            } else if (strcmp(attributes[i], "constant") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CONSTANT;
+            } else if (strcmp(attributes[i], "readOnly") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_READONLY;
+            } else if (strcmp(attributes[i], "rawString") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_RAWSTRING;
+            } else if (strcmp(attributes[i], "hasObjectId") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASOBJECTID;
+            } else if (strcmp(attributes[i], "canHaveObjectId") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CANHAVEOBJECTID;
+            } else if (strcmp(attributes[i], "hasSideEffects") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASSIDEEFFECTS;
+            } else if (strcmp(attributes[i], "hasDataBreakpoint") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASDATABREAKPOINT;
+            } else if (strcmp(attributes[i], "hasChildren") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASCHILDREN;
+            }
+        }
     }
     
-    // Send the response
-    int seq = server->current_command.request_seq;
-    int result = dap_server_send_response(server, DAP_CMD_SET_VARIABLE, 
-                                        server->sequence++, seq, true, body);
-    
-    return (result == 0) ? 0 : -1;
-}
-
-/*** INITIALIZATION ***/
-
-static int init_debugger_state(DAPServer *server) {
-    if (!server) {
-        return -1;
-    }
-    
-    // Initialize the debugger_state fields
-    server->debugger_state.program_counter = 0;
-    server->debugger_state.source_line = 1;  // Start at line 1
-    server->debugger_state.source_column = 1;
-    server->debugger_state.has_stopped = true;  // Start in stopped state
-    server->debugger_state.stop_reason = NULL;
-    server->debugger_state.stop_description = NULL;
-    server->debugger_state.current_thread_id = 1;  // Default thread ID
-    
-    // Program information initially empty
-    server->debugger_state.program_path = NULL;
-    server->debugger_state.source_path = NULL;
-    server->debugger_state.map_path = NULL;
-    server->debugger_state.working_directory = NULL;
-    server->debugger_state.no_debug = false;
-    server->debugger_state.stop_at_entry = true;
-    
-    // Command line arguments
-    server->debugger_state.args = NULL;
-    server->debugger_state.args_count = 0;
-    
-    // User data
-    server->debugger_state.user_data = NULL;
-    
-    return 0;
+    return var;
 }
 
 /**
- * @brief Register command callbacks for mock debugger implementation
- * 
- * This function connects the mock debugger's command implementations to the DAP server.
- * Each callback implements the debugger-specific behavior for a DAP command.
- * 
- * For initialize:
- * - Sets default capabilities via dbg_mock_set_default_capabilities()
- * - No direct initialize callback needed - capabilities setup is sufficient
- * 
- * Command callback sequence:
- * 1. DAP server receives command
- * 2. Server validates protocol requirements
- * 3. Server calls registered callback if present
- * 4. Callback implements debugger-specific behavior
- * 5. Server handles response and event generation
+ * @brief Add local variables to the variables array
  * 
  * @param server The DAP server instance
- * @return 0 on success, -1 on failure
+ * @param info_message Buffer to write info message
+ * @param info_message_size Size of info message buffer 
  */
-static int setup_server_callbacks(DAPServer *server) {
-    if (!server) {
-        return -1;
+static void add_local_variables(DAPServer *server, char* info_message, size_t info_message_size) {
+    snprintf(info_message, info_message_size, 
+             "Loading local variables (showing typical counter, flag, and string variables)\n");
+    
+    // Property kind for all variables
+    const char* property_kind = "property";
+    const char* no_attributes[] = {NULL};
+    
+    // Add counter variable
+    add_variable_to_array(
+        server,
+        "counter",     // name
+        "42",          // value
+        "integer",     // type
+        0,             // variablesReference
+        NULL,          // memoryReference
+        property_kind, // kind
+        no_attributes, // attributes
+        0              // num_attributes
+    );
+    
+    // Add flag variable
+    add_variable_to_array(
+        server,
+        "isEnabled",   // name
+        "true",        // value
+        "boolean",     // type
+        0,             // variablesReference
+        NULL,          // memoryReference
+        property_kind, // kind
+        no_attributes, // attributes
+        0              // num_attributes
+    );
+    
+    // Add string variable
+    add_variable_to_array(
+        server,
+        "message",     // name
+        "\"Hello, DAP!\"", // value
+        "string",      // type
+        0,             // variablesReference
+        NULL,          // memoryReference
+        property_kind, // kind
+        no_attributes, // attributes
+        0              // num_attributes
+    );
+}
+
+/**
+ * @brief Add register variables to the variables array
+ * 
+ * @param server The DAP server instance
+ * @param info_message Buffer to write info message
+ * @param info_message_size Size of info message buffer
+ */
+static void add_register_variables(DAPServer *server, char* info_message, size_t info_message_size) {
+    snprintf(info_message, info_message_size, 
+             "Loading CPU registers (A, B, X, P, S, D, L, T)\n");
+    
+    // Property kind with readonly attribute
+    const char* property_kind = "property";
+    const char* readonly_attrs[] = {"readOnly"};
+    
+    // Add each register
+    for (size_t i = 0; i < NUM_REGISTERS; i++) {
+        // Format value based on type
+        char value_str[32];
+        if (strcmp(cpu_registers[i].type, "integer") == 0) {
+            snprintf(value_str, sizeof(value_str), "0x%04X", cpu_registers[i].value);
+        } else if (strcmp(cpu_registers[i].type, "bitmask") == 0) {
+            snprintf(value_str, sizeof(value_str), "0b%04X", cpu_registers[i].value);
+        } else {
+            snprintf(value_str, sizeof(value_str), "%o", cpu_registers[i].value);
+        }
+        
+        // Create memory reference
+        char mem_ref[32];
+        snprintf(mem_ref, sizeof(mem_ref), "0x%04X", (int)(i * 2));
+        
+        // Add register
+        add_variable_to_array(
+            server,
+            cpu_registers[i].name, // name
+            value_str,             // value
+            cpu_registers[i].type, // type
+            cpu_registers[i].has_nested ? cpu_registers[i].nested_ref : 0, // varsRef
+            mem_ref,               // memoryReference
+            property_kind,         // kind
+            readonly_attrs,        // attributes
+            1                      // num_attributes
+        );
     }
+}
 
-    DBG_MOCK_LOG("Initializing mock debugger");
+/**
+ * @brief Add status flag variables to the variables array
+ * 
+ * @param server The DAP server instance
+ * @param info_message Buffer to write info message
+ * @param info_message_size Size of info message buffer
+ */
+static void add_status_flag_variables(DAPServer *server, char* info_message, size_t info_message_size) {
+    snprintf(info_message, info_message_size, 
+             "Loading CPU status flags\n");
+    
+    // Property kind with readonly attribute
+    const char* property_kind = "property";
+    const char* readonly_attrs[] = {"readOnly"};
+    
+    // Add each flag from the status_flags array
+    for (size_t i = 0; i < NUM_STATUS_FLAGS; i++) {
+        // Create variable
+        add_variable_to_array(
+            server,
+            status_flags[i].name,              // name
+            status_flags[i].value ? "true" : "false", // value
+            status_flags[i].type,              // type
+            0,                                 // variablesReference
+            NULL,                              // memoryReference
+            property_kind,                     // kind
+            readonly_attrs,                    // attributes
+            1                                  // num_attributes
+        );
+    }
+}
 
-    // Set up default capabilities
-    dbg_mock_set_default_capabilities(server);
-
-    // Register command callbacks
-    dap_server_register_command_callback(server, DAP_CMD_NEXT, cmd_next);
-    dap_server_register_command_callback(server, DAP_CMD_STEP_IN, cmd_step_in);
-    dap_server_register_command_callback(server, DAP_CMD_STEP_OUT, cmd_step_out);
-    dap_server_register_command_callback(server, DAP_CMD_CONTINUE, cmd_continue);
-    dap_server_register_command_callback(server, DAP_CMD_READ_MEMORY, cmd_read_memory);
-    dap_server_register_command_callback(server, DAP_CMD_WRITE_MEMORY, cmd_write_memory);
-    dap_server_register_command_callback(server, DAP_CMD_SCOPES, cmd_scopes);
-    dap_server_register_command_callback(server, DAP_CMD_VARIABLES, cmd_variables);
-    dap_server_register_command_callback(server, DAP_CMD_EXCEPTION_INFO, on_set_exception_breakpoints);
-    dap_server_register_command_callback(server, DAP_CMD_SET_BREAKPOINTS, cmd_set_breakpoints);
-    dap_server_register_command_callback(server, DAP_CMD_LAUNCH, cmd_launch);
-    dap_server_register_command_callback(server, DAP_CMD_RESTART, cmd_restart);
-    dap_server_register_command_callback(server, DAP_CMD_SET_VARIABLE, &cmd_set_variable);
-
-    // Initialize debugger state
-    init_debugger_state(server);
-
-    return 0;
+/**
+ * @brief Add memory region variables to the variables array
+ * 
+ * @param server The DAP server instance
+ * @param info_message Buffer to write info message
+ * @param info_message_size Size of info message buffer
+ */
+static void add_memory_region_variables(DAPServer *server, char* info_message, size_t info_message_size) {
+    snprintf(info_message, info_message_size, 
+             "Loading memory regions (Stack: 0x0000-0x1FFF, Heap: 0x2000-0x4FFF, Code: 0x5000-0xFFFF)\n");
+    
+    // Add memory region variables
+    const char *regions[] = {"Stack", "Heap", "Code"};
+    const char *ranges[] = {"0x0000-0x1FFF", "0x2000-0x4FFF", "0x5000-0xFFFF"};
+    const char *mem_refs[] = {"0x0000", "0x2000", "0x5000"};
+    
+    // Property kind - readonly
+    const char* property_kind = "property";
+    const char* no_attributes[] = {NULL};
+    
+    for (int i = 0; i < 3; i++) {
+        add_variable_to_array(
+            server,
+            regions[i],        // name
+            ranges[i],         // value
+            "memory",          // type
+            0,                 // variablesReference
+            mem_refs[i],       // memoryReference
+            property_kind,     // kind
+            no_attributes,     // attributes
+            0                  // num_attributes
+        );
+    }
 }
 
 /**
@@ -1851,163 +1812,39 @@ void dbg_mock_cleanup(void) {
     mock_debugger.exception_filter_count = 0;
 }
 
-/**
- * @brief Simulates a thrown exception and sends an exception stopped event if needed
- * 
- * @param exception_id The ID of the exception (e.g., "NullPointerException")
- * @param description Exception description
- * @param is_uncaught Whether the exception is uncaught
- * @return int 0 if successful, non-zero otherwise
- */
-int dbg_mock_throw_exception(const char* exception_id, const char* description, bool is_uncaught) {
-    if (!mock_debugger.server) {
+
+static int init_debugger_state(DAPServer *server) {
+    if (!server) {
         return -1;
     }
     
-    DBG_MOCK_LOG("Exception thrown: %s (uncaught: %d)", exception_id, is_uncaught);
+    // Initialize the debugger_state fields
+    server->debugger_state.program_counter = 0;
+    server->debugger_state.source_line = 1;  // Start at line 1
+    server->debugger_state.source_column = 1;
+    server->debugger_state.has_stopped = true;  // Start in stopped state
+    server->debugger_state.stop_reason = NULL;
+    server->debugger_state.stop_description = NULL;
+    server->debugger_state.current_thread_id = 1;  // Default thread ID
     
-    // Check if this exception should cause a break
-    bool should_break = false;
+    // Program information initially empty
+    server->debugger_state.program_path = NULL;
+    server->debugger_state.source_path = NULL;
+    server->debugger_state.map_path = NULL;
+    server->debugger_state.working_directory = NULL;
+    server->debugger_state.no_debug = false;
+    server->debugger_state.stop_at_entry = true;
     
-    // Call our should_break check function directly since we no longer have exception_check_callback in DAPServer
-    should_break = on_should_break_on_exception(
-        mock_debugger.server,
-        exception_id,
-        is_uncaught,
-        &mock_debugger
-    );
+    // Command line arguments
+    server->debugger_state.args = NULL;
+    server->debugger_state.args_count = 0;
     
-    if (!should_break) {
-        DBG_MOCK_LOG("No matching exception filter, continuing execution");
-        return 0;
-    }
+    // User data
+    server->debugger_state.user_data = NULL;
     
-    // Create stopped event due to exception
-    cJSON* body = cJSON_CreateObject();
-    if (!body) {
-        return -1;
-    }
-    
-    // We need a thread ID - in our mock server we typically use 1
-    int thread_id = 1;
-    cJSON_AddNumberToObject(body, "threadId", thread_id);
-    
-    // Set reason as "exception"
-    cJSON_AddStringToObject(body, "reason", "exception");
-    
-    // Add exception information
-    cJSON_AddBoolToObject(body, "allThreadsStopped", true);
-    cJSON_AddStringToObject(body, "description", description);
-    
-    // Add exception text
-    cJSON* text = cJSON_CreateObject();
-    if (text) {
-        if (is_uncaught) {
-            cJSON_AddStringToObject(text, "format", "Uncaught exception: {0}");
-        } else {
-            cJSON_AddStringToObject(text, "format", "Exception: {0}");
-        }
-        
-        cJSON* args = cJSON_CreateArray();
-        if (args) {
-            cJSON_AddItemToArray(args, cJSON_CreateString(exception_id));
-            cJSON_AddItemToObject(text, "variables", args);
-        }
-        
-        cJSON_AddItemToObject(body, "text", text);
-    }
-    
-    // Create the exception info
-    cJSON* ex_info = cJSON_CreateObject();
-    if (ex_info) {
-        cJSON_AddStringToObject(ex_info, "exceptionId", exception_id);
-        cJSON_AddStringToObject(ex_info, "description", description);
-        cJSON_AddStringToObject(ex_info, "breakMode", is_uncaught ? "unhandled" : "always");
-        
-        cJSON_AddItemToObject(body, "exceptionInfo", ex_info);
-    }
-    
-    // Send the stopped event using server's built-in function
-    int result = dap_server_send_event(mock_debugger.server, "stopped", body);
-    if (result != 0) {
-        cJSON_Delete(body);
-        return -1;
-    }
-    
-    // Update state
-    mock_debugger.server->debugger_state.has_stopped = true;
-    mock_debugger.last_event = DAP_EVENT_STOPPED;
-    
-    DBG_MOCK_LOG("Sent exception stopped event");
     return 0;
 }
 
-/**
- * @brief Test function to simulate an exception for testing
- * 
- * @param is_uncaught Whether to simulate an uncaught exception (true) or a caught one (false)
- * @return int 0 on success, non-zero on failure
- */
-int dbg_mock_test_exception(bool is_uncaught) {
-    const char* exception_id = "TestException";
-    const char* description = is_uncaught 
-        ? "This is a test uncaught exception" 
-        : "This is a test caught exception";
-    
-    DBG_MOCK_LOG("Simulating %s exception", is_uncaught ? "uncaught" : "caught");
-    return dbg_mock_throw_exception(exception_id, description, is_uncaught);
-}
-
-/**
- * @brief Send a test stopped event to simulate stopping at a specific line
- * 
- * @param line Line number to stop at
- * @param file File path (or NULL to use current)
- * @return int 0 if successful, non-zero otherwise 
- */
-int dbg_mock_test_stop_at_line(int line, const char* file) {
-    if (!mock_debugger.server) {
-        return -1;
-    }
-    
-    DBG_MOCK_LOG("Simulating stop at line %d", line);
-    
-    // Create stopped event
-    cJSON* body = cJSON_CreateObject();
-    if (!body) {
-        return -1;
-    }
-    
-    // We need a thread ID - in our mock server we typically use 1
-    int thread_id = 1;
-    cJSON_AddNumberToObject(body, "threadId", thread_id);
-    
-    // Set reason as "step" (could also be "breakpoint", "pause", etc.)
-    cJSON_AddStringToObject(body, "reason", "step");
-    cJSON_AddBoolToObject(body, "allThreadsStopped", true);
-    
-    // Add source information
-    if (file) {
-        cJSON* source = cJSON_CreateObject();
-        if (source) {
-            cJSON_AddStringToObject(source, "path", file);
-            cJSON_AddStringToObject(source, "name", strrchr(file, '/') ? strrchr(file, '/') + 1 : file);
-            cJSON_AddItemToObject(body, "source", source);
-        }
-        
-        // Add line/column info
-        cJSON_AddNumberToObject(body, "line", line);
-        cJSON_AddNumberToObject(body, "column", 1);  // Default to column 1
-    }
-    
-    // Send the event
-    int result = dap_server_send_event(mock_debugger.server, "stopped", body);
-    if (result != 0) {
-        cJSON_Delete(body);
-    }
-    
-    return result;
-}
 
 /**
  * @brief Mock debugger's implementation of initialize command
@@ -2068,200 +1905,280 @@ int dbg_mock_set_default_capabilities(DAPServer *server) {
     );
 }
 
+
+
 /**
- * @brief Send demo output messages showing all output categories
+ * @brief Register command callbacks for mock debugger implementation
  * 
- * This function demonstrates all available output categories by sending
- * example messages for each one.
+ * This function connects the mock debugger's command implementations to the DAP server.
+ * Each callback implements the debugger-specific behavior for a DAP command.
+ * 
+ * For initialize:
+ * - Sets default capabilities via dbg_mock_set_default_capabilities()
+ * - No direct initialize callback needed - capabilities setup is sufficient
+ * 
+ * Command callback sequence:
+ * 1. DAP server receives command
+ * 2. Server validates protocol requirements
+ * 3. Server calls registered callback if present
+ * 4. Callback implements debugger-specific behavior
+ * 5. Server handles response and event generation
  * 
  * @param server The DAP server instance
+ * @return 0 on success, -1 on failure
  */
-void dbg_mock_send_demo_outputs(DAPServer *server)
-{
+int setup_server_callbacks(DAPServer *server) {
     if (!server) {
-        return;
-    }
-    
-    DBG_MOCK_LOG("Sending demo output messages for all categories");
-    
-    // Send examples of all output categories
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "This is a normal console message.\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_STDOUT, "This is a stdout message (usually blue).\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "This is a stderr message (usually red).\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_TELEMETRY, "This is a telemetry message (might not be shown).\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, "This is an important message (highlighted).\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_PROGRESS, "This is a progress message (might show with indicator).\n");
-    dap_server_send_output_category(server, DAP_OUTPUT_LOG, "This is a log message (usually subdued).\n");
-    
-    // Also show string-based API for comparison
-    dap_server_send_output_event(server, "console", "Using the string API directly: console category\n");
-    
-    // Simple output (defaults to console)
-    dap_server_send_output(server, "Using the simple output API (defaults to console)\n");
-}
-
-/**
- * @brief Send launch-related output messages
- * 
- * This function sends output messages after a program is launched,
- * demonstrating the different output categories.
- * 
- * @param server The DAP server instance
- * @param program_path The path to the launched program
- */
-void dbg_mock_show_launch_messages(DAPServer *server, const char *program_path)
-{
-    if (!server) {
-        return;
-    }
-    
-    // Safely handle NULL program path
-    const char *path_display = program_path ? program_path : "(unknown)";
-    
-    // Get the complete launch context for more detailed information
-    char output_message[512];
-    snprintf(output_message, sizeof(output_message), "Program launched: %s\n", path_display);
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
-    
-    // Get additional launch information from the server's debugger state
-    const char *source_path = server->debugger_state.source_path;
-    const char *map_path = server->debugger_state.map_path;
-    
-    if (source_path) {
-        snprintf(output_message, sizeof(output_message), "Source file: %s\n", source_path);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
-    }
-    
-    if (map_path) {
-        snprintf(output_message, sizeof(output_message), "Map file: %s\n", map_path);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
-    }
-    
-    // Show command line args if available
-    if (server->debugger_state.args_count > 0 && server->debugger_state.args) {
-        
-        // Construct a command line display
-        char cmdline[256] = "Command line:";
-        size_t pos = strlen(cmdline);
-        
-        for (int i = 0; i < server->debugger_state.args_count && 
-             i < 5 && // Limit display to 5 args to prevent buffer overflow
-             pos < sizeof(cmdline) - 30; i++) { // Reserve space for ellipsis
-            
-            const char *arg = server->debugger_state.args[i];
-            if (arg) {
-                snprintf(cmdline + pos, sizeof(cmdline) - pos, " %s", arg);
-                pos = strlen(cmdline);
-            }
-        }
-        
-        // If there are more args than we displayed, add ellipsis
-        if (server->debugger_state.args_count > 5) {
-            snprintf(cmdline + pos, sizeof(cmdline) - pos, " ...");
-        }
-        
-        strcat(cmdline, "\n");
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, cmdline);
-    }
-    
-    // Show a warning/stderr example
-    dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Warning: This is a mock debugger!\n");
-}
-
-/**
- * @brief Check if a breakpoint is hit at the specified location
- * 
- * @param address Memory address
- * @param source_path Source file path (optional)
- * @param line Line number
- * @return int Breakpoint ID if hit, 0 if no breakpoint
- */
-int dbg_mock_is_breakpoint_hit(uint32_t address, const char* source_path, int line) {
-    // For now we'll just check based on line number and source path
-    // In a real implementation, you'd map addresses to source lines
-    
-    if (line <= 0) {
-        return 0; // Invalid line
-    }
-    
-    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
-        // If source path is specified, match it
-        if (source_path && mock_debugger.breakpoints[i].source_path) {
-            if (strcmp(source_path, mock_debugger.breakpoints[i].source_path) != 0) {
-                continue; // Different source file
-            }
-        }
-        
-        // Check line
-        if (mock_debugger.breakpoints[i].line == line) {
-            DBG_MOCK_LOG("Hit breakpoint %d at line %d in %s", 
-                       mock_debugger.breakpoints[i].id,
-                       mock_debugger.breakpoints[i].line,
-                       mock_debugger.breakpoints[i].source_path ? 
-                           mock_debugger.breakpoints[i].source_path : "unknown");
-            
-            return mock_debugger.breakpoints[i].id;
-        }
-    }
-    
-    return 0; // No breakpoint hit
-}
-
-/**
- * @brief Trigger a breakpoint hit event
- * 
- * @param breakpoint_id ID of the breakpoint hit
- * @return int 0 on success, non-zero on failure
- */
-int dbg_mock_trigger_breakpoint_hit(int breakpoint_id) {
-    if (!mock_debugger.server || breakpoint_id <= 0) {
         return -1;
     }
 
+    DBG_MOCK_LOG("Initializing mock debugger");
 
+    // Set up default capabilities
+    dbg_mock_set_default_capabilities(server);
 
-    // Find the breakpoint
-    MockBreakpoint* bp = NULL;
-    for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
-        if (mock_debugger.breakpoints[i].id == breakpoint_id) {
-            bp = &mock_debugger.breakpoints[i];
-            break;
-        }
-    }
-    
-    if (!bp) {
-        DBG_MOCK_LOG("Breakpoint %d not found", breakpoint_id);
-        return -1;
-    }
-    
-    
+    // Register command callbacks
+    dap_server_register_command_callback(server, DAP_CMD_NEXT, cmd_next);
+    dap_server_register_command_callback(server, DAP_CMD_STEP_IN, cmd_step_in);
+    dap_server_register_command_callback(server, DAP_CMD_STEP_OUT, cmd_step_out);
+    dap_server_register_command_callback(server, DAP_CMD_CONTINUE, cmd_continue);
+    dap_server_register_command_callback(server, DAP_CMD_READ_MEMORY, cmd_read_memory);
+    dap_server_register_command_callback(server, DAP_CMD_WRITE_MEMORY, cmd_write_memory);
+    dap_server_register_command_callback(server, DAP_CMD_SCOPES, cmd_scopes);
+    dap_server_register_command_callback(server, DAP_CMD_VARIABLES, cmd_variables);
+    dap_server_register_command_callback(server, DAP_CMD_EXCEPTION_INFO, on_set_exception_breakpoints);
+    dap_server_register_command_callback(server, DAP_CMD_SET_BREAKPOINTS, cmd_set_breakpoints);
+    dap_server_register_command_callback(server, DAP_CMD_LAUNCH, cmd_launch);
+    dap_server_register_command_callback(server, DAP_CMD_RESTART, cmd_restart);
+    dap_server_register_command_callback(server, DAP_CMD_SET_VARIABLE, &cmd_set_variable);
+    dap_server_register_command_callback(server, DAP_CMD_STACK_TRACE, mock_handle_stack_trace);
 
+    // Initialize debugger state
+    init_debugger_state(server);
 
-   
-    // Add description
-    char description[128];
-    snprintf(description, sizeof(description), "Breakpoint %d hit at line %d", breakpoint_id, bp->line);
-        
-
-#if 0 // later maybe fill this    
-    // Add hitBreakpointIds array
-    cJSON* hit_ids = cJSON_CreateArray();
-    if (hit_ids) {
-        cJSON_AddItemToArray(hit_ids, cJSON_CreateNumber(breakpoint_id));
-        cJSON_AddItemToObject(body, "hitBreakpointIds", hit_ids);
-    }
-#endif
-
-    // Send the stopped event
-    // Stopped because a breakpoint was hit.
-    dap_server_send_stopped_event(mock_debugger.server, "breakpoint", description); 
-    
-    
-    // Update state
-    mock_debugger.server->debugger_state.has_stopped = true;
-    mock_debugger.last_event = DAP_EVENT_STOPPED;
-    
-    DBG_MOCK_LOG("Sent breakpoint stopped event");
     return 0;
 }
 
+/**
+ * @brief Variables command handler
+ * 
+ * This function handles the variables command by:
+ * 1. Getting the variables reference from the command context
+ * 2. Populating a variables array based on the reference type
+ * 3. Sending the response back to the client
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_variables(DAPServer *server) {
+    if (!server) {
+        return -1;
+    }
+    
+    DBG_MOCK_LOG("Handling variables command");
+    
+    // Extract variables reference from the command context
+    int variables_reference = server->current_command.context.variables.variables_reference;
+    DBG_MOCK_LOG("Variables reference: %d", variables_reference);
+    
+    // Buffer for informational messages
+    char info_message[256] = {0};
+    
+
+    // Handle different variable reference types
+    switch (variables_reference) {
+        case SCOPE_ID_LOCALS: {
+            // Use our helper function for local variables
+            add_local_variables(server, info_message, sizeof(info_message));
+            break;
+        }
+        
+        case SCOPE_ID_REGISTERS: {
+            // Use our helper function for register variables
+            add_register_variables(server, info_message, sizeof(info_message));
+            break;
+        }
+        
+        case SCOPE_ID_STATUS_FLAGS: {
+            // Use our helper function for status flag variables
+            add_status_flag_variables(server, info_message, sizeof(info_message));
+            break;
+        }
+   
+         
+        case SCOPE_ID_MEMORY: {
+            // Use our helper function for memory region variables
+            add_memory_region_variables(server, info_message, sizeof(info_message));
+            break;
+        }
+            
+        default:
+            dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Unknown variable reference\n");
+            break;
+    }
+    
+    // Output info message if we have one
+    if (info_message[0] != '\0') {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
+    }
+       
+    return 0;
+}
+
+
+/**
+ * @brief Set Variable command handler
+ * 
+ * This function handles the setVariable command by:
+ * 1. Extracting the variable parameters from the command context
+ * 2. Updating the variable value in our mock state
+ * 3. Sending a response with the updated variable
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_set_variable(DAPServer *server)
+{
+    if (!server) {
+        return -1;
+    }
+    
+    // Extract parameters from command context
+    int variables_reference = server->current_command.context.set_variable.variables_reference;
+    const char* name = server->current_command.context.set_variable.name;
+    const char* value = server->current_command.context.set_variable.value;
+    
+    DBG_MOCK_LOG("Handling setVariable command for %s = %s in container %d", 
+               name ? name : "(null)", value ? value : "(null)", variables_reference);
+    
+    // Validate required parameters
+    if (!name || !value) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, 
+                                     "Error: Missing name or value for setVariable\n");
+        return -1;
+    }
+    
+    // Prepare response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR,
+                                     "Error: Failed to create response body\n");
+        return -1;
+    }
+    
+    // Add basic fields to response that will be common for all variables
+    cJSON_AddStringToObject(body, "value", value);
+    cJSON_AddStringToObject(body, "type", "");  // Will be updated based on container
+    cJSON_AddNumberToObject(body, "variablesReference", 0);
+    
+    // Variable information to show in console
+    char info_message[256];
+    bool variable_found = false;
+    
+    // Handle different variable containers
+    switch (variables_reference) {
+        case SCOPE_ID_LOCALS: {
+            // Handle local variables
+            snprintf(info_message, sizeof(info_message), 
+                     "Setting local variable '%s' to %s\n", name, value);
+            
+            // Just accept all local variables in the mock
+            variable_found = true;
+            
+            // Determine type based on value format
+            const char* type = "string";
+            if (strcmp(value, "true") == 0 || strcmp(value, "false") == 0) {
+                type = "boolean";
+            } else if (isdigit((unsigned char)value[0]) || 
+                       (value[0] == '-' && isdigit((unsigned char)value[1]))) {
+                type = "integer";
+            } else if (value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
+                type = "integer";
+            }
+            
+            // Update type in response
+            cJSON_AddStringToObject(body, "type", type);
+            
+            dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
+            break;
+        }
+        
+        case SCOPE_ID_REGISTERS: {
+            // Handle register variables
+            snprintf(info_message, sizeof(info_message), 
+                     "Setting register '%s' to %s\n", name, value);
+            
+            // Find the register by name
+            for (size_t i = 0; i < NUM_REGISTERS; i++) {
+                if (strcmp(name, cpu_registers[i].name) == 0) {
+                    // Parse the value based on register type
+                    if (strcmp(cpu_registers[i].type, "integer") == 0) {
+                        // Handle hex values (0x...) and decimal values
+                        if (strncmp(value, "0x", 2) == 0 || strncmp(value, "0X", 2) == 0) {
+                            cpu_registers[i].value = (int)strtol(value, NULL, 16);
+                        } else {
+                            cpu_registers[i].value = atoi(value);
+                        }
+                    } else if (strcmp(cpu_registers[i].type, "bitmask") == 0) {
+                        // Handle binary (0b...), octal (0...), and hex (0x...)
+                        if (strncmp(value, "0b", 2) == 0 || strncmp(value, "0B", 2) == 0) {
+                            cpu_registers[i].value = (int)strtol(value + 2, NULL, 2);
+                        } else if (strncmp(value, "0x", 2) == 0 || strncmp(value, "0X", 2) == 0) {
+                            cpu_registers[i].value = (int)strtol(value, NULL, 16);
+                        } else if (value[0] == '0') {
+                            cpu_registers[i].value = (int)strtol(value, NULL, 8);
+                        } else {
+                            cpu_registers[i].value = atoi(value);
+                        }
+                    } else {
+                        // Octal format by default
+                        cpu_registers[i].value = (int)strtol(value, NULL, 8);
+                    }
+                    
+                    variable_found = true;
+                    cJSON_AddStringToObject(body, "type", cpu_registers[i].type);
+                    
+                    // Format the value for display according to register type
+                    char formatted_value[32];
+                    if (strcmp(cpu_registers[i].type, "integer") == 0) {
+                        snprintf(formatted_value, sizeof(formatted_value), "0x%04X", cpu_registers[i].value);
+                    } else if (strcmp(cpu_registers[i].type, "bitmask") == 0) {
+                        snprintf(formatted_value, sizeof(formatted_value), "0b%04X", cpu_registers[i].value);
+                    } else {
+                        snprintf(formatted_value, sizeof(formatted_value), "%o", cpu_registers[i].value);
+                    }
+                    cJSON_DeleteItemFromObject(body, "value");
+                    cJSON_AddStringToObject(body, "value", formatted_value);
+                    
+                    break;
+                }
+            }
+            
+            dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
+            break;
+        }
+        
+        default:
+            snprintf(info_message, sizeof(info_message), 
+                     "Unknown variable container %d\n", variables_reference);
+            dap_server_send_output_category(server, DAP_OUTPUT_STDERR, info_message);
+            variable_found = false;
+            break;
+    }
+    
+    if (!variable_found) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, 
+                                     "Error: Variable not found\n");
+        cJSON_Delete(body);
+        return -1;
+    }
+    
+    // Send the response with the updated variable information
+    dap_server_send_response(server, DAP_CMD_SET_VARIABLE, server->sequence++, 
+                          server->current_command.request_seq, true, body);
+    
+    // Clean up
+    cJSON_Delete(body);
+    
+    return 0;
+}

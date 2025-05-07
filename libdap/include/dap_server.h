@@ -167,14 +167,6 @@ typedef struct
     int sequence;        /**< Sequence number of the response */
 } DAPResponse;
 
-// Source line mapping structure
-typedef struct
-{
-    const char *file_path;  /**< Source file path */
-    int original_line;      /**< Original line number */
-    int dap_line;           /**< DAP line number */
-    uint32_t address;       /**< Memory address */
-} SourceLineMap;
 
 /**
  * @struct Register
@@ -217,11 +209,13 @@ typedef struct
  * @brief Granularity options for stepping commands (per DAP spec)
  */
 typedef enum {
-    DAP_STEP_GRANULARITY_INSTRUCTION,  /**< Step by a single instruction */
-    DAP_STEP_GRANULARITY_LINE,         /**< Step by source line */
-    DAP_STEP_GRANULARITY_STATEMENT     /**< Step by statement (default) */
+    /// @brief Step by statement (default) - Stop at next source statement (PC at different line or new symbol)
+    DAP_STEP_GRANULARITY_STATEMENT,     
+    /// @brief Step by a single instruction - Stop after next machine instruction (PC += 1 instruction))
+    DAP_STEP_GRANULARITY_INSTRUCTION, 
+    /// @brief Step by source line - Stop at next different source line
+    DAP_STEP_GRANULARITY_LINE,        
 } StepGranularity;
-
 
 /**
  * @struct DAPCommandHandler
@@ -236,7 +230,7 @@ typedef int (*DAPCommandHandler)(DAPServer *server, cJSON *args, DAPResponse *re
 typedef struct {
     int thread_id;               /**< Thread ID to step */
     bool single_thread;          /**< Whether to step only the specified thread */
-    const char* granularity;     /**< Step granularity (instruction, line, statement) */
+    StepGranularity granularity; /**< Step granularity (instruction, line, statement) */
     int target_id;               /**< Target ID (used for stepIn) */
 } StepCommandContext;
 
@@ -264,6 +258,49 @@ typedef struct {
     const char** conditions;     /**< Array of filter conditions */
     size_t condition_count;      /**< Number of conditions */
 } ExceptionBreakpointCommandContext;
+
+/**
+ * @struct StackTraceFormat
+ * @brief Format options for stack trace requests
+ */
+typedef struct {
+    bool parameters;          /**< Include parameter information */
+    bool parameter_types;     /**< Include parameter type information */
+    bool parameter_names;     /**< Include parameter name information */
+    bool parameter_values;    /**< Include parameter value information */
+    bool line;                /**< Include line information */
+    bool module;              /**< Include module information */
+    bool include_all;         /**< Include all possible information */
+} StackTraceFormat;
+
+/**
+ * @struct StackTraceCommandContext
+ * @brief Context for stack trace command
+ */
+typedef struct {
+    int start_frame;             /**< Starting frame index */
+    int levels;                  /**< Number of frames to retrieve */
+    StackTraceFormat format;     /**< Format options for the response */
+    
+    // Results
+    DAPStackFrame *frames;       /**< Stack frames array to be filled by callback */
+    int frame_count;             /**< Number of frames in the array */
+    int total_frames;            /**< Total number of frames available */
+} StackTraceCommandContext;
+
+/**
+ * @struct DAPStackFrameResponse
+ * @brief Response structure for stack frames that callbacks can fill
+ */
+typedef struct {
+    int id;                 /**< Frame ID (typically 0 for the top frame) */
+    char* name;             /**< Name of the frame (e.g., function name) */
+    int line;               /**< Source line number */
+    int column;             /**< Source column number */
+    char* source_path;      /**< Path to the source file */
+    char* source_name;      /**< Name of the source file */
+    bool valid;             /**< Whether this frame is valid/populated */
+} DAPStackFrameResponse;
 
 /**
  * @struct LaunchCommandContext
@@ -385,6 +422,10 @@ typedef struct {
     int start;                      /**< Optional start index for paged requests */
     int count;                      /**< Optional number of variables to return */
     const char* format;             /**< Optional formatting hints */
+
+     // Results
+    DAPVariable *variable_array;       /**< Variables array to be filled by callback */
+    int variable_count;             /**< Number of variables in the array */        
 } VariablesCommandContext;
 
 /**
@@ -434,6 +475,7 @@ typedef struct {
     // Program information
     const char* program_path;     /**< Current program file path */
     const char* source_path;      /**< Current source file path */
+    const char* source_name;      /**< Current source file name */
     const char* map_path;         /**< Map file for debugging symbols */
     const char* working_directory;/**< Working directory for the debuggee */
     bool no_debug;                /**< Whether debugging is disabled */
@@ -471,16 +513,10 @@ struct DAPServer
     // Debugging state information structure for storing callback results
     DebuggerState debugger_state;  /**< Current debugger state, updated by callbacks */
 
-    const DAPSource *current_source;
-
     int breakpoint_count;
     DAPBreakpoint *breakpoints;
 
-    // Line mapping fields
-    SourceLineMap *line_maps;
-    int line_map_count;
-    int line_map_capacity;
-
+    
     // Generic callback array for command implementations. MUST be set up the the DEBUGGER implementation.
     DAPCommandCallback command_callbacks[DAP_CMD_MAX]; /**< Callback functions for command implementation */
     
@@ -508,6 +544,7 @@ struct DAPServer
             ScopesCommandContext scopes;            /**< Context for scopes command */
             VariablesCommandContext variables;       /**< Context for variables command */
             SetVariableCommandContext set_variable; /**< Context for setVariable command */
+            StackTraceCommandContext stack_trace;   /**< Context for stack trace command */
             // Add more command-specific contexts as needed
         } context;
     } current_command;
@@ -671,6 +708,17 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
  */
 int dap_server_send_output_event(DAPServer *server, const char *category, const char *output);
 
+/**
+ * @brief Send an output message to the debug console
+ * 
+ * Simplified version of dap_server_send_output_event that uses "console" as the category.
+ * Useful for quick debug messages or informational output.
+ * 
+ * @param server Server instance
+ * @param message The message to display in the debug console
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_output(DAPServer *server, const char *message);
 
 /**
  * @brief Send an output event with specified category using enum
@@ -749,17 +797,6 @@ void dap_server_clear_breakpoints(DAPServer *server);
  */
 void initialize_command_handlers(DAPServer *server);
 
-/**
- * @brief Helper function for cleaning up breakpoints
- * @param server Server instance
- */
-void cleanup_breakpoints(DAPServer *server);
-
-/**
- * @brief Helper function for cleaning up line maps
- * @param server Server instance
- */
-void cleanup_line_maps(DAPServer *server);
 
 /**
  * @brief Run the main server loop

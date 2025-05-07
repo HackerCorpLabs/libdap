@@ -156,6 +156,14 @@ int dbg_mock_is_breakpoint_hit(uint32_t address, const char* source_path, int li
  */
 int dbg_mock_trigger_breakpoint_hit(int breakpoint_id);
 
+/**
+ * @brief Command callback for stackTrace request
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+int mock_handle_stack_trace(DAPServer *server);
+
 #ifdef __cplusplus
 }
 #endif

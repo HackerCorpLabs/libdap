@@ -154,22 +154,6 @@ const DebuggerCommand commands[] = {
         .handler = handle_info_command
     },
     {
-        .name = "delete",
-        .alias = "d",
-        .syntax = "delete <breakpoint_id>",
-        .description = "Delete breakpoint",
-        .request_format = "{\"breakpointId\": number}",
-        .response_format = "{\"breakpointId\": number}",
-        .events = "breakpoint",
-        .has_options = true,
-        .option_types = "breakpoint_id",
-        .option_descriptions = "ID of breakpoint to delete",
-        .examples = "delete 1|Delete breakpoint with ID 1",
-        .category = CATEGORY_BREAKPOINTS,
-        .implemented = true,
-        .handler = handle_delete_command
-    },
-    {
         .name = "list",
         .alias = "l",
         .syntax = "list [file]",

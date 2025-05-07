@@ -353,6 +353,16 @@ void cleanup_command_context(DAPServer *server)
             }
             break;
             
+        case DAP_CMD_WRITE_MEMORY:
+            // Free dynamically allocated strings
+            if (server->current_command.context.write_memory.memory_reference) {
+                free((void*)server->current_command.context.write_memory.memory_reference);
+            }
+            if (server->current_command.context.write_memory.data) {
+                free((void*)server->current_command.context.write_memory.data);
+            }
+            break;
+            
         case DAP_CMD_VARIABLES:
             // Free format string if set
             if (server->current_command.context.variables.format) {

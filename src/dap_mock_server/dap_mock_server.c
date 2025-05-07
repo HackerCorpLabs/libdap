@@ -59,6 +59,7 @@ static int cmd_restart(DAPServer* server);
 static int cmd_disconnect(DAPServer* server);
 static int cmd_disassemble(DAPServer* server);
 static int cmd_set_variable(DAPServer *server);
+static int cmd_write_memory(DAPServer *server);
 
 // Forward declaration for functions from libdap that we need
 int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
@@ -255,6 +256,125 @@ static int cmd_read_memory(DAPServer *server) {
     // Send the response
     int seq = server->current_command.request_seq;
     int result = dap_server_send_response(server, DAP_CMD_READ_MEMORY, server->sequence++, seq, true, cJSON_Parse(response.data));
+    
+    free(response.data);
+    
+    return (result == 0) ? 0 : -1;
+}
+
+/**
+ * @brief Write memory command handler
+ * 
+ * This function handles the writeMemory command from DAP by:
+ * 1. Extracting the memory reference, offset, and data from the command context
+ * 2. Converting the memory reference to an address
+ * 3. Writing the data to the mock memory
+ * 4. Setting up a response with the number of bytes written
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_write_memory(DAPServer *server) {
+    if (!server) {
+        return -1;
+    }
+    
+    // Ensure mock memory is initialized
+    initialize_mock_memory();
+    
+    DBG_MOCK_LOG("Handling writeMemory command");
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Writing memory...\n");
+    
+    // Extract parameters from the command context
+    const char* memory_reference = server->current_command.context.write_memory.memory_reference;
+    uint64_t offset = server->current_command.context.write_memory.offset;
+    const char* data = server->current_command.context.write_memory.data;
+    bool allow_partial = server->current_command.context.write_memory.allow_partial;
+    
+    DBG_MOCK_LOG("Memory reference: %s, offset: %llu, allow_partial: %d", 
+              memory_reference, (unsigned long long)offset, allow_partial);
+    
+    // Convert memory reference to an address
+    char* endptr = NULL;
+    uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
+    if (endptr == memory_reference || *endptr != '\0') {
+        DBG_MOCK_LOG("Invalid memory reference format: %s", memory_reference);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Invalid memory reference format\n");
+        return -1;
+    }
+    
+    // Apply offset to address
+    address += (uint32_t)offset;
+    
+    // Ensure the address is within range
+    if (address >= sizeof(mock_memory)) {
+        DBG_MOCK_LOG("Address out of range: 0x%x", address);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
+        return -1;
+    }
+    
+    // Decode base64 data
+    size_t data_len = strlen(data);
+    size_t decoded_len = 0;
+    uint8_t* decoded_data = NULL;
+    
+    // Simple hex decoding for mock implementation
+    if (data_len % 2 != 0) {
+        DBG_MOCK_LOG("Invalid hex data length: %zu", data_len);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Invalid hex data length\n");
+        return -1;
+    }
+    
+    // Convert hex string to bytes
+    for (size_t i = 0; i < decoded_len; i++) {
+        char hex_byte[3] = {data[i*2], data[i*2+1], '\0'};
+        decoded_data[i] = (uint8_t)strtoul(hex_byte, NULL, 16);
+    }
+    
+    // Determine how many bytes we can actually write
+    size_t available_bytes = sizeof(mock_memory) - address;
+    size_t bytes_to_write = (decoded_len <= available_bytes) ? decoded_len : available_bytes;
+    
+    // If we can't write all bytes and partial writes aren't allowed, fail
+    if (bytes_to_write < decoded_len && !allow_partial) {
+        free(decoded_data);
+        DBG_MOCK_LOG("Cannot write all bytes and partial writes not allowed");
+        return -1;
+    }
+    
+    // Write the data to mock memory
+    memcpy(&mock_memory[address], decoded_data, bytes_to_write);
+    free(decoded_data);
+    
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        DBG_MOCK_LOG("Failed to create response body");
+        return -1;
+    }
+    
+    // Add bytes written to response
+    cJSON_AddNumberToObject(body, "bytesWritten", bytes_to_write);
+    
+    // If partial write occurred, add offset
+    if (bytes_to_write < decoded_len) {
+        cJSON_AddNumberToObject(body, "offset", bytes_to_write);
+    }
+    
+    // Set the response
+    DAPResponse response = {0};
+    response.success = true;
+    response.data = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    
+    if (!response.data) {
+        DBG_MOCK_LOG("Failed to format response body");
+        return -1;
+    }
+    
+    // Send the response
+    int seq = server->current_command.request_seq;
+    int result = dap_server_send_response(server, DAP_CMD_WRITE_MEMORY, server->sequence++, seq, true, cJSON_Parse(response.data));
     
     free(response.data);
     
@@ -1552,6 +1672,7 @@ int setup_server_callbacks(DAPServer *server) {
     dap_server_register_command_callback(server, DAP_CMD_STEP_OUT, cmd_step_out);
     dap_server_register_command_callback(server, DAP_CMD_CONTINUE, cmd_continue);
     dap_server_register_command_callback(server, DAP_CMD_READ_MEMORY, cmd_read_memory);
+    dap_server_register_command_callback(server, DAP_CMD_WRITE_MEMORY, cmd_write_memory);
     dap_server_register_command_callback(server, DAP_CMD_SCOPES, cmd_scopes);
     dap_server_register_command_callback(server, DAP_CMD_VARIABLES, cmd_variables);
     dap_server_register_command_callback(server, DAP_CMD_EXCEPTION_INFO, on_set_exception_breakpoints);

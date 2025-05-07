@@ -323,6 +323,17 @@ typedef struct {
 } ReadMemoryCommandContext;
 
 /**
+ * @struct WriteMemoryCommandContext
+ * @brief Context for writeMemory command
+ */
+typedef struct {
+    const char* memory_reference;   /**< Memory reference (required) */
+    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    const char* data;               /**< Data to write in base64 encoding (required) */
+    bool allow_partial;             /**< Whether to allow partial writes (optional) */
+} WriteMemoryCommandContext;
+
+/**
  * @struct ScopesCommandContext
  * @brief Context for scopes command
  */
@@ -446,6 +457,7 @@ struct DAPServer
             DisconnectCommandContext disconnect;    /**< Context for disconnect command */
             DisassembleCommandContext disassemble;  /**< Context for disassemble command */
             ReadMemoryCommandContext read_memory;   /**< Context for readMemory command */
+            WriteMemoryCommandContext write_memory;  /**< Context for writeMemory command */
             ScopesCommandContext scopes;            /**< Context for scopes command */
             VariablesCommandContext variables;       /**< Context for variables command */
             SetVariableCommandContext set_variable; /**< Context for setVariable command */

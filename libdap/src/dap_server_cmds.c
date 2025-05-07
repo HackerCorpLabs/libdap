@@ -1597,49 +1597,81 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
 
 int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)args; // Mark as unused
-    if (!server->is_running || !server->attached)
+    if (!server || !args || !response)
     {
-        response->success = false;
-        response->error_message = strdup("Debugger not running or attached");
-        return 0;
+        set_response_error(response, "Invalid arguments");
+        return -1;
     }
 
-    // Get memory write parameters
-    cJSON *address_json = cJSON_GetObjectItem(args, "address");
-    cJSON *data_json = cJSON_GetObjectItem(args, "data");
-    if (!address_json || !data_json)
+    // Initialize the command context for writeMemory
+    server->current_command.type = DAP_CMD_WRITE_MEMORY;
+    memset(&server->current_command.context.write_memory, 0, sizeof(WriteMemoryCommandContext));
+
+    // Parse required arguments - memoryReference
+    cJSON *memory_reference = cJSON_GetObjectItem(args, "memoryReference");
+    if (!memory_reference || !cJSON_IsString(memory_reference))
     {
-        response->success = false;
-        response->error_message = strdup("Missing required parameters");
-        return 0;
+        set_response_error(response, "Missing or invalid memoryReference");
+        return -1;
+    }
+    
+    // Store memory reference in context
+    server->current_command.context.write_memory.memory_reference = strdup(memory_reference->valuestring);
+    if (!server->current_command.context.write_memory.memory_reference) {
+        set_response_error(response, "Failed to allocate memory for memoryReference");
+        return -1;
     }
 
-    // Create response body
-    cJSON *body = cJSON_CreateObject();
-    if (!body)
+    // Parse required arguments - data
+    cJSON *data = cJSON_GetObjectItem(args, "data");
+    if (!data || !cJSON_IsString(data))
     {
-        response->success = false;
-        response->error_message = strdup("Failed to create response body");
-        return 0;
+        set_response_error(response, "Missing or invalid data");
+        return -1;
+    }
+    
+    // Store data in context
+    server->current_command.context.write_memory.data = strdup(data->valuestring);
+    if (!server->current_command.context.write_memory.data) {
+        set_response_error(response, "Failed to allocate memory for data");
+        return -1;
     }
 
-    // Simulate memory write
-    cJSON_AddNumberToObject(body, "bytesWritten", strlen(data_json->valuestring));
-
-    // Convert to string
-    char *body_str = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    if (!body_str)
+    // Parse optional offset parameter (defaults to 0)
+    server->current_command.context.write_memory.offset = 0;
+    cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
+    if (offset_json && cJSON_IsNumber(offset_json))
     {
-        response->success = false;
-        response->error_message = strdup("Failed to format response body");
-        return 0;
+        server->current_command.context.write_memory.offset = (uint64_t)offset_json->valuedouble;
     }
 
-    response->success = true;
-    response->data = body_str;
-    return 0;
+    // Parse optional allowPartial parameter (defaults to false)
+    server->current_command.context.write_memory.allow_partial = false;
+    cJSON *allow_partial_json = cJSON_GetObjectItem(args, "allowPartial");
+    if (allow_partial_json && cJSON_IsBool(allow_partial_json))
+    {
+        server->current_command.context.write_memory.allow_partial = cJSON_IsTrue(allow_partial_json);
+    }
+
+    // Call the implementation callback if registered
+    if (server->command_callbacks[DAP_CMD_WRITE_MEMORY]) {
+        DAP_SERVER_DEBUG_LOG("Calling implementation callback for writeMemory");
+        
+        int callback_result = server->command_callbacks[DAP_CMD_WRITE_MEMORY](server);
+        if (callback_result < 0) {
+            DAP_SERVER_DEBUG_LOG("writeMemory implementation callback failed");
+            set_response_error(response, "writeMemory implementation callback failed");
+            return -1;
+        }
+        
+        // The callback should have prepared the response
+        response->success = true;
+        return 0;
+    }
+    
+    DAP_SERVER_DEBUG_LOG("No implementation callback for writeMemory");
+    set_response_error(response, "writeMemory not implemented");
+    return -1;
 }
 
 int handle_read_registers(DAPServer *server, cJSON *args, DAPResponse *response)

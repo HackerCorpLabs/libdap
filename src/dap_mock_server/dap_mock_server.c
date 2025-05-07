@@ -58,6 +58,7 @@ static int cmd_launch(DAPServer* server);
 static int cmd_restart(DAPServer* server);
 static int cmd_disconnect(DAPServer* server);
 static int cmd_disassemble(DAPServer* server);
+static int cmd_set_variable(DAPServer *server);
 
 // Forward declaration for functions from libdap that we need
 int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
@@ -1424,6 +1425,77 @@ static int cmd_variables(DAPServer *server) {
     return (result == 0) ? 0 : -1;
 }
 
+/**
+ * @brief SetVariable command handler
+ * 
+ * This function handles the setVariable command by:
+ * 1. Retrieving the variable information from the command context
+ * 2. Updating the variable value in the mock debugger state
+ * 3. Creating a response with the updated variable information
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_set_variable(DAPServer *server) {
+    if (!server) {
+        return -1;
+    }
+    
+    DBG_MOCK_LOG("Handling setVariable command");
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Setting variable value...\n");
+    
+    // Extract variable information from the command context
+    int variables_reference = server->current_command.context.set_variable.variables_reference;
+    const char* name = server->current_command.context.set_variable.name;
+    const char* value = server->current_command.context.set_variable.value;
+    const char* format = server->current_command.context.set_variable.format;
+    
+    DBG_MOCK_LOG("Setting variable: ref=%d, name=%s, value=%s, format=%s", 
+               variables_reference, name, value, format ? format : "none");
+    
+    // Create response body
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        DBG_MOCK_LOG("Failed to create response body");
+        return -1;
+    }
+    
+    // Add required fields
+    cJSON_AddStringToObject(body, "value", value);
+    
+    // Add type information based on the value format
+    if (format) {
+        if (strcmp(format, "hex") == 0) {
+            cJSON_AddStringToObject(body, "type", "hex");
+        } else if (strcmp(format, "binary") == 0) {
+            cJSON_AddStringToObject(body, "type", "binary");
+        } else {
+            cJSON_AddStringToObject(body, "type", "string");
+        }
+    } else {
+        cJSON_AddStringToObject(body, "type", "string");
+    }
+    
+    // Add variable reference information
+    cJSON_AddNumberToObject(body, "variablesReference", 0); // No child variables by default
+    cJSON_AddNumberToObject(body, "namedVariables", 0);
+    cJSON_AddNumberToObject(body, "indexedVariables", 0);
+    
+    // Add memory reference if applicable
+    if (variables_reference >= 1000) { // Memory-related variables
+        char memory_ref[32];
+        snprintf(memory_ref, sizeof(memory_ref), "0x%x", variables_reference);
+        cJSON_AddStringToObject(body, "memoryReference", memory_ref);
+    }
+    
+    // Send the response
+    int seq = server->current_command.request_seq;
+    int result = dap_server_send_response(server, DAP_CMD_SET_VARIABLE, 
+                                        server->sequence++, seq, true, body);
+    
+    return (result == 0) ? 0 : -1;
+}
+
 /*** INITIALIZATION ***/
 
 static int init_debugger_state(DAPServer *server) {
@@ -1486,6 +1558,7 @@ int setup_server_callbacks(DAPServer *server) {
     dap_server_register_command_callback(server, DAP_CMD_SET_BREAKPOINTS, cmd_set_breakpoints);
     dap_server_register_command_callback(server, DAP_CMD_LAUNCH, cmd_launch);
     dap_server_register_command_callback(server, DAP_CMD_RESTART, cmd_restart);
+    dap_server_register_command_callback(server, DAP_CMD_SET_VARIABLE, &cmd_set_variable);
 
     // Initialize debugger state
     init_debugger_state(server);

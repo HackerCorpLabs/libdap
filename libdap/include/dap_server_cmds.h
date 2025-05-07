@@ -88,10 +88,7 @@ int handle_loaded_sources(DAPServer* server, cJSON* args, DAPResponse* response)
 int handle_break(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_scopes(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_variables(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_continue(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_next(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_step_in(DAPServer* server, cJSON* args, DAPResponse* response);
-int handle_step_out(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_set_variable(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_evaluate(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_configuration_done(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_read_memory(DAPServer* server, cJSON* args, DAPResponse* response);
@@ -117,3 +114,12 @@ int handle_execution_control(DAPServer* server, DAPCommandType command, cJSON* a
  * @return 0 on success, non-zero on failure
  */
 int send_initialized_event(DAPServer *server);
+
+int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response);
+int handle_next(DAPServer *server, cJSON *args, DAPResponse *response);
+int handle_step_in(DAPServer *server, cJSON *args, DAPResponse *response);
+int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response);
+
+void cleanup_debugger_state(DAPServer *server);
+void free_breakpoints_array(DAPBreakpoint *breakpoints, int count);
+void free_filter_arrays(char **filter_ids, char **filter_conditions, int count);

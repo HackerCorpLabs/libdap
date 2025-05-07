@@ -360,6 +360,19 @@ void cleanup_command_context(DAPServer *server)
             }
             break;
             
+        case DAP_CMD_SET_VARIABLE:
+            // Free dynamically allocated strings
+            if (server->current_command.context.set_variable.name) {
+                free((void*)server->current_command.context.set_variable.name);
+            }
+            if (server->current_command.context.set_variable.value) {
+                free((void*)server->current_command.context.set_variable.value);
+            }
+            if (server->current_command.context.set_variable.format) {
+                free((void*)server->current_command.context.set_variable.format);
+            }
+            break;
+            
         default:
             // No cleanup needed for other command types
             break;
@@ -760,7 +773,7 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_STACK_TRACE] = &handle_stack_trace;
     server->command_handlers[DAP_CMD_SCOPES] = &handle_scopes;
     server->command_handlers[DAP_CMD_VARIABLES] = &handle_variables;
-    server->command_handlers[DAP_CMD_SET_VARIABLE] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_SET_VARIABLE] = &handle_set_variable;
     server->command_handlers[DAP_CMD_SOURCE] = &handle_source;
     server->command_handlers[DAP_CMD_THREADS] = &handle_threads;
     server->command_handlers[DAP_CMD_EVALUATE] = &handle_evaluate;

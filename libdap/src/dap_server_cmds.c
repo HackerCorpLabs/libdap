@@ -3445,3 +3445,92 @@ int handle_threads(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
+/**
+ * @brief Handle the setVariable command
+ * 
+ * This function implements the DAP setVariable command which allows clients to modify
+ * the value of a variable in the debugger. The command requires:
+ * - variablesReference: The reference of the variable container
+ * - name: The name of the variable to modify
+ * - value: The new value to set
+ * 
+ * Optional parameters:
+ * - format: Specifies how the value should be formatted
+ * 
+ * The response includes:
+ * - value: The new value of the variable
+ * - type: The type of the variable (if available)
+ * - variablesReference: Reference for child variables (if any)
+ * - namedVariables: Number of named child variables
+ * - indexedVariables: Number of indexed child variables
+ * - memoryReference: Memory reference for the variable (if applicable)
+ * 
+ * @param server The DAP server instance
+ * @param args The command arguments as a JSON object
+ * @param response The response structure to fill
+ * @return int 0 on success, non-zero on failure
+ */
+int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !args || !response) {
+        return -1;
+    }
+
+    // Parse required arguments
+    cJSON *variablesReference = cJSON_GetObjectItem(args, "variablesReference");
+    cJSON *name = cJSON_GetObjectItem(args, "name");
+    cJSON *value = cJSON_GetObjectItem(args, "value");
+
+    // Validate required arguments
+    if (!variablesReference || !name || !value) {
+        set_response_error(response, "Missing required arguments");
+        return -1;
+    }
+
+    // Store command context for the implementation callback
+    server->current_command.type = DAP_CMD_SET_VARIABLE;
+    server->current_command.context.set_variable.variables_reference = variablesReference->valueint;
+    server->current_command.context.set_variable.name = strdup(name->valuestring);
+    server->current_command.context.set_variable.value = strdup(value->valuestring);
+
+    // Parse optional format argument
+    cJSON *format = cJSON_GetObjectItem(args, "format");
+    if (format) {
+        server->current_command.context.set_variable.format = strdup(format->valuestring);
+    }
+
+    // Check if there's a registered callback for this command
+    if (server->command_callbacks[DAP_CMD_SET_VARIABLE]) {
+        int result = server->command_callbacks[DAP_CMD_SET_VARIABLE](server);
+        if (result == 0) {
+            // Callback handled the command - response will be sent by the callback
+            return 0;
+        }
+        // If the callback returns non-zero, fall back to default implementation
+    }
+
+    // Create response body
+    cJSON *body = cJSON_CreateObject();
+    if (!body) {
+        cleanup_command_context(server);
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Add required fields
+    cJSON_AddStringToObject(body, "value", value->valuestring);
+
+    // Add optional fields if available
+    if (format) {
+        cJSON_AddStringToObject(body, "type", "string"); // Example type
+        cJSON_AddNumberToObject(body, "variablesReference", 0);
+        cJSON_AddNumberToObject(body, "namedVariables", 0);
+        cJSON_AddNumberToObject(body, "indexedVariables", 0);
+        cJSON_AddStringToObject(body, "memoryReference", "");
+    }
+
+    set_response_success(response, body);
+    cJSON_Delete(body);
+    return 0;
+}
+

@@ -343,6 +343,17 @@ typedef struct {
 } VariablesCommandContext;
 
 /**
+ * @struct SetVariableCommandContext
+ * @brief Context for setVariable command
+ */
+typedef struct {
+    int variables_reference;        /**< The reference of the variable container (required) */
+    const char* name;              /**< The name of the variable in the container (required) */
+    const char* value;             /**< The value to set (required) */
+    const char* format;            /**< Optional formatting hints */
+} SetVariableCommandContext;
+
+/**
  * @typedef DAPCommandCallback
  * @brief Function signature for command callbacks
  */
@@ -437,6 +448,7 @@ struct DAPServer
             ReadMemoryCommandContext read_memory;   /**< Context for readMemory command */
             ScopesCommandContext scopes;            /**< Context for scopes command */
             VariablesCommandContext variables;       /**< Context for variables command */
+            SetVariableCommandContext set_variable; /**< Context for setVariable command */
             // Add more command-specific contexts as needed
         } context;
     } current_command;

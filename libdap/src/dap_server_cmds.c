@@ -83,6 +83,7 @@ static char* base64_encode(const uint8_t* data, size_t len) {
 // Forward declarations for helper functions
 void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count);
 void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count);
+void free_variable_array(DAPVariable *variables, int count);
 static void set_response_success(DAPResponse *response, cJSON *body);
 static void set_response_error(DAPResponse *response, const char *error_message);
 int mock_handle_stack_trace(DAPServer *server);
@@ -2119,6 +2120,10 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
     server->current_command.type = DAP_CMD_SCOPES;
     server->current_command.request_seq = response->request_seq;
     server->current_command.context.scopes.frame_id = frameId->valueint;
+    
+    // Initialize the scopes fields
+    server->current_command.context.scopes.scopes = NULL;
+    server->current_command.context.scopes.scope_count = 0;
 
     // Check if there's a registered callback for this command
     if (server->command_callbacks[DAP_CMD_SCOPES])
@@ -2126,10 +2131,97 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
         int result = server->command_callbacks[DAP_CMD_SCOPES](server);
         if (result == 0)
         {
-            // Callback handled the command - response will be sent by the callback
-            return 0;
+            // Callback succeeded - check if it populated the scopes
+            if (server->current_command.context.scopes.scopes != NULL && 
+                server->current_command.context.scopes.scope_count > 0)
+            {
+                // The callback populated the scopes, create a response from them
+                cJSON *body = cJSON_CreateObject();
+                if (!body)
+                {
+                    // Clean up allocated scopes
+                    DAPScope* scopes = server->current_command.context.scopes.scopes;
+                    int scope_count = server->current_command.context.scopes.scope_count;
+                    for (int i = 0; i < scope_count; i++)
+                    {
+                        free(scopes[i].name);
+                        if (scopes[i].source_path)
+                            free(scopes[i].source_path);
+                    }
+                    free(scopes);
+                    
+                    set_response_error(response, "Failed to create response body");
+                    return -1;
+                }
+                
+                // Create scopes array
+                cJSON *scopes_array = cJSON_CreateArray();
+                if (!scopes_array)
+                {
+                    cJSON_Delete(body);
+                    
+                    // Clean up allocated scopes
+                    DAPScope* scopes = server->current_command.context.scopes.scopes;
+                    int scope_count = server->current_command.context.scopes.scope_count;
+                    for (int i = 0; i < scope_count; i++)
+                    {
+                        free(scopes[i].name);
+                        if (scopes[i].source_path)
+                            free(scopes[i].source_path);
+                    }
+                    free(scopes);
+                    
+                    set_response_error(response, "Failed to create scopes array");
+                    return -1;
+                }
+                
+                // Add each scope to the array
+                DAPScope* scopes = server->current_command.context.scopes.scopes;
+                int scope_count = server->current_command.context.scopes.scope_count;
+                
+                for (int i = 0; i < scope_count; i++)
+                {
+                    cJSON *scope_obj = cJSON_CreateObject();
+                    if (!scope_obj) continue;
+                    
+                    cJSON_AddStringToObject(scope_obj, "name", scopes[i].name);
+                    cJSON_AddNumberToObject(scope_obj, "variablesReference", scopes[i].variables_reference);
+                    cJSON_AddNumberToObject(scope_obj, "namedVariables", scopes[i].named_variables);
+                    cJSON_AddNumberToObject(scope_obj, "indexedVariables", scopes[i].indexed_variables);
+                    cJSON_AddBoolToObject(scope_obj, "expensive", scopes[i].expensive);
+                    
+                    // Add presentation hints based on scope name
+                    if (scopes[i].name != NULL) {
+                        if (strcmp(scopes[i].name, "Locals") == 0) {
+                            cJSON_AddStringToObject(scope_obj, "presentationHint", "locals");
+                        } else if (strcmp(scopes[i].name, "CPU Registers") == 0) {
+                            cJSON_AddStringToObject(scope_obj, "presentationHint", "registers");
+                        }
+                    }
+                    
+                    cJSON_AddItemToArray(scopes_array, scope_obj);
+                }
+                
+                cJSON_AddItemToObject(body, "scopes", scopes_array);
+                set_response_success(response, body);
+                
+                // Clean up allocated scopes
+                for (int i = 0; i < scope_count; i++)
+                {
+                    free(scopes[i].name);
+                    if (scopes[i].source_path)
+                        free(scopes[i].source_path);
+                }
+                free(scopes);
+                
+                // Clear the context
+                server->current_command.context.scopes.scopes = NULL;
+                server->current_command.context.scopes.scope_count = 0;
+                
+                return 0;
+            }
         }
-        // If the callback returns non-zero, fall back to default implementation
+        // If the callback returns non-zero or didn't populate scopes, fall back to default implementation
     }
 
     // Create minimal empty response with no scopes if no callback is registered
@@ -2233,12 +2325,172 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
             return -1;
         }
         
-        // Callback handled the response successfully
+        // TODO: Create json response "variables" from the callback
+
+        // Create JSON response from the variables array filled by the callback
+        cJSON *body = cJSON_CreateObject();
+        if (!body) {
+            set_response_error(response, "Failed to create response body");
+            return -1;
+        }
+        
+        // Create variables array
+        cJSON *variables_array = cJSON_CreateArray();
+        if (!variables_array) {
+            cJSON_Delete(body);
+            set_response_error(response, "Failed to create variables array");
+            return -1;
+        }
+        
+        // Properly handle the variable array from the callback
+        DAPVariable* variable_array = server->current_command.context.variables.variable_array;
+        int variable_count = server->current_command.context.variables.count;
+        
+        // Add each variable to the JSON response
+        if (variable_array != NULL && variable_count > 0) {
+            for (int i = 0; i < variable_count; i++) {
+                // Safely access each variable
+                DAPVariable* var = &variable_array[i];
+                if (var == NULL) continue;
+                
+                cJSON *variable = cJSON_CreateObject();
+                if (!variable) continue;
+                
+                // Add required fields
+                if (var->name) {
+                    cJSON_AddStringToObject(variable, "name", var->name);
+                }
+                if (var->value) {
+                    cJSON_AddStringToObject(variable, "value", var->value);
+                }
+                if (var->type) {
+                    cJSON_AddStringToObject(variable, "type", var->type);
+                }
+                
+                // Add variablesReference (can be 0 for leaf nodes)
+                cJSON_AddNumberToObject(variable, "variablesReference", var->variables_reference);
+                
+                // Add optional fields if present
+                if (var->named_variables > 0) {
+                    cJSON_AddNumberToObject(variable, "namedVariables", var->named_variables);
+                }
+                if (var->indexed_variables > 0) {
+                    cJSON_AddNumberToObject(variable, "indexedVariables", var->indexed_variables);
+                }
+                if (var->memory_reference) {
+                    cJSON_AddStringToObject(variable, "memoryReference", var->memory_reference);
+                }
+                if (var->evaluate_name) {
+                    cJSON_AddStringToObject(variable, "evaluateName", var->evaluate_name);
+                }
+                
+                // Add presentationHint if available
+                if (var && (var->presentation_hint.has_kind || 
+                    var->presentation_hint.has_visibility || 
+                    var->presentation_hint.attributes != DAP_VARIABLE_ATTR_NONE)) {
+                    
+                    cJSON *hint = cJSON_CreateObject();
+                    if (hint) {
+                        // Add kind if present
+                        if (var->presentation_hint.has_kind) {
+                            const char *kind_str = NULL;
+                            switch (var->presentation_hint.kind) {
+                                case DAP_VARIABLE_KIND_PROPERTY: kind_str = "property"; break;
+                                case DAP_VARIABLE_KIND_METHOD: kind_str = "method"; break;
+                                case DAP_VARIABLE_KIND_CLASS: kind_str = "class"; break;
+                                case DAP_VARIABLE_KIND_DATA: kind_str = "data"; break;
+                                case DAP_VARIABLE_KIND_EVENT: kind_str = "event"; break;
+                                case DAP_VARIABLE_KIND_BASE_CLASS: kind_str = "baseClass"; break;
+                                case DAP_VARIABLE_KIND_INNER_CLASS: kind_str = "innerClass"; break;
+                                case DAP_VARIABLE_KIND_INTERFACE: kind_str = "interface"; break;
+                                case DAP_VARIABLE_KIND_MOST_DERIVED: kind_str = "mostDerived"; break;
+                                case DAP_VARIABLE_KIND_VIRTUAL: kind_str = "virtual"; break;
+                                case DAP_VARIABLE_KIND_DATABREAKPOINT: kind_str = "dataBreakpoint"; break;
+                                default: break;
+                            }
+                            if (kind_str) {
+                                cJSON_AddStringToObject(hint, "kind", kind_str);
+                            }
+                        }
+                        
+                        // Add visibility if present
+                        if (var->presentation_hint.has_visibility) {
+                            const char *visibility_str = NULL;
+                            switch (var->presentation_hint.visibility) {
+                                case DAP_VARIABLE_VISIBILITY_PUBLIC: visibility_str = "public"; break;
+                                case DAP_VARIABLE_VISIBILITY_PRIVATE: visibility_str = "private"; break;
+                                case DAP_VARIABLE_VISIBILITY_PROTECTED: visibility_str = "protected"; break;
+                                case DAP_VARIABLE_VISIBILITY_INTERNAL: visibility_str = "internal"; break;
+                                default: break;
+                            }
+                            if (visibility_str) {
+                                cJSON_AddStringToObject(hint, "visibility", visibility_str);
+                            }
+                        }
+                        
+                        // Add attributes if present
+                        if (var->presentation_hint.attributes != 0) {
+                            cJSON *attributes = cJSON_CreateArray();
+                            if (attributes) {
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_STATIC) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CONSTANT) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("constant"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_READONLY) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_RAWSTRING) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("rawString"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASOBJECTID) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasObjectId"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CANHAVEOBJECTID) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("canHaveObjectId"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASSIDEEFFECTS) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasSideEffects"));
+                                }
+                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASDATABREAKPOINT) {
+                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasDataBreakpoint"));
+                                }
+                                
+                                cJSON_AddItemToObject(hint, "attributes", attributes);
+                            }
+                        }
+                        
+                        // Add the presentation hint to the variable
+                        cJSON_AddItemToObject(variable, "presentationHint", hint);
+                    }
+                }
+                
+                // Add this variable to the array
+                cJSON_AddItemToArray(variables_array, variable);
+            }
+        }
+        
+        // Add the variables array to the response body
+        cJSON_AddItemToObject(body, "variables", variables_array);
+        
+        // Set the successful response
+        set_response_success(response, body);
+        
         // Clean up any allocated format string
         if (server->current_command.context.variables.format)
         {
             free((void*)server->current_command.context.variables.format);
             server->current_command.context.variables.format = NULL;
+        }
+        
+        // Free the variable array if it exists
+        // Note: Since we've already constructed the JSON response with the data,
+        // we can now free the original variable array to prevent memory leaks
+        if (variable_array != NULL) {
+            free_variable_array(variable_array, variable_count);
+            server->current_command.context.variables.variable_array = NULL;
+            server->current_command.context.variables.count = 0;
         }
         
         return 0;
@@ -2605,7 +2857,7 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
  * @param count Number of filters
  */
 void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count) {
-    if (!filter_ids || !filter_conditions || count <= 0) {
+    if (!filter_ids || count <= 0) {
         return;
     }
     
@@ -3022,5 +3274,38 @@ static cJSON* create_presentation_hint(const char* kind, const char** attributes
     }
     
     return hint;
+}
+
+/**
+ * @brief Helper function to clean up DAPVariable array
+ * @param variables Array of variables to free
+ * @param count Number of variables in the array
+ */
+void free_variable_array(DAPVariable *variables, int count) {
+    if (!variables || count <= 0) {
+        return;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        // Free all dynamically allocated fields in each variable
+        if (variables[i].name) {
+            free(variables[i].name);
+        }
+        if (variables[i].value) {
+            free(variables[i].value);
+        }
+        if (variables[i].type) {
+            free(variables[i].type);
+        }
+        if (variables[i].evaluate_name) {
+            free(variables[i].evaluate_name);
+        }
+        if (variables[i].memory_reference) {
+            free(variables[i].memory_reference);
+        }
+    }
+    
+    // Free the array itself
+    free(variables);
 }
 

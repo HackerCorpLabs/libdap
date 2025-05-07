@@ -410,6 +410,10 @@ typedef struct {
  */
 typedef struct {
     int frame_id;                   /**< Stack frame ID for which to retrieve scopes (required) */
+    
+    // Results - populated by the command handler
+    DAPScope* scopes;              /**< Array of scopes filled by callback */
+    int scope_count;               /**< Number of scopes in the array */
 } ScopesCommandContext;
 
 /**
@@ -423,7 +427,7 @@ typedef struct {
     int count;                      /**< Optional number of variables to return */
     const char* format;             /**< Optional formatting hints */
 
-     // Results
+     // Results  - populated by the command handler
     DAPVariable *variable_array;       /**< Variables array to be filled by callback */
     int variable_count;             /**< Number of variables in the array */        
 } VariablesCommandContext;

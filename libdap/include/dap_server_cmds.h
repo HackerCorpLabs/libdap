@@ -120,3 +120,5 @@ int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response);
 void cleanup_debugger_state(DAPServer *server);
 void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count);
 void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count);
+void free_variable_array(DAPVariable *variables, int count);
+void cleanup_breakpoints(DAPServer* server);

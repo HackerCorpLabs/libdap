@@ -28,7 +28,7 @@
 #include <stdint.h>
 #include <stdarg.h>  // Added for va_list
 #include <ctype.h>   // Added for isdigit() and other character classification functions
-#include <cjson/cJSON.h>
+//#include <cjson/cJSON.h> ABSOLUTELY NO cJSON ALLOWD IN THIS FILE. ALL communication is via API structs
 #include "dap_server.h"
 #include "dap_error.h"
 #include "dap_types.h"
@@ -1286,8 +1286,8 @@ static int cmd_disassemble(DAPServer* server) {
  * 
  * This function handles the scopes command by:
  * 1. Retrieving the frame_id from the command context
- * 2. Creating a response with available scopes for the frame
- * 3. Sending the response back to the client
+ * 2. Creating DAPScope structures for each available scope
+ * 3. Storing the scopes in the server context for the DAP server to handle
  * 
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
@@ -1305,76 +1305,62 @@ static int cmd_scopes(DAPServer *server) {
     
     DBG_MOCK_LOG("Frame ID: %d", frame_id);
     
-    // Create a response body with scopes
-    cJSON *body = cJSON_CreateObject();
-    if (!body) {
-        DBG_MOCK_LOG("Failed to create response body");
-        return -1;
-    }
-    
-    // Add scopes array
-    cJSON *scopes = cJSON_CreateArray();
+    // Allocate memory for the scopes
+    const int NUM_SCOPES = 3; // Locals, Registers, Memory (CPU Flags is a subtype under STS register)
+    DAPScope* scopes = (DAPScope*)calloc(NUM_SCOPES, sizeof(DAPScope));
     if (!scopes) {
-        cJSON_Delete(body);
-        DBG_MOCK_LOG("Failed to create scopes array");
+        DBG_MOCK_LOG("Failed to allocate memory for scopes");
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: Failed to allocate memory for scopes\n");
         return -1;
     }
     
-    // Add Variables scope (contains local variables)
-    cJSON *localsScope = cJSON_CreateObject();
-    if (localsScope) {
-        cJSON_AddStringToObject(localsScope, "name", "Locals");
-        cJSON_AddNumberToObject(localsScope, "variablesReference", SCOPE_ID_LOCALS);
-        cJSON_AddNumberToObject(localsScope, "namedVariables", 5); // Number of local variables
-        cJSON_AddBoolToObject(localsScope, "expensive", false);
-        cJSON_AddStringToObject(localsScope, "presentationHint", "locals");
-        cJSON_AddItemToArray(scopes, localsScope);
-    }
+    // Set up Locals scope
+    int scope_index = 0;
+    scopes[scope_index].name = strdup("Locals");
+    scopes[scope_index].variables_reference = SCOPE_ID_LOCALS;
+    scopes[scope_index].named_variables = 5; // Number of local variables
+    scopes[scope_index].indexed_variables = 0;
+    scopes[scope_index].expensive = false;
+    // Source location fields are optional, set to 0/NULL
+    scopes[scope_index].source_path = NULL;
+    scopes[scope_index].line = 0;
+    scopes[scope_index].column = 0;
+    scopes[scope_index].end_line = 0;
+    scopes[scope_index].end_column = 0;
     
-    // Add CPU Registers scope
-    cJSON *registersScope = cJSON_CreateObject();
-    if (registersScope) {
-        cJSON_AddStringToObject(registersScope, "name", "CPU Registers");
-        cJSON_AddNumberToObject(registersScope, "variablesReference", SCOPE_ID_REGISTERS);
-        cJSON_AddNumberToObject(registersScope, "namedVariables", NUM_REGISTERS); // Use the actual number of CPU registers
-        cJSON_AddBoolToObject(registersScope, "expensive", false);
-        cJSON_AddStringToObject(registersScope, "presentationHint", "registers");
-        cJSON_AddItemToArray(scopes, registersScope);
-    }
+    // Set up CPU Registers scope
+    scope_index++;
+    scopes[scope_index].name = strdup("CPU Registers");
+    scopes[scope_index].variables_reference = SCOPE_ID_REGISTERS;
+    scopes[scope_index].named_variables = NUM_REGISTERS;
+    scopes[scope_index].indexed_variables = 0;
+    scopes[scope_index].expensive = false;
+    // Source location fields are optional, set to 0/NULL
+    scopes[scope_index].source_path = NULL;
+    scopes[scope_index].line = 0;
+    scopes[scope_index].column = 0;
+    scopes[scope_index].end_line = 0;
+    scopes[scope_index].end_column = 0;
     
-    // Add Memory scope
-    cJSON *memoryScope = cJSON_CreateObject();
-    if (memoryScope) {
-        cJSON_AddStringToObject(memoryScope, "name", "Memory");
-        cJSON_AddNumberToObject(memoryScope, "variablesReference", SCOPE_ID_MEMORY);
-        cJSON_AddNumberToObject(memoryScope, "namedVariables", 3); // Number of memory regions
-        cJSON_AddBoolToObject(memoryScope, "expensive", true); // Memory access is expensive
-        cJSON_AddItemToArray(scopes, memoryScope);
-    }
+    // Set up Memory scope
+    scope_index++;
+    scopes[scope_index].name = strdup("Memory");
+    scopes[scope_index].variables_reference = SCOPE_ID_MEMORY;
+    scopes[scope_index].named_variables = 3; // Number of memory regions
+    scopes[scope_index].indexed_variables = 0;
+    scopes[scope_index].expensive = true; // Memory access is expensive
+    // Source location fields are optional, set to 0/NULL
+    scopes[scope_index].source_path = NULL;
+    scopes[scope_index].line = 0;
+    scopes[scope_index].column = 0;
+    scopes[scope_index].end_line = 0;
+    scopes[scope_index].end_column = 0;
     
-    cJSON_AddItemToObject(body, "scopes", scopes);
+    // Store the scopes in the command context for the DAP server to use
+    server->current_command.context.scopes.scopes = scopes;
+    server->current_command.context.scopes.scope_count = NUM_SCOPES;
     
-    // Format the response
-    char *response_str = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    
-    if (!response_str) {
-        DBG_MOCK_LOG("Failed to format response body");
-        return -1;
-    }
-    
-    // Create the response object
-    DAPResponse response = {0};
-    response.success = true;
-    response.data = response_str;
-    
-    // Send the response
-    int seq = server->current_command.request_seq;
-    int result = dap_server_send_response(server, DAP_CMD_SCOPES, server->sequence++, seq, true, cJSON_Parse(response.data));
-    
-    free(response.data);
-    
-    return (result == 0) ? 0 : -1;
+    return 0;
 }
 
 /**

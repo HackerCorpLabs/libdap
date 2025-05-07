@@ -785,12 +785,35 @@ static int cmd_set_breakpoints(DAPServer* server) {
 }
 
 /**
- * @brief Handler for the launch command
+ * @brief Handler for the DAP 'launch' request command
  * 
- * This function handles the launch command in the mock debugger by:
- * 1. Reading launch parameters from the debugger state
- * 2. Setting up the debugger state for the launched program
- * 3. Setting up initial source and debugging state
+ * The launch request is sent from the client to launch the debuggee with or without debugging.
+ * This is the mock implementation that simulates program launch behavior.
+ * 
+ * According to DAP Specification:
+ * - Required Parameters:
+ *   - program: string - Path to the debuggee executable/script
+ * - Optional Parameters:
+ *   - stopOnEntry: boolean - Break at program entry point
+ *   - noDebug: boolean - Launch without debugging features
+ *   - args: array - Command line arguments for debuggee
+ *   - cwd: string - Working directory for debuggee
+ * 
+ * Events Sequence:
+ * 1. process: Indicates the debuggee process has started
+ * 2. thread: Notifies that the main thread has started
+ * 3. stopped: (If stopOnEntry=true) Indicates execution stopped at entry
+ * 
+ * State Management:
+ * - Sets up initial debugger state for the launched program
+ * - Configures source file mapping and debugging options
+ * - Initializes program counter and execution context
+ * - Prepares breakpoint handling if debugging is enabled
+ * 
+ * Error Handling:
+ * - Validates required program path parameter
+ * - Checks file existence and accessibility
+ * - Verifies source file mappings if provided
  * 
  * @param server The DAP server instance containing the launch context
  * @return int 0 on success, non-zero on failure

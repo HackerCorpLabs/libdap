@@ -267,7 +267,41 @@ typedef struct {
 
 /**
  * @struct LaunchCommandContext
- * @brief Context for launch command
+ * @brief Context structure for the DAP 'launch' request command
+ * 
+ * This structure holds all the parameters and state needed to process a launch request
+ * according to the Debug Adapter Protocol specification.
+ * 
+ * The launch request is used to start debugging a program. The debug adapter first
+ * configures everything for debugging the program and then starts it. Some debug
+ * adapters support running the program without debugging (if noDebug is true).
+ * 
+ * Field Descriptions (from DAP Specification):
+ * @param program_path Required. Path to the program to debug. This can be an absolute 
+ *                    or relative path, and should point to the debuggee executable.
+ * 
+ * @param source_path Optional. Path to the main source file. Used for source mapping
+ *                    and as the initial file shown in the debug UI.
+ * 
+ * @param map_path Optional. Path to debug symbol/mapping file if separate from executable.
+ *                Used for source-level debugging and variable inspection.
+ * 
+ * @param working_directory Optional. Current working directory for the debuggee.
+ *                         If not specified, the debugger's CWD is used.
+ * 
+ * @param no_debug Optional. If true, the program is launched without debugging.
+ *                Allows running program at full speed with no debug features.
+ * 
+ * @param stop_at_entry Optional. If true, the debugger should stop at the entry point
+ *                      of the program. Default is implementation-dependent.
+ * 
+ * @param args Optional. Command line arguments to pass to the program.
+ *             Stored as an array of strings.
+ * 
+ * @param args_count Number of command line arguments in the args array.
+ * 
+ * @param launch_args Optional. Additional implementation-specific launch arguments.
+ *                    Can be used for language/runtime specific options.
  */
 typedef struct {
     const char* program_path;       /**< Path to the program to be debugged */

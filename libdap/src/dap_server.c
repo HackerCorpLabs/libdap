@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdarg.h>  // For va_list and related functions
 
 
 #include "dap_server.h"
@@ -23,7 +24,6 @@
 
 #include "dap_types.h"
 #include <cjson/cJSON.h>
-
 
 DAPServer *dap_server_create(const DAPServerConfig *config)
 {
@@ -213,19 +213,12 @@ void dap_server_cleanup(DAPServer *server)
         server->current_source = NULL;
     }
 
-    // TODO cleanup_debugger_state
-    if (server->debugger_state.program_path)
-    {
-        free((void *)server->debugger_state.program_path);
-        server->debugger_state.program_path = NULL;
-    }
-    
+    // Clean up debugger state
+    cleanup_debugger_state(server);
 
     // Clean up breakpoints and line maps
     cleanup_breakpoints(server);
     cleanup_line_maps(server);
-
-
 
 }
 
@@ -276,59 +269,77 @@ void cleanup_command_context(DAPServer *server)
 {
     if (!server) return;
     
+    // Helper macro to safely free pointers with additional check for valid memory address range
+    #define SAFE_FREE(ptr) do { \
+        if ((ptr) && (uintptr_t)(ptr) > 1024) { \
+            DAP_SERVER_DEBUG_LOG("Freeing command context pointer %s at %p", #ptr, (void*)(ptr)); \
+            free((void*)(ptr)); \
+            (ptr) = NULL; \
+        } \
+    } while (0)
+
+    DAP_SERVER_DEBUG_LOG("Cleaning up command context for command type %d", server->current_command.type);
+    
     switch (server->current_command.type) {
+        case DAP_CMD_LAUNCH:
+            // Launch context resources are now stored in debugger_state and are not 
+            // freed here anymore, since they need to persist across the entire debug session
+            break;
+            
+        case DAP_CMD_RESTART:
+            // Clean up restart context
+            SAFE_FREE(server->current_command.context.restart.restart_args);
+            break;
+            
+        case DAP_CMD_DISCONNECT:
+            // Nothing to clean up for disconnect context (no dynamic allocations)
+            break;
+            
+        case DAP_CMD_DISASSEMBLE:
+            // Clean up disassemble context
+            SAFE_FREE(server->current_command.context.disassemble.memory_reference);
+            break;
+            
         case DAP_CMD_STEP_IN:
         case DAP_CMD_STEP_OUT:
         case DAP_CMD_NEXT:
             // Clean up step context - only free granularity if it was dynamically allocated
-            if (server->current_command.context.step.granularity && 
-                server->current_command.context.step.granularity != "statement") { // Don't free string literal
-                free((void*)server->current_command.context.step.granularity);
+            {
+                static const char* STATEMENT_GRANULARITY = "statement";
+                // Don't free static strings like "statement", only dynamically allocated ones
+                if (server->current_command.context.step.granularity && 
+                    server->current_command.context.step.granularity != STATEMENT_GRANULARITY) {
+                    SAFE_FREE(server->current_command.context.step.granularity);
+                }
+                server->current_command.context.step.granularity = NULL;
             }
             break;
             
         case DAP_CMD_SET_BREAKPOINTS:
             // Clean up breakpoint context
-            if (server->current_command.context.breakpoint.source_path) {
-                free((void*)server->current_command.context.breakpoint.source_path);
-                server->current_command.context.breakpoint.source_path = NULL;
-            }
-            
-            if (server->current_command.context.breakpoint.source_name) {
-                free((void*)server->current_command.context.breakpoint.source_name);
-                server->current_command.context.breakpoint.source_name = NULL;
-            }
+            SAFE_FREE(server->current_command.context.breakpoint.source_path);
+            SAFE_FREE(server->current_command.context.breakpoint.source_name);
             
             // Only free the breakpoints array if it was dynamically allocated
-            // Note: Don't free the individual breakpoints here since they're managed by
-            // the implementation callback, not by the protocol layer
-            if (server->current_command.context.breakpoint.breakpoints && 
-                (uintptr_t)server->current_command.context.breakpoint.breakpoints > 1024) {
-                // Simple safety check to avoid freeing static/invalid memory
-                free((void*)server->current_command.context.breakpoint.breakpoints);
-                server->current_command.context.breakpoint.breakpoints = NULL;
-            }
-            
+            SAFE_FREE(server->current_command.context.breakpoint.breakpoints);
             break;
             
         case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
             // Clean up exception breakpoint context
             if (server->current_command.context.exception.filters) {
                 for (size_t i = 0; i < server->current_command.context.exception.filter_count; i++) {
-                    if (server->current_command.context.exception.filters[i]) {
-                        free((void*)server->current_command.context.exception.filters[i]);
-                    }
+                    SAFE_FREE(server->current_command.context.exception.filters[i]);
                 }
                 free(server->current_command.context.exception.filters);
+                server->current_command.context.exception.filters = NULL;
             }
             
             if (server->current_command.context.exception.conditions) {
                 for (size_t i = 0; i < server->current_command.context.exception.condition_count; i++) {
-                    if (server->current_command.context.exception.conditions[i]) {
-                        free((void*)server->current_command.context.exception.conditions[i]);
-                    }
+                    SAFE_FREE(server->current_command.context.exception.conditions[i]);
                 }
                 free(server->current_command.context.exception.conditions);
+                server->current_command.context.exception.conditions = NULL;
             }
             break;
             
@@ -339,6 +350,8 @@ void cleanup_command_context(DAPServer *server)
     
     // Reset the command type to indicate no command is in progress
     server->current_command.type = DAP_CMD_INVALID;
+    
+    #undef SAFE_FREE
 }
 
 /**
@@ -776,7 +789,7 @@ int dap_server_register_command_callback(DAPServer *server, DAPCommandType comma
     }
     
 
-    // The key principle of memory management in the DAP server is:
+    // The key principle of memory management in the DAP server for callbacks are:
     //
     // Each function is responsible for cleaning up its own allocations
     // Callbacks only read data, they never free or take ownership
@@ -1121,7 +1134,7 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
 
     cJSON *event_body = cJSON_CreateObject();
     if (event_body) {        
-        cJSON_AddNumberToObject(event_body, "threadId", server->current_command.context.step.thread_id);
+        cJSON_AddNumberToObject(event_body, "threadId", server->debugger_state.current_thread_id);
         
         // REQUIRED by the spec!!!
         cJSON_AddStringToObject(event_body, "reason", reason);
@@ -1146,6 +1159,64 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
     }
     
     return -1;
+}
+
+/**
+ * @brief Clean up resources used by the debugger state
+ * 
+ * This function handles the cleanup of all dynamically allocated memory
+ * in the debugger_state structure. It should be called during server shutdown.
+ * 
+ * @param server The DAP server instance
+ */
+void cleanup_debugger_state(DAPServer *server)
+{
+    if (!server) return;
+    
+    // Helper macro to safely free pointers with valid memory address check
+    #define SAFE_FREE(ptr) do { \
+        if ((ptr) && (uintptr_t)(ptr) > 1024) { \
+            DAP_SERVER_DEBUG_LOG("Freeing debugger state pointer %s at %p", #ptr, (void*)(ptr)); \
+            free((void*)(ptr)); \
+            (ptr) = NULL; \
+        } \
+    } while (0)
+    
+    // Free all dynamically allocated strings
+    SAFE_FREE(server->debugger_state.program_path);
+    SAFE_FREE(server->debugger_state.source_path);
+    SAFE_FREE(server->debugger_state.map_path);
+    SAFE_FREE(server->debugger_state.working_directory);
+    SAFE_FREE(server->debugger_state.stop_reason);
+    SAFE_FREE(server->debugger_state.stop_description);
+    
+    // Free command line arguments array if it exists
+    if (server->debugger_state.args) {
+        for (int i = 0; i < server->debugger_state.args_count; i++) {
+            SAFE_FREE(server->debugger_state.args[i]);
+        }
+        free(server->debugger_state.args);
+        server->debugger_state.args = NULL;
+        server->debugger_state.args_count = 0;
+    }
+    
+    // Free any user data if a cleanup function was provided
+    if (server->debugger_state.user_data) {
+        // If a custom cleanup function exists, it could be called here
+        // For now, we're just nulling it out as we don't know how to free it
+        server->debugger_state.user_data = NULL;
+    }
+    
+    // Reset other state fields to default values
+    server->debugger_state.program_counter = 0;
+    server->debugger_state.source_line = 0;
+    server->debugger_state.source_column = 0;
+    server->debugger_state.current_thread_id = 0;
+    server->debugger_state.has_stopped = false;
+    server->debugger_state.no_debug = false;
+    server->debugger_state.stop_at_entry = false;
+    
+    #undef SAFE_FREE
 }
 
 

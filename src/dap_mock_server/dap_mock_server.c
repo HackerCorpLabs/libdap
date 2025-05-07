@@ -50,6 +50,10 @@ static int on_set_exception_breakpoints(DAPServer *server);
 static bool on_should_break_on_exception(DAPServer *server, const char* exception_id, bool is_uncaught, void* user_data);
 static int clear_breakpoints_for_source(const char* source_path);
 static int cmd_set_breakpoints(DAPServer* server);
+static int cmd_launch(DAPServer* server);
+static int cmd_restart(DAPServer* server);
+static int cmd_disconnect(DAPServer* server);
+static int cmd_disassemble(DAPServer* server);
 
 // Forward declaration for functions from libdap that we need
 int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
@@ -416,6 +420,482 @@ static int cmd_set_breakpoints(DAPServer* server) {
     return 0;
 }
 
+/**
+ * @brief Handler for the launch command
+ * 
+ * This function handles the launch command in the mock debugger by:
+ * 1. Reading launch parameters from the debugger state
+ * 2. Setting up the debugger state for the launched program
+ * 3. Setting up initial source and debugging state
+ * 
+ * @param server The DAP server instance containing the launch context
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_launch(DAPServer* server) {
+    if (!server) {
+        return -1;
+    }
+    
+    DBG_MOCK_LOG("Launch command received");
+    
+    // Extract launch parameters directly from debugger state
+    const char* program_path = server->debugger_state.program_path;
+    const char* source_path = server->debugger_state.source_path;
+    const char* map_path = server->debugger_state.map_path;
+    bool stop_at_entry = server->debugger_state.stop_at_entry;
+    bool no_debug = server->debugger_state.no_debug;
+    
+    // Log command line arguments if provided
+    char** args = server->debugger_state.args;
+    int args_count = server->debugger_state.args_count;
+    
+    if (!program_path) {
+        DBG_MOCK_LOG("Error: Missing program path in debugger state");
+        return -1;
+    }
+    
+    DBG_MOCK_LOG("Launching program: %s", program_path ? program_path : "(null)");
+    DBG_MOCK_LOG("Source path: %s", source_path ? source_path : "(not specified)");
+    DBG_MOCK_LOG("Map file: %s", map_path ? map_path : "(not specified)");
+    DBG_MOCK_LOG("Stop at entry: %s", stop_at_entry ? "yes" : "no");
+    DBG_MOCK_LOG("No debug: %s", no_debug ? "yes" : "no");
+    
+    // Log command line arguments if present
+    if (args && args_count > 0) {
+        char arg_log[1024] = "Command line arguments:";
+        size_t log_pos = strlen(arg_log);
+        
+        for (int i = 0; i < args_count && i < 10; i++) { // Limit to 10 args in log
+            if (args[i]) {
+                int written = snprintf(arg_log + log_pos, sizeof(arg_log) - log_pos, 
+                                     " '%s'", args[i]);
+                if (written > 0) {
+                    log_pos += written;
+                }
+            }
+        }
+        
+        if (args_count > 10) {
+            snprintf(arg_log + log_pos, sizeof(arg_log) - log_pos, " ... (%d more)", 
+                    args_count - 10);
+        }
+        
+        DBG_MOCK_LOG("%s", arg_log);
+    }
+    
+    // Reset the debugger state
+    mock_debugger.pc = 0;
+    mock_debugger.last_event = DAP_EVENT_INVALID;
+    
+    // Set debugger state
+    server->is_running = true;
+    server->attached = true;
+    server->debugger_state.has_stopped = true;
+    server->debugger_state.current_thread_id = 1; // make sure we have a thread id
+    
+    // Clean up old source info
+    if (server->current_source) {
+        if (server->current_source->path) {
+            free((void *)server->current_source->path);
+        }
+        if (server->current_source->name) {
+            free((void *)server->current_source->name);
+        }
+        free((void *)server->current_source);
+        server->current_source = NULL;
+    }
+    
+    // Create and set current source information
+    const char* display_source = source_path ? source_path : program_path;
+    if (display_source) {
+        DAPSource *source = malloc(sizeof(DAPSource));
+        if (source) {
+            memset(source, 0, sizeof(DAPSource));
+            source->path = strdup(display_source);
+            if (!source->path) {
+                DBG_MOCK_LOG("Error: Failed to allocate memory for source path");
+                free(source);
+                return -1;
+            }
+            
+            // Extract filename from path
+            const char *filename = strrchr(display_source, '/');
+            if (filename) {
+                source->name = strdup(filename + 1);
+            } else {
+                source->name = strdup(display_source);
+            }
+            
+            if (!source->name) {
+                DBG_MOCK_LOG("Error: Failed to allocate memory for source name");
+                free(source->path);
+                free(source);
+                return -1;
+            }
+            
+            source->presentation_hint = DAP_SOURCE_PRESENTATION_NORMAL;
+            source->origin = DAP_SOURCE_ORIGIN_UNKNOWN;
+            
+            server->current_source = source;
+            server->debugger_state.source_line = 1;   // Start at line 1
+            server->debugger_state.source_column = 1; // Start at column 1
+            
+            DBG_MOCK_LOG("Set current source: path=%s, name=%s", 
+                      source->path, source->name);
+        }
+    } else {
+        DBG_MOCK_LOG("Warning: No source or program path available for display");
+    }
+    
+    // If map file provided, try to load it
+    if (map_path) {
+        DBG_MOCK_LOG("Would load map file here: %s", map_path);
+        // TODO: Implement map file loading for debugging symbols
+    }
+    
+    // Send process event to indicate execution started
+    dap_server_send_process_event(server, program_path, 1, true, "launch");
+    
+    // Send stopped event if stopAtEntry is true
+    if (stop_at_entry) {
+        dap_server_send_stopped_event(server, "entry", "Stopped at program entry");
+        DBG_MOCK_LOG("Stopped at entry point");
+    } else {
+        // Send thread started event
+        dap_server_send_thread_event(server, "started", 1);
+    }
+    
+    DBG_MOCK_LOG("Launch command completed successfully");
+    return 0; // Return success to ensure the response is properly set
+}
+
+/**
+ * @brief Restart command handler
+ * 
+ * This function handles the restart command by:
+ * 1. Resetting debugger state
+ * 2. Re-launching the program with the original launch parameters
+ * 3. Sending the required events for a restart
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_restart(DAPServer* server) {
+    if (!server) {
+        return -1;
+    }
+    
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Restarting debuggee...\n");
+    
+    // Extract restart parameters
+    bool no_debug = server->current_command.context.restart.no_debug;
+    
+    // Log the restart action
+    DBG_MOCK_LOG("Handling restart command (noDebug: %s)", no_debug ? "true" : "false");
+    
+    // Check if we have the original program path from a previous launch
+    const char* program_path = server->debugger_state.program_path;
+    if (!program_path) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: No program to restart\n");
+        DBG_MOCK_LOG("Cannot restart - no program_path in debugger state");
+        return -1;
+    }
+    
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Terminating current session...\n");
+    
+    // Reset debugger state
+    mock_debugger.pc = 0;
+    mock_debugger.last_event = DAP_EVENT_INVALID;
+    
+    // Re-initialize program counter and source position
+    server->debugger_state.program_counter = 0;
+    server->debugger_state.source_line = 1;
+    server->debugger_state.source_column = 1;
+    server->debugger_state.has_stopped = true;
+    
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Relaunching program...\n");
+    
+    // Send the required events for restart
+    // 1. First, terminate existing process
+    dap_server_send_event(server, "terminated", NULL);
+    
+    // 2. Then, notify about the new process
+    dap_server_send_process_event(server, program_path, 1, true, "launch");
+    
+    // 3. Notify about thread start
+    dap_server_send_thread_event(server, "started", 1);
+    
+    // 4. Send stopped event (typically at entry point)
+    dap_server_send_stopped_event(server, "entry", "Stopped at program entry after restart");
+    
+    // Show more detailed information about the restarted program
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Program restarted: %s\n", program_path);
+    dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, msg);
+    
+    // Optionally send a warning for no_debug mode
+    if (no_debug) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, 
+                                      "Warning: Restarted in no-debug mode. Debugging features disabled.\n");
+    }
+    
+    DBG_MOCK_LOG("Restart completed successfully");
+    return 0;
+}
+
+/**
+ * @brief Disconnect command handler
+ * 
+ * This function handles the disconnect command by:
+ * 1. Cleaning up debug resources
+ * 2. Optionally terminating the debuggee based on command parameters
+ * 3. Sending appropriate events and messages to the client
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_disconnect(DAPServer* server) {
+    if (!server) {
+        return -1;
+    }
+    
+    // Extract disconnect parameters from the command context
+    bool terminate_debuggee = server->current_command.context.disconnect.terminate_debuggee;
+    bool suspend_debuggee = server->current_command.context.disconnect.suspend_debuggee;
+    bool restart = server->current_command.context.disconnect.restart;
+    
+    // Send appropriate output based on options
+    if (restart) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Disconnecting for restart...\n");
+    } else if (terminate_debuggee) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Disconnecting and terminating debuggee...\n");
+    } else if (suspend_debuggee) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Disconnecting and suspending debuggee...\n");
+    } else {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Disconnecting from debuggee...\n");
+    }
+    
+    // Log the disconnection with details
+    DBG_MOCK_LOG("Handling disconnect command (terminate: %s, suspend: %s, restart: %s)",
+               terminate_debuggee ? "true" : "false",
+               suspend_debuggee ? "true" : "false",
+               restart ? "true" : "false");
+    
+    // Clean up breakpoints
+    if (mock_debugger.breakpoints) {
+        for (int i = 0; i < mock_debugger.breakpoint_count; i++) {
+            if (mock_debugger.breakpoints[i].source_path) {
+                free(mock_debugger.breakpoints[i].source_path);
+            }
+            if (mock_debugger.breakpoints[i].source_name) {
+                free(mock_debugger.breakpoints[i].source_name);
+            }
+            if (mock_debugger.breakpoints[i].condition) {
+                free(mock_debugger.breakpoints[i].condition);
+            }
+            if (mock_debugger.breakpoints[i].hit_condition) {
+                free(mock_debugger.breakpoints[i].hit_condition);
+            }
+            if (mock_debugger.breakpoints[i].log_message) {
+                free(mock_debugger.breakpoints[i].log_message);
+            }
+        }
+        
+        free(mock_debugger.breakpoints);
+        mock_debugger.breakpoints = NULL;
+        mock_debugger.breakpoint_count = 0;
+        mock_debugger.breakpoint_capacity = 0;
+    }
+    
+    // If terminating, send terminated event
+    if (terminate_debuggee && !restart) {
+        cJSON *body = cJSON_CreateObject();
+        if (body) {
+            // The terminated event can optionally include a 'restart' attribute
+            // but we don't need it here
+            dap_server_send_event(server, "terminated", body);
+        } else {
+            dap_server_send_event(server, "terminated", NULL);
+        }
+        
+        dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, "Debuggee terminated.\n");
+    }
+    
+    // Reset debugger state
+    mock_debugger.pc = 0;
+    mock_debugger.last_event = DAP_EVENT_INVALID;
+    server->is_running = false;
+    
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Disconnect complete.\n");
+    DBG_MOCK_LOG("Disconnect completed successfully");
+    
+    return 0;
+}
+
+/**
+ * @brief Disassemble command handler
+ * 
+ * This function handles the disassemble command by:
+ * 1. Retrieving the memory reference, offset, and other parameters from the command context
+ * 2. Generating mock disassembly data
+ * 3. Formatting and sending the disassembly response
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_disassemble(DAPServer* server) {
+    if (!server) {
+        return -1;
+    }
+    
+    // Extract parameters from the command context
+    const char* memory_reference = server->current_command.context.disassemble.memory_reference;
+    uint64_t offset = server->current_command.context.disassemble.offset;
+    int instruction_offset = server->current_command.context.disassemble.instruction_offset;
+    int instruction_count = server->current_command.context.disassemble.instruction_count;
+    bool resolve_symbols = server->current_command.context.disassemble.resolve_symbols;
+    
+    if (!memory_reference) {
+        DAP_SERVER_DEBUG_LOG("Missing memory reference for disassemble command");
+        return -1;
+    }
+    
+    // Log what we're disassembling
+    DAP_SERVER_DEBUG_LOG("Disassembling memory reference: %s (offset: 0x%llx, count: %d, instruction_offset: %d)",
+                      memory_reference, (unsigned long long)offset, instruction_count, instruction_offset);
+    
+    // Send console output indicating what we're disassembling
+    char message[256];
+    snprintf(message, sizeof(message), "Disassembling at %s + 0x%llx (%d instructions)...\n", 
+             memory_reference, (unsigned long long)offset, instruction_count);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, message);
+    
+    // Parse memory reference to get base address
+    char* endptr = NULL;
+    uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
+    if (endptr == memory_reference || *endptr != '\0') {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Invalid memory reference format!\n");
+        return -1;
+    }
+    
+    // Apply byte offset
+    address += (uint32_t)offset;
+    
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
+    if (!body) {
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create response body!\n");
+        return -1;
+    }
+    
+    // Create instructions array
+    cJSON* instructions = cJSON_CreateArray();
+    if (!instructions) {
+        cJSON_Delete(body);
+        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create instructions array!\n");
+        return -1;
+    }
+    
+    // Mock instructions for ND-100 CPU
+    // - A mock instruction set with 8 registers (R0-R7)
+    // - Instruction size is 4 bytes
+    // - Simple MOV, ADD, SUB, JMP instructions
+    const char* opcodes[] = {
+        "MOV", "ADD", "SUB", "JMP", "LDI", "STI", "CMP", "BNE", "BEQ", "BGT", "BLT"
+    };
+    int num_opcodes = sizeof(opcodes) / sizeof(opcodes[0]);
+    
+    // Generate disassembly
+    uint32_t start_addr = address;
+    // Apply instruction offset (each instruction is 4 bytes)
+    if (instruction_offset > 0) {
+        start_addr += (uint32_t)(instruction_offset * 4);
+    }
+    
+    uint32_t current_addr = start_addr;
+    char first_addr_str[16] = {0}; // Store the first address string for the completion message
+    
+    for (int i = 0; i < instruction_count; i++) {
+        cJSON* instruction = cJSON_CreateObject();
+        if (!instruction) {
+            dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create instruction object!\n");
+            cJSON_Delete(body);
+            cJSON_Delete(instructions);
+            return -1;
+        }
+        
+        // Format address as hexadecimal
+        char addr_str[16];
+        snprintf(addr_str, sizeof(addr_str), "0x%04x", current_addr);
+        
+        // Store the first address for the completion message
+        if (i == 0) {
+            strncpy(first_addr_str, addr_str, sizeof(first_addr_str) - 1);
+        }
+        
+        cJSON_AddStringToObject(instruction, "address", addr_str);
+        
+        // Generate a mock instruction based on the address
+        const char* opcode = opcodes[current_addr % num_opcodes];
+        int src_reg = (current_addr / 4) % 8;
+        int dst_reg = ((current_addr / 4) + 1) % 8;
+        
+        char instr_text[32];
+        if (strcmp(opcode, "JMP") == 0) {
+            // Jump instructions use a single address
+            snprintf(instr_text, sizeof(instr_text), "%s 0x%04x", opcode, current_addr + 16);
+        } else if (strcmp(opcode, "BEQ") == 0 || strcmp(opcode, "BNE") == 0 || 
+                   strcmp(opcode, "BGT") == 0 || strcmp(opcode, "BLT") == 0) {
+            // Branch instructions compare a register and jump
+            snprintf(instr_text, sizeof(instr_text), "%s R%d, 0x%04x", opcode, src_reg, current_addr + 8);
+        } else {
+            // Regular two-operand instructions
+            snprintf(instr_text, sizeof(instr_text), "%s R%d, R%d", opcode, dst_reg, src_reg);
+        }
+        
+        cJSON_AddStringToObject(instruction, "instruction", instr_text);
+        
+        // Add symbol information if requested
+        if (resolve_symbols) {
+            // Generate mock symbol information based on address
+            if (current_addr % 32 == 0) {
+                char symbol[32];
+                snprintf(symbol, sizeof(symbol), "function_%04x", current_addr);
+                cJSON_AddStringToObject(instruction, "symbol", symbol);
+            }
+        }
+        
+        // Add to instructions array
+        cJSON_AddItemToArray(instructions, instruction);
+        
+        // Move to next instruction (4 bytes per instruction in this architecture)
+        current_addr += 4;
+    }
+    
+    // Attach instructions array to response body
+    cJSON_AddItemToObject(body, "instructions", instructions);
+    
+    // Generate response JSON
+    char* response_str = cJSON_Print(body);
+    if (response_str) {
+        // In a callback implementation, we don't need to set response fields directly
+        // Instead, the handler in dap_server_cmds.c will take care of that
+        // Just log some debugging information and free our temporary string
+        DAP_SERVER_DEBUG_LOG("Generated disassembly response of %zu bytes", strlen(response_str));
+        free(response_str);
+    }
+    
+    // Free the response body - the disassemble handler will generate its own response
+    cJSON_Delete(body);
+    
+    // Send a human-friendly completion message
+    snprintf(message, sizeof(message), "Disassembly complete: %d instructions starting at %s.\n", 
+             instruction_count, first_addr_str);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, message);
+    
+    return 0;
+}
+
 /*** INITIALIZATION ***/
 
 int dbg_mock_init(int port) {
@@ -457,6 +937,18 @@ int dbg_mock_init(int port) {
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_NEXT, cmd_next);
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_STEP_IN, cmd_step_in);
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_STEP_OUT, cmd_step_out);
+    
+    // Register launch callback
+    dap_server_register_command_callback(mock_debugger.server, DAP_CMD_LAUNCH, cmd_launch);
+    
+    // Register restart callback
+    dap_server_register_command_callback(mock_debugger.server, DAP_CMD_RESTART, cmd_restart);
+    
+    // Register disconnect callback
+    dap_server_register_command_callback(mock_debugger.server, DAP_CMD_DISCONNECT, cmd_disconnect);
+    
+    // Register disassemble callback
+    dap_server_register_command_callback(mock_debugger.server, DAP_CMD_DISASSEMBLE, cmd_disassemble);
     
     // Register exception breakpoint callback
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS, on_set_exception_breakpoints);
@@ -727,6 +1219,8 @@ int dbg_mock_set_default_capabilities(DAPServer *server) {
         DAP_CAP_EVALUATE_FOR_HOVERS, true,
         DAP_CAP_RESTART_REQUEST, true,
         DAP_CAP_TERMINATE_REQUEST, true,
+        DAP_CAP_TERMINATE_DEBUGGEE, true,  // Support disconnect with terminateDebuggee option
+        DAP_CAP_DISASSEMBLE_REQUEST, true, // Support for disassemble command
         
         // End of capabilities
         DAP_CAP_COUNT
@@ -776,14 +1270,58 @@ void dbg_mock_send_demo_outputs(DAPServer *server)
  */
 void dbg_mock_show_launch_messages(DAPServer *server, const char *program_path)
 {
-    if (!server || !program_path) {
+    if (!server) {
         return;
     }
     
-    // Send some output messages to demonstrate different categories
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Program launched: ");
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, program_path);
-
+    // Safely handle NULL program path
+    const char *path_display = program_path ? program_path : "(unknown)";
+    
+    // Get the complete launch context for more detailed information
+    char output_message[512];
+    snprintf(output_message, sizeof(output_message), "Program launched: %s\n", path_display);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
+    
+    // Get additional launch information from the server's debugger state
+    const char *source_path = server->debugger_state.source_path;
+    const char *map_path = server->debugger_state.map_path;
+    
+    if (source_path) {
+        snprintf(output_message, sizeof(output_message), "Source file: %s\n", source_path);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
+    }
+    
+    if (map_path) {
+        snprintf(output_message, sizeof(output_message), "Map file: %s\n", map_path);
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, output_message);
+    }
+    
+    // Show command line args if available
+    if (server->debugger_state.args_count > 0 && server->debugger_state.args) {
+        
+        // Construct a command line display
+        char cmdline[256] = "Command line:";
+        size_t pos = strlen(cmdline);
+        
+        for (int i = 0; i < server->debugger_state.args_count && 
+             i < 5 && // Limit display to 5 args to prevent buffer overflow
+             pos < sizeof(cmdline) - 30; i++) { // Reserve space for ellipsis
+            
+            const char *arg = server->debugger_state.args[i];
+            if (arg) {
+                snprintf(cmdline + pos, sizeof(cmdline) - pos, " %s", arg);
+                pos = strlen(cmdline);
+            }
+        }
+        
+        // If there are more args than we displayed, add ellipsis
+        if (server->debugger_state.args_count > 5) {
+            snprintf(cmdline + pos, sizeof(cmdline) - pos, " ...");
+        }
+        
+        strcat(cmdline, "\n");
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, cmdline);
+    }
     
     // Show a warning/stderr example
     dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Warning: This is a mock debugger!\n");

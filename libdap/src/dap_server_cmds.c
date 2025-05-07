@@ -134,8 +134,8 @@ static Register internal_write_registers[] = {
 #define NUM_INTERNAL_WRITE_REGISTERS (sizeof(internal_write_registers) / sizeof(Register))
 
 // Forward declarations for helper functions
-void free_breakpoints_array(DAPBreakpoint *breakpoints, int count);
-void free_filter_arrays(char **filter_ids, char **filter_conditions, int count);
+void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count);
+void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count);
 static void set_response_success(DAPResponse *response, cJSON *body);
 static void set_response_error(DAPResponse *response, const char *error_message);
 
@@ -820,7 +820,7 @@ int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response
  * @param breakpoints Array of breakpoints to free
  * @param count Number of breakpoints in the array
  */
-void free_breakpoints_array(DAPBreakpoint *breakpoints, int count) {
+void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count) {
     if (!breakpoints || count <= 0) {
         return;
     }
@@ -858,7 +858,7 @@ void free_breakpoints_array(DAPBreakpoint *breakpoints, int count) {
     }
     
     // Free the breakpoints array
-    free(breakpoints);
+    free((void*)breakpoints);
 }
 
 /**
@@ -2973,6 +2973,8 @@ static void set_response_error(DAPResponse *response, const char *error_message)
 }
 
 int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
+    (void)args; // Unused parameter
+    
     if (!server || !response) {
         set_response_error(response, "Invalid server or response");
         return -1;
@@ -2980,8 +2982,8 @@ int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
 
     DAP_SERVER_DEBUG_LOG("Terminating debuggee");
     
-    // Create a proper JSON object instead of using strdup
-    cJSON *body = cJSON_CreateObject();
+    // Create response body
+    cJSON* body = cJSON_CreateObject();
     if (!body) {
         set_response_error(response, "Failed to create response body");
         return -1;
@@ -2998,7 +3000,7 @@ int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
     }
     
     // Send terminated event
-    cJSON *event_body = cJSON_CreateObject();
+    cJSON* event_body = cJSON_CreateObject();
     if (event_body) {
         // The terminated event can optionally include a 'restart' attribute
         dap_server_send_event(server, "terminated", event_body);
@@ -3099,7 +3101,6 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         }
         
         // According to DAP spec, the response must include a "breakpoints" array
-        // even when no filters are specified
         cJSON *breakpoints = cJSON_CreateArray();
         if (!breakpoints) {
             cJSON_Delete(body);
@@ -3109,25 +3110,18 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         
         cJSON_AddItemToObject(body, "breakpoints", breakpoints);
         set_response_success(response, body);
-        
-        // Call the callback with empty filters to clear any existing exception breakpoints
-        if (server->command_callbacks[DAP_CMD_SET_EXCEPTION_BREAKPOINTS]) {
-            // The context is already initialized with NULL values
-            server->command_callbacks[DAP_CMD_SET_EXCEPTION_BREAKPOINTS](server);
-        }
-        
         return 0;
     }
     
-    // Count the number of filters in the array
+    // Get the number of filters
     int filter_count = cJSON_GetArraySize(filters);
     
-    // Extract filter IDs into an array that will be stored in the command context
-    char **filter_ids = NULL;
-    char **filter_conditions = NULL;
+    // Allocate arrays for filter IDs and conditions
+    const char **filter_ids = NULL;
+    const char **filter_conditions = NULL;
     
     if (filter_count > 0) {
-        filter_ids = calloc(filter_count, sizeof(char*));
+        filter_ids = calloc(filter_count, sizeof(const char*));
         if (!filter_ids) {
             set_response_error(response, "Failed to allocate memory for filter IDs");
             return 0;
@@ -3138,9 +3132,9 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         
         // We'll also track conditions if filterOptions is provided
         if (filter_options && cJSON_IsArray(filter_options)) {
-            filter_conditions = calloc(filter_count, sizeof(char*));
+            filter_conditions = calloc(filter_count, sizeof(const char*));
             if (!filter_conditions) {
-                free(filter_ids);
+                free((void*)filter_ids);
                 set_response_error(response, "Failed to allocate memory for filter conditions");
                 return 0;
             }
@@ -3179,9 +3173,9 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
     }
     
     // Store pointers in the context
-    server->current_command.context.exception.filters = (const char**)filter_ids;
+    server->current_command.context.exception.filters = filter_ids;
     server->current_command.context.exception.filter_count = filter_count;
-    server->current_command.context.exception.conditions = (const char**)filter_conditions;
+    server->current_command.context.exception.conditions = filter_conditions;
     server->current_command.context.exception.condition_count = filter_conditions ? filter_count : 0;
     
     // Call the callback if it's registered
@@ -3214,6 +3208,7 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         cJSON *breakpoint = cJSON_CreateObject();
         if (!breakpoint) {
             cJSON_Delete(body);
+            cJSON_Delete(breakpoints);
             // Free allocated memory
             free_filter_arrays(filter_ids, filter_conditions, filter_count);
             set_response_error(response, "Failed to create breakpoint object");
@@ -3254,24 +3249,24 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
  * @param filter_conditions Array of filter condition strings
  * @param count Number of filters
  */
-void free_filter_arrays(char **filter_ids, char **filter_conditions, int count) {
-    if (filter_ids) {
-        for (int i = 0; i < count; i++) {
-            if (filter_ids[i]) {
-                free(filter_ids[i]);
-            }
-        }
-        free(filter_ids);
+void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count) {
+    if (!filter_ids || !filter_conditions || count <= 0) {
+        return;
     }
     
-    if (filter_conditions) {
-        for (int i = 0; i < count; i++) {
-            if (filter_conditions[i]) {
-                free(filter_conditions[i]);
-            }
+    // Free each filter ID and condition string
+    for (int i = 0; i < count; i++) {
+        if (filter_ids[i]) {
+            free((void*)filter_ids[i]);
         }
-        free(filter_conditions);
+        if (filter_conditions[i]) {
+            free((void*)filter_conditions[i]);
+        }
     }
+    
+    // Free the arrays themselves
+    free((void*)filter_ids);
+    free((void*)filter_conditions);
 }
 
 int handle_source(DAPServer *server, cJSON *args, DAPResponse *response)

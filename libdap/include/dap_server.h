@@ -266,9 +266,153 @@ typedef struct {
 } ExceptionBreakpointCommandContext;
 
 /**
+ * @struct LaunchCommandContext
+ * @brief Context structure for the DAP 'launch' request command
+ * 
+ * This structure holds all the parameters and state needed to process a launch request
+ * according to the Debug Adapter Protocol specification.
+ * 
+ * The launch request is used to start debugging a program. The debug adapter first
+ * configures everything for debugging the program and then starts it. Some debug
+ * adapters support running the program without debugging (if noDebug is true).
+ * 
+ * Field Descriptions (from DAP Specification):
+ * @param program_path Required. Path to the program to debug. This can be an absolute 
+ *                    or relative path, and should point to the debuggee executable.
+ * 
+ * @param source_path Optional. Path to the main source file. Used for source mapping
+ *                    and as the initial file shown in the debug UI.
+ * 
+ * @param map_path Optional. Path to debug symbol/mapping file if separate from executable.
+ *                Used for source-level debugging and variable inspection.
+ * 
+ * @param working_directory Optional. Current working directory for the debuggee.
+ *                         If not specified, the debugger's CWD is used.
+ * 
+ * @param no_debug Optional. If true, the program is launched without debugging.
+ *                Allows running program at full speed with no debug features.
+ * 
+ * @param stop_at_entry Optional. If true, the debugger should stop at the entry point
+ *                      of the program. Default is implementation-dependent.
+ * 
+ * @param args Optional. Command line arguments to pass to the program.
+ *             Stored as an array of strings.
+ * 
+ * @param args_count Number of command line arguments in the args array.
+ * 
+ * @param launch_args Optional. Additional implementation-specific launch arguments.
+ *                    Can be used for language/runtime specific options.
+ */
+typedef struct {
+    const char* program_path;       /**< Path to the program to be debugged */
+    const char* source_path;        /**< Path to the source file */
+    const char* map_path;           /**< Path to the map file (for debugging symbols) */
+    const char* working_directory;  /**< Working directory for the debuggee */
+    bool no_debug;                  /**< Whether to run without debugging support */
+    bool stop_at_entry;             /**< Whether to stop at program entry point */
+    char** args;                    /**< Command line arguments array */
+    int args_count;                 /**< Number of command line arguments */
+    void* launch_args;              /**< Additional language-specific launch args */
+} LaunchCommandContext;
+
+/**
+ * @struct RestartCommandContext
+ * @brief Context for restart command
+ */
+typedef struct {
+    bool no_debug;                  /**< Whether to restart without debugging support */
+    void* restart_args;             /**< Additional language-specific restart args */
+} RestartCommandContext;
+
+/**
+ * @struct DisconnectCommandContext
+ * @brief Context for disconnect command
+ */
+typedef struct {
+    bool terminate_debuggee;        /**< Whether to terminate the debuggee when disconnecting */
+    bool suspend_debuggee;          /**< Whether to suspend the debuggee when disconnecting */
+    bool restart;                   /**< Whether this disconnect is part of a restart sequence */
+} DisconnectCommandContext;
+
+/**
+ * @struct DisassembleCommandContext
+ * @brief Context for disassemble command
+ */
+typedef struct {
+    const char* memory_reference;   /**< Memory reference to the function to disassemble (required) */
+    uint64_t offset;                /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
+    int instruction_offset;         /**< Offset (in instructions) to add to the memory reference before disassembling (optional) */
+    int instruction_count;          /**< Number of instructions to disassemble (optional, defaults to 10) */
+    bool resolve_symbols;           /**< Whether to return symbols with the disassembled instructions (optional, default: false) */
+} DisassembleCommandContext;
+
+/**
+ * @struct ReadMemoryCommandContext
+ * @brief Context for readMemory command
+ */
+typedef struct {
+    const char* memory_reference;   /**< Memory reference (required) */
+    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    size_t count;                   /**< Number of bytes to read (required) */
+} ReadMemoryCommandContext;
+
+/**
+ * @struct WriteMemoryCommandContext
+ * @brief Context for writeMemory command
+ */
+typedef struct {
+    const char* memory_reference;   /**< Memory reference (required) */
+    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    const char* data;               /**< Data to write in base64 encoding (required) */
+    bool allow_partial;             /**< Whether to allow partial writes (optional) */
+} WriteMemoryCommandContext;
+
+/**
+ * @struct ScopesCommandContext
+ * @brief Context for scopes command
+ */
+typedef struct {
+    int frame_id;                   /**< Stack frame ID for which to retrieve scopes (required) */
+} ScopesCommandContext;
+
+/**
+ * @struct VariablesCommandContext
+ * @brief Context for variables command
+ */
+typedef struct {
+    int variables_reference;        /**< The variables reference to retrieve children for (required) */
+    int filter;                     /**< Optional filter ("indexed" or "named") */
+    int start;                      /**< Optional start index for paged requests */
+    int count;                      /**< Optional number of variables to return */
+    const char* format;             /**< Optional formatting hints */
+} VariablesCommandContext;
+
+/**
+ * @struct SetVariableCommandContext
+ * @brief Context for setVariable command
+ */
+typedef struct {
+    int variables_reference;        /**< The reference of the variable container (required) */
+    const char* name;              /**< The name of the variable in the container (required) */
+    const char* value;             /**< The value to set (required) */
+    const char* format;            /**< Optional formatting hints */
+} SetVariableCommandContext;
+
+/**
  * @typedef DAPCommandCallback
- * @brief Generic callback function for DAP command implementation
- * @param server The DAP server instance that contains all necessary context
+ * @brief Function signature for command implementation callbacks
+ * 
+ * This is the interface between the DAP protocol handling and the actual debugger implementation.
+ * The server calls these callbacks after parsing and validating the DAP protocol messages.
+ * The debugger implementation (e.g. mock_server) provides these callbacks to implement the actual debugging functionality.
+ * 
+ * For initialize command:
+ * - Called after protocol-level validation of initialize request
+ * - Should set up debugger-specific capabilities and state
+ * - Can access parsed client capabilities via server->client_capabilities
+ * - Can modify server capabilities response via server->current_command context
+ * 
+ * @param server The DAP server instance containing command context and state
  * @return 0 on success, non-zero on failure
  */
 typedef int (*DAPCommandCallback)(struct DAPServer *server);
@@ -278,19 +422,29 @@ typedef int (*DAPCommandCallback)(struct DAPServer *server);
  * @brief Information about the current debugger state
  */
 typedef struct {
-    int program_counter;     /**< Current program counter value */
-    int source_line;         /**< Current source line */
-    int source_column;       /**< Current source column */
-    const char* source_path; /**< Current source file path */
-    const char* program_path; /**< Current program file path */
-    int current_thread_id; /**< Current thread ID for execution control */
+    // Execution state information
+    int program_counter;          /**< Current program counter value */
+    int source_line;              /**< Current source line */
+    int source_column;            /**< Current source column */
+    bool has_stopped;             /**< Whether execution has stopped */
+    char* stop_reason;            /**< Reason for stopping (if has_stopped is true) */    
+    char* stop_description;       /**< Description for stopping (if has_stopped is true) */
+    int current_thread_id;        /**< Current thread ID for execution control */
 
-    bool has_stopped;        /**< Whether execution has stopped */
-    char* stop_reason;       /**< Reason for stopping (if has_stopped is true) */    
-    char* stop_description;  /**< Description for stopping (if has_stopped is true) */
-
-    void* user_data;         /**< User-defined data for the current state */
-
+    // Program information
+    const char* program_path;     /**< Current program file path */
+    const char* source_path;      /**< Current source file path */
+    const char* map_path;         /**< Map file for debugging symbols */
+    const char* working_directory;/**< Working directory for the debuggee */
+    bool no_debug;                /**< Whether debugging is disabled */
+    bool stop_at_entry;           /**< Whether to stop at the entry point */
+    
+    // Command line arguments
+    char** args;                  /**< Command line arguments array */
+    int args_count;               /**< Number of command line arguments */
+    
+    // User data
+    void* user_data;              /**< User-defined data for the current state */
 } DebuggerState;
 
 /**
@@ -345,6 +499,15 @@ struct DAPServer
             StepCommandContext step;                /**< Context for step commands */
             BreakpointCommandContext breakpoint;    /**< Context for breakpoint commands */
             ExceptionBreakpointCommandContext exception; /**< Context for exception breakpoints */
+            LaunchCommandContext launch;            /**< Context for launch command */
+            RestartCommandContext restart;          /**< Context for restart command */
+            DisconnectCommandContext disconnect;    /**< Context for disconnect command */
+            DisassembleCommandContext disassemble;  /**< Context for disassemble command */
+            ReadMemoryCommandContext read_memory;   /**< Context for readMemory command */
+            WriteMemoryCommandContext write_memory;  /**< Context for writeMemory command */
+            ScopesCommandContext scopes;            /**< Context for scopes command */
+            VariablesCommandContext variables;       /**< Context for variables command */
+            SetVariableCommandContext set_variable; /**< Context for setVariable command */
             // Add more command-specific contexts as needed
         } context;
     } current_command;

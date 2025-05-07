@@ -46,6 +46,7 @@ struct DAPServer;
 static int cmd_next(DAPServer *server);
 static int cmd_step_in(DAPServer *server);
 static int cmd_step_out(DAPServer *server);
+static int cmd_continue(DAPServer *server);
 static int on_set_exception_breakpoints(DAPServer *server);
 static bool on_should_break_on_exception(DAPServer *server, const char* exception_id, bool is_uncaught, void* user_data);
 static int clear_breakpoints_for_source(const char* source_path);
@@ -137,6 +138,61 @@ static int cmd_step_out(DAPServer *server) {
     mock_debugger.pc++;
     server->debugger_state.program_counter = mock_debugger.pc;
     server->debugger_state.source_line++;
+}
+
+/**
+ * @brief Continue command handler
+ * 
+ * This function handles the continue command by:
+ * 1. Advancing the program counter
+ * 2. Updating the source line
+ * 3. Sending a continued event
+ * 
+ * @param server The DAP server instance
+ * @return int 0 on success, non-zero on failure
+ */
+static int cmd_continue(DAPServer *server) {
+    if (!server) {
+        return -1;
+    }
+    
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Continuing execution...\n");
+    
+    DBG_MOCK_LOG("Handling continue command");
+
+    // Get the thread ID from debugger state - we'll default to this
+    int thread_id = server->debugger_state.current_thread_id;
+    
+    // The continue command doesn't have a dedicated context struct in the union,
+    // so we'll use the thread ID from the debugger state, but in a real implementation
+    // we would add a ContinueCommandContext for the continue command similar to StepCommandContext
+    bool single_thread = false;
+    
+    DBG_MOCK_LOG("Continue thread_id: %d, single_thread: %s", 
+               thread_id, single_thread ? "true" : "false");
+    
+    // Mock implementation: advance the PC and source line
+    mock_debugger.pc += 5; // We advance more than a step command would
+    server->debugger_state.program_counter = mock_debugger.pc;
+    server->debugger_state.source_line += 5;
+    
+    // Set the debugger state to not stopped
+    server->debugger_state.has_stopped = false;
+    
+    // Per DAP spec, we need to send a continued event
+    cJSON *event_body = cJSON_CreateObject();
+    if (event_body) {
+        cJSON_AddNumberToObject(event_body, "threadId", thread_id);
+        cJSON_AddBoolToObject(event_body, "allThreadsContinued", !single_thread);
+        
+        // Send the continued event
+        dap_server_send_event(server, "continued", event_body);
+        
+        DBG_MOCK_LOG("Sent continued event for thread %d (allThreadsContinued: %s)", 
+                   thread_id, single_thread ? "false" : "true");
+    }
+    
+    return 0;
 }
 
 /**
@@ -937,6 +993,7 @@ int dbg_mock_init(int port) {
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_NEXT, cmd_next);
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_STEP_IN, cmd_step_in);
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_STEP_OUT, cmd_step_out);
+    dap_server_register_command_callback(mock_debugger.server, DAP_CMD_CONTINUE, cmd_continue);
     
     // Register launch callback
     dap_server_register_command_callback(mock_debugger.server, DAP_CMD_LAUNCH, cmd_launch);
@@ -1221,6 +1278,7 @@ int dbg_mock_set_default_capabilities(DAPServer *server) {
         DAP_CAP_TERMINATE_REQUEST, true,
         DAP_CAP_TERMINATE_DEBUGGEE, true,  // Support disconnect with terminateDebuggee option
         DAP_CAP_DISASSEMBLE_REQUEST, true, // Support for disassemble command
+        DAP_CAP_SINGLE_THREAD_EXECUTION_REQUESTS, true, // Support for thread-specific execution control
         
         // End of capabilities
         DAP_CAP_COUNT

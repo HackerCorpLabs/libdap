@@ -2995,7 +2995,15 @@ int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
             DAP_SERVER_DEBUG_LOG("Restart with noDebug option");
         }
         
-        // Other args could be parsed here if needed
+        // Parse the arguments field which can contain launch or attach arguments
+        cJSON *arguments_json = cJSON_GetObjectItem(args, "arguments");
+        if (arguments_json && cJSON_IsObject(arguments_json)) {
+            // Store the arguments in the restart context
+            server->current_command.context.restart.restart_args = cJSON_Duplicate(arguments_json, 1);
+            if (!server->current_command.context.restart.restart_args) {
+                DAP_SERVER_DEBUG_LOG("Failed to duplicate restart arguments");
+            }
+        }
     }
     
     // Call the implementation callback if registered
@@ -3436,3 +3444,4 @@ int handle_threads(DAPServer *server, cJSON *args, DAPResponse *response)
     set_response_success(response, body);
     return 0;
 }
+

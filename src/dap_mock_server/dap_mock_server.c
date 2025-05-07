@@ -813,12 +813,29 @@ static int cmd_launch(DAPServer* server) {
 }
 
 /**
- * @brief Restart command handler
+ * @brief Restart command handler for the mock debugger
  * 
- * This function handles the restart command by:
- * 1. Resetting debugger state
- * 2. Re-launching the program with the original launch parameters
- * 3. Sending the required events for a restart
+ * This function implements the DAP restart command in the mock debugger. The restart
+ * command allows a debug session to be restarted without disconnecting, which is
+ * particularly useful for iterative debugging sessions.
+ * 
+ * Implementation Details:
+ * - The mock debugger maintains minimal state (PC, source position, breakpoints)
+ * - All state is reset to initial values during restart
+ * - The original program path from the initial launch is preserved
+ * - The noDebug option allows restarting without debugging capabilities
+ * 
+ * Event Sequence:
+ * 1. terminated: Signals the end of the current debug session
+ * 2. process: Indicates a new process has been created
+ * 3. thread: Notifies that the main thread has started
+ * 4. stopped: Indicates execution has stopped at the entry point
+ * 
+ * State Management:
+ * - Program counter (PC) is reset to 0
+ * - Source position is reset to line 1, column 1
+ * - Debugger is placed in stopped state
+ * - Last event is cleared
  * 
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
@@ -828,15 +845,18 @@ static int cmd_restart(DAPServer* server) {
         return -1;
     }
     
+    // Notify the client that we're starting the restart process
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Restarting debuggee...\n");
     
-    // Extract restart parameters
+    // Extract restart parameters from the command context
+    // noDebug option allows restarting without debugging capabilities
     bool no_debug = server->current_command.context.restart.no_debug;
     
-    // Log the restart action
+    // Log the restart action with the noDebug status
     DBG_MOCK_LOG("Handling restart command (noDebug: %s)", no_debug ? "true" : "false");
     
-    // Check if we have the original program path from a previous launch
+    // Verify we have a program to restart by checking the stored program path
+    // This path should have been set during the initial launch
     const char* program_path = server->debugger_state.program_path;
     if (!program_path) {
         dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: No program to restart\n");
@@ -844,39 +864,46 @@ static int cmd_restart(DAPServer* server) {
         return -1;
     }
     
+    // Notify about terminating the current session
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Terminating current session...\n");
     
-    // Reset debugger state
-    mock_debugger.pc = 0;
-    mock_debugger.last_event = DAP_EVENT_INVALID;
+    // Reset all debugger state to initial values
+    mock_debugger.pc = 0;  // Reset program counter
+    mock_debugger.last_event = DAP_EVENT_INVALID;  // Clear last event
     
-    // Re-initialize program counter and source position
+    // Reset source position and debugger state
     server->debugger_state.program_counter = 0;
     server->debugger_state.source_line = 1;
     server->debugger_state.source_column = 1;
-    server->debugger_state.has_stopped = true;
+    server->debugger_state.has_stopped = true;  // Start in stopped state
     
+    // Notify about starting the new session
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Relaunching program...\n");
     
-    // Send the required events for restart
-    // 1. First, terminate existing process
+    // Send the sequence of events required for a proper restart:
+    
+    // 1. First, terminate the existing process
+    // This notifies the client that the old process is ending
     dap_server_send_event(server, "terminated", NULL);
     
-    // 2. Then, notify about the new process
+    // 2. Notify about the new process being created
+    // The process event includes the program path and process ID
     dap_server_send_process_event(server, program_path, 1, true, "launch");
     
-    // 3. Notify about thread start
+    // 3. Notify about the main thread starting
+    // In this mock implementation, we always use thread ID 1
     dap_server_send_thread_event(server, "started", 1);
     
-    // 4. Send stopped event (typically at entry point)
+    // 4. Send stopped event at the entry point
+    // This is where the debugger will initially stop after restart
     dap_server_send_stopped_event(server, "entry", "Stopped at program entry after restart");
     
-    // Show more detailed information about the restarted program
+    // Show detailed information about the restarted program
     char msg[256];
     snprintf(msg, sizeof(msg), "Program restarted: %s\n", program_path);
     dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, msg);
     
-    // Optionally send a warning for no_debug mode
+    // If noDebug mode is enabled, warn the user that debugging features are disabled
     if (no_debug) {
         dap_server_send_output_category(server, DAP_OUTPUT_STDERR, 
                                       "Warning: Restarted in no-debug mode. Debugging features disabled.\n");

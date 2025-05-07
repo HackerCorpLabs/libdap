@@ -291,32 +291,52 @@ void cleanup_command_context(DAPServer *server)
             if (server->current_command.context.breakpoint.source_name) {
                 free((void*)server->current_command.context.breakpoint.source_name);
             }
-            // Note: We don't free breakpoints array here as it should be freed by the caller
+            // Free breakpoint arrays
+            if (server->current_command.context.breakpoint.breakpoints) {
+                free_breakpoints_array(server->current_command.context.breakpoint.breakpoints,
+                                    server->current_command.context.breakpoint.breakpoint_count);
+                server->current_command.context.breakpoint.breakpoints = NULL;
+            }
             break;
             
         case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
-            // Free filter arrays - typically done by the handler, but clean up just in case
-            if (server->current_command.context.exception.filters) {
-                for (size_t i = 0; i < server->current_command.context.exception.filter_count; i++) {
-                    if (server->current_command.context.exception.filters[i]) {
-                        free((void*)server->current_command.context.exception.filters[i]);
-                    }
-                }
-                free((void*)server->current_command.context.exception.filters);
-            }
-            if (server->current_command.context.exception.conditions) {
-                for (size_t i = 0; i < server->current_command.context.exception.condition_count; i++) {
-                    if (server->current_command.context.exception.conditions[i]) {
-                        free((void*)server->current_command.context.exception.conditions[i]);
-                    }
-                }
-                free((void*)server->current_command.context.exception.conditions);
-            }
+            // Free filter arrays
+            free_filter_arrays(server->current_command.context.exception.filters,
+                             server->current_command.context.exception.conditions,
+                             server->current_command.context.exception.filter_count);
+            server->current_command.context.exception.filters = NULL;
+            server->current_command.context.exception.conditions = NULL;
             break;
             
         case DAP_CMD_LAUNCH:
             // Free strings in launch context
-            // Note: program_path and other fields are typically owned by the debugger state after launch
+            if (server->current_command.context.launch.program_path) {
+                free((void*)server->current_command.context.launch.program_path);
+            }
+            if (server->current_command.context.launch.source_path) {
+                free((void*)server->current_command.context.launch.source_path);
+            }
+            if (server->current_command.context.launch.map_path) {
+                free((void*)server->current_command.context.launch.map_path);
+            }
+            if (server->current_command.context.launch.working_directory) {
+                free((void*)server->current_command.context.launch.working_directory);
+            }
+            // Free command line arguments array
+            if (server->current_command.context.launch.args) {
+                for (int i = 0; i < server->current_command.context.launch.args_count; i++) {
+                    free((void*)server->current_command.context.launch.args[i]);
+                }
+                free(server->current_command.context.launch.args);
+            }
+            break;
+            
+        case DAP_CMD_RESTART:
+            // Free restart arguments if present
+            if (server->current_command.context.restart.restart_args) {
+                cJSON_Delete(server->current_command.context.restart.restart_args);
+                server->current_command.context.restart.restart_args = NULL;
+            }
             break;
             
         case DAP_CMD_DISASSEMBLE:

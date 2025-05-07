@@ -7,13 +7,11 @@
 int handle_help_command(DAPClient* client, const char* args);
 int handle_quit_command(DAPClient* client, const char* args);
 int handle_break_command(DAPClient* client, const char* args);
-int handle_delete_command(DAPClient* client, const char* args);
 int handle_list_command(DAPClient* client, const char* args);
 int handle_continue_command(DAPClient* client, const char* args);
 int handle_step_command(DAPClient* client, const char* args);
 int handle_step_out_command(DAPClient* client, const char* args);
 int handle_next_command(DAPClient* client, const char* args);
-int handle_read_registers_command(DAPClient* client, const char* args);
 int handle_read_memory_command(DAPClient* client, const char* args);
 int handle_write_memory_command(DAPClient* client, const char* args);
 int handle_disassemble_command(DAPClient* client, const char* args);

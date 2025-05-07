@@ -82,8 +82,6 @@ typedef enum {
     DAP_CMD_READ_MEMORY,         ///< Read memory request
     DAP_CMD_WRITE_MEMORY,        ///< Write memory request
     DAP_CMD_DISASSEMBLE,         ///< Disassemble request
-    DAP_CMD_READ_REGISTERS,      ///< Read registers request
-    DAP_CMD_WRITE_REGISTERS,     ///< Write registers request
     DAP_CMD_CANCEL,              ///< Cancel request
     DAP_CMD_CONFIGURATION_DONE,  ///< Configuration done request
     DAP_CMD_TERMINATE_THREADS,   ///< Terminate threads request

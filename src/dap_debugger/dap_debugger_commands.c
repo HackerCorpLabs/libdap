@@ -176,162 +176,29 @@ int handle_step_command(DAPClient* client, const char* args) {
     return 0;
 }
 
+/// @brief Delete 
+/// @param client 
+/// @param args 
+/// @return 
 int handle_break_command(DAPClient* client, const char* args) {
     if (!client) return 1;
-    
-    if (!args || !*args) {
-        // List breakpoints - keep existing functionality
-        DAPBreakpoint* breakpoints = client->breakpoints;
-        int count = client->num_breakpoints;
-        
-        printf("Breakpoints:\n");
-        for (int i = 0; i < count; i++) {
-            printf("  %d: %s:%d\n", breakpoints[i].id, 
-                   breakpoints[i].source ? breakpoints[i].source->path : "unknown",
-                   breakpoints[i].line);
-        }
-        return 0;
-    }
-    
-    // Parse line number and optional file path
-    char* args_copy = strdup(args);
-    if (!args_copy) {
-        fprintf(stderr, "Error: Out of memory\n");
-        return 1;
-    }
-    
-    int line = 0;
-    char* file_path = NULL;
-    
-    // Check if the format is "file:line" or just "line"
-    char* colon = strchr(args_copy, ':');
-    if (colon) {
-        // Format is "file:line"
-        *colon = '\0'; // Split at colon
-        file_path = args_copy;
-        
-        char* line_str = colon + 1;
-        char* endptr;
-        line = strtol(line_str, &endptr, 10);
-        if (endptr == line_str || *endptr != '\0') {
-            fprintf(stderr, "Error: Invalid line number '%s'\n", line_str);
-            free(args_copy);
-            return 1;
-        }
-    } else {
-        // Just a line number, or possibly "line file"
-        char* endptr;
-        line = strtol(args_copy, &endptr, 10);
-        if (endptr == args_copy) {
-            fprintf(stderr, "Error: Invalid line number\n");
-            free(args_copy);
-            return 1;
-        }
-        
-        // Check if there's a file path after the line number
-        while (*endptr == ' ' || *endptr == '\t') endptr++;
-        if (*endptr != '\0') {
-            file_path = endptr;
-        }
-    }
-    
-    // If no file path specified, try to use the current source
-    if (!file_path || !*file_path) {
-        if (client->program_path) {
-            file_path = client->program_path;
-        } else {
-            fprintf(stderr, "Error: No source file specified and no current file available\n");
-            free(args_copy);
-            return 1;
-        }
-    }
-    
-    // Create the breakpoint
-    DAPSourceBreakpoint bp = {0};
-    bp.line = line;
-    bp.column = 0;  // Column is optional, use 0 to ignore
-    bp.condition = NULL;  // No condition by default
-    
-    DAPSetBreakpointsResult result = {0};
-    int error = dap_client_set_breakpoints(client, file_path, &bp, 1, &result);
-    if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error setting breakpoint: %s\n", dap_error_message(error));
-        free(args_copy);
-        return 1;
-    }
-    
-    if (result.num_breakpoints > 0 && result.breakpoints[0].verified) {
-        printf("Breakpoint set at %s:%d\n", file_path, line);
-    } else {
-        if (result.num_breakpoints > 0 && result.breakpoints[0].message) {
-            printf("Warning: Breakpoint may not be valid: %s\n", result.breakpoints[0].message);
-        } else {
-            printf("Warning: Breakpoint may not be valid\n");
-        }
-    }
-    
-    // Free memory and the result
-    free(args_copy);
-    for (size_t i = 0; i < result.num_breakpoints; i++) {
-        free(result.breakpoints[i].message);
-        // Other fields like condition, hit_condition, and log_message would also need to be freed if they were allocated
-    }
-    free(result.breakpoints);
+   
+    // TODO: Need to implement BREAK command (which is NOT set breakpoints)
     
     return 0;
 }
 
-int handle_delete_command(DAPClient* client, const char* args) {
-    if (!client || !args || !*args) {
-        fprintf(stderr, "Usage: delete <breakpoint_id>\n");
-        return 1;
-    }
-    
-    int id = atoi(args);
-    DAPBreakpoint* bp = dap_client_get_breakpoint_by_id(client, id);
-    if (!bp) {
-        fprintf(stderr, "Breakpoint %d not found\n", id);
-        return 1;
-    }
-    
-    // Clear breakpoint by setting an empty array
-    DAPSetBreakpointsResult result = {0};
-    int error = dap_client_set_breakpoints(client, bp->source->path, NULL, 0, &result);
-    if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error deleting breakpoint: %d\n", error);
-        return 1;
-    }
-    return 0;
-}
 
+
+/// @brief List source code
+/// @param client 
+/// @param args 
+/// @return 
 int handle_list_command(DAPClient* client, const char* args) {
     if (!client) return 1;
-    
-    const char* source_path = NULL;
-    int source_reference = 0;
-    
-    if (args && *args) {
-        char* comma = strchr(args, ',');
-        if (comma) {
-            *comma = '\0';
-            source_path = args;
-            source_reference = atoi(comma + 1);
-        } else {
-            source_path = args;
-        }
-    }
-    
-    DAPSourceResult result = {0};
-    int error = dap_client_source(client, source_path, source_reference, &result);
-    if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error getting source: %d\n", error);
-        return 1;
-    }
-    
-    if (result.content) {
-        printf("%s\n", result.content);
-        free(result.content);
-    }
+  
+     // TODO: Implement list command
+
     return 0;
 }
 
@@ -354,7 +221,7 @@ int handle_backtrace_command(DAPClient* client, const char* args) {
     printf("Stack trace:\n");
     for (int i = 0; i < frame_count; i++) {
         printf("  #%d %s:%d\n", i, 
-               frames[i].source ? frames[i].source->path : "unknown",
+               client->program_path,
                frames[i].line);
     }
     
@@ -429,7 +296,7 @@ int handle_stack_command(DAPClient* client, const char* args) {
     printf("Stack trace:\n");
     for (int i = start_frame; i < frame_count && i < start_frame + levels; i++) {
         printf("  #%d %s:%d\n", i, 
-               frames[i].source ? frames[i].source->path : "unknown",
+               frames[i].source_name ? frames[i].source_name : "unknown",
                frames[i].line);
     }
     

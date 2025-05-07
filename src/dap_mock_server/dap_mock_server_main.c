@@ -22,20 +22,10 @@ extern MockDebugger mock_debugger;
  * Signal handler for graceful shutdown
  */
 static void handle_signal(int sig) {
-    if (sig == SIGINT || sig == SIGTERM) {
-        printf("\nReceived signal %d, shutting down...\n", sig);
-        dbg_mock_cleanup();
-        exit(EXIT_SUCCESS);
-    } else if (sig == SIGUSR1) {
-        // Trigger a test exception
-        printf("\nReceived SIGUSR1, triggering test exception...\n");
-        dbg_mock_test_exception(true); // Simulate an uncaught exception
-    } else if (sig == SIGUSR2) {
-        // Trigger a test stop at line
-        printf("\nReceived SIGUSR2, simulating stop at line...\n");
-        const char* test_file = "/path/to/test/file.c";
-        dbg_mock_test_stop_at_line(42, test_file);
-    }
+    printf("\nReceived signal %d, shutting down...\n", sig);
+    dbg_mock_cleanup();
+    exit(EXIT_SUCCESS);
+
 }
 
 /**

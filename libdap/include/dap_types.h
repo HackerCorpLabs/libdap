@@ -57,64 +57,6 @@ typedef enum {
 } DAPThreadState;
 
 /**
- * @brief Presentation hint for source files
- */
-typedef enum {
-    DAP_SOURCE_PRESENTATION_NORMAL,
-    DAP_SOURCE_PRESENTATION_EMPHASIZE,
-    DAP_SOURCE_PRESENTATION_DEEMPHASIZE
-} DAPSourcePresentationHint;
-
-/**
- * @brief Origin of the source
- */
-typedef enum {
-    DAP_SOURCE_ORIGIN_GENERATED,
-    DAP_SOURCE_ORIGIN_DEPLOYED,
-    DAP_SOURCE_ORIGIN_UNKNOWN
-} DAPSourceOrigin;
-
-/**
- * @brief Source checksum algorithm
- */
-typedef enum {
-    DAP_CHECKSUM_MD5,
-    DAP_CHECKSUM_SHA1,
-    DAP_CHECKSUM_SHA256
-} DAPChecksumAlgorithm;
-
-/**
- * @brief Source checksum structure
- */
-typedef struct {
-    DAPChecksumAlgorithm algorithm;
-    char* checksum;
-} DAPChecksum;
-
-/**
- * @brief Source structure representing a source file
- */
-typedef struct DAPSource {
-    char* name;                ///< Name of the source file
-    char* path;                ///< Full path to the source file
-    int source_reference;      ///< Optional source reference number
-    DAPSourcePresentationHint presentation_hint; ///< Presentation hint
-    DAPSourceOrigin origin;    ///< Origin of the source
-    struct DAPSource* sources; ///< Optional array of sub-sources
-    size_t num_sources;        ///< Number of sub-sources
-    char* adapter_data;        ///< Optional adapter-specific data
-    bool is_optimized;         ///< Whether the source is optimized
-    bool is_user_code;         ///< Whether the source is user code
-    char* version;             ///< Optional version string
-    char* symbol_status;       ///< Optional symbol status
-    char* symbol_file_path;    ///< Optional path to symbol file
-    char* date_time_stamp;     ///< Optional timestamp
-    char* address_range;       ///< Optional address range
-    DAPChecksum* checksums;    ///< Optional array of checksums
-    size_t num_checksums;      ///< Number of checksums
-} DAPSource;
-
-/**
  * @brief Stack frame presentation hint
  */
 typedef enum {
@@ -129,15 +71,16 @@ typedef enum {
 typedef struct DAPStackFrame {
     int id;                             ///< Unique identifier for the frame
     char* name;                         ///< Name of the frame (function name)
-    DAPSource* source;                  ///< Optional source of the frame
+    char* source_path;                  ///< Source file path
+    char* source_name;                  ///< Source file name
     int line;                           ///< Line number in the source
     int column;                         ///< Column number in the source
-    int endLine;                        ///< Optional end line number
-    int endColumn;                      ///< Optional end column number
-    char* instructionPointerReference;  ///< Optional instruction pointer reference
-    char* moduleId;                     ///< Optional module ID
-    DAPStackFramePresentationHint presentationHint; ///< Optional presentation hint
-    bool canRestart;                    ///< Whether the frame can be restarted
+    int end_line;                       ///< Optional end line number
+    int end_column;                     ///< Optional end column number
+    char* instruction_pointer_reference;  ///< Optional instruction pointer reference
+    char* module_id;                     ///< Optional module ID
+    DAPStackFramePresentationHint presentation_hint; ///< Optional presentation hint
+    bool can_restart;                    ///< Whether the frame can be restarted
 } DAPStackFrame;
 
 /**
@@ -157,29 +100,78 @@ typedef struct DAPScope {
 } DAPScope;
 
 /**
- * @brief Variable presentation hint
+ * @brief Variable presentation hint kind
  */
 typedef enum {
-    DAP_VARIABLE_PRESENTATION_NORMAL,
-    DAP_VARIABLE_PRESENTATION_READONLY,
-    DAP_VARIABLE_PRESENTATION_HIDDEN
+    DAP_VARIABLE_KIND_PROPERTY,      /**< Property */
+    DAP_VARIABLE_KIND_METHOD,        /**< Method */
+    DAP_VARIABLE_KIND_CLASS,         /**< Class */
+    DAP_VARIABLE_KIND_DATA,          /**< Data */
+    DAP_VARIABLE_KIND_EVENT,         /**< Event */
+    DAP_VARIABLE_KIND_BASE_CLASS,    /**< Base class */
+    DAP_VARIABLE_KIND_INNER_CLASS,   /**< Inner class */
+    DAP_VARIABLE_KIND_INTERFACE,     /**< Interface */
+    DAP_VARIABLE_KIND_MOST_DERIVED,  /**< Most derived class */
+    DAP_VARIABLE_KIND_VIRTUAL,       /**< Virtual */
+    DAP_VARIABLE_KIND_DATABREAKPOINT /**< Data breakpoint */
+} DAPVariableKind;
+
+/**
+ * @brief Variable presentation attribute flags
+ * 
+ * These flags correspond to the attributes field in the VariablePresentationHint
+ * object as defined in the Debug Adapter Protocol specification.
+ */
+typedef enum {
+    DAP_VARIABLE_ATTR_NONE     = 0,         /**< No attributes */
+    DAP_VARIABLE_ATTR_STATIC   = (1 << 0),  /**< Variable is static */
+    DAP_VARIABLE_ATTR_CONSTANT = (1 << 1),  /**< Variable is a constant */
+    DAP_VARIABLE_ATTR_READONLY = (1 << 2),  /**< Variable is read-only */
+    DAP_VARIABLE_ATTR_RAWSTRING = (1 << 3), /**< String should not be escaped/processed */
+    DAP_VARIABLE_ATTR_HASOBJECTID = (1 << 4), /**< Has an associated objectId (inspector/REPL) */
+    DAP_VARIABLE_ATTR_CANHAVEOBJECTID = (1 << 5), /**< Might have an objectId */
+    DAP_VARIABLE_ATTR_HASSIDEEFFECTS = (1 << 6), /**< Evaluating causes side effects */
+    DAP_VARIABLE_ATTR_HASDATABREAKPOINT = (1 << 7), /**< Value is eligible for data breakpoint */
+    DAP_VARIABLE_ATTR_HASCHILDREN = (1 << 8) /**< Variable has children */
+} DAPVariableAttributes;
+
+/**
+ * @brief Variable presentation visibility
+ */
+typedef enum {
+    DAP_VARIABLE_VISIBILITY_PUBLIC,     /**< Public visibility */
+    DAP_VARIABLE_VISIBILITY_PRIVATE,    /**< Private visibility */
+    DAP_VARIABLE_VISIBILITY_PROTECTED,  /**< Protected visibility */
+    DAP_VARIABLE_VISIBILITY_INTERNAL,   /**< Internal visibility */
+    DAP_VARIABLE_VISIBILITY_FINAL       /**< Final visibility */
+} DAPVariableVisibility;
+
+/**
+ * @brief Variable presentation hint structure (replacing the enum)
+ */
+typedef struct {
+    DAPVariableKind kind;                /**< Kind of variable */
+    DAPVariableAttributes attributes;    /**< Attribute flags */
+    DAPVariableVisibility visibility;    /**< Visibility type */
+    bool has_kind;                       /**< Whether kind is set */
+    bool has_visibility;                 /**< Whether visibility is set */
 } DAPVariablePresentationHint;
 
 /**
- * @brief Variable structure representing a debug variable
+ * @brief Variable structure representing a variable or register
+ * 
+ * This structure is used to represent a variable or register as per DAP specification
  */
 typedef struct DAPVariable {
-    char* name;                         ///< Name of the variable
-    char* value;                        ///< Value of the variable
-    char* type;                         ///< Type of the variable
-    int variables_reference;            ///< Optional reference to child variables
-    int named_variables;                ///< Number of named child variables
-    int indexed_variables;              ///< Number of indexed child variables
-    char* memory_reference;             ///< Optional memory reference
-    bool evaluatable;                   ///< Whether the variable can be evaluated
-    char* evaluate_name;                ///< Optional expression to evaluate
-    DAPVariablePresentationHint presentation_hint; ///< Optional presentation hint
-    int value_location_reference;       ///< Optional reference to the variable's location
+    char* name;                      /**< Variable name (required) */
+    char* value;                     /**< Variable value as string (required) */
+    char* type;                      /**< Type name (optional) */
+    int variables_reference;         /**< Reference ID for querying children (0 = no children) */
+    int named_variables;             /**< Number of named child variables */
+    int indexed_variables;           /**< Number of indexed child variables */
+    char* evaluate_name;             /**< Expression that evaluates to this variable (optional) */
+    DAPVariablePresentationHint presentation_hint; /**< UI hints (kind, attributes, visibility) */
+    char* memory_reference;          /**< Memory address as string if variable represents memory (optional) */
 } DAPVariable;
 
 /**
@@ -198,7 +190,8 @@ typedef struct DAPBreakpoint {
     int id;                             ///< Unique identifier for the breakpoint
     bool verified;                      ///< Whether the breakpoint is verified
     char* message;                      ///< Optional message about the breakpoint
-    DAPSource* source;                  ///< Source of the breakpoint
+    char* source_path;                  ///< Source file path
+    char* source_name;                  ///< Source file name
     int line;                           ///< Line number in the source
     int column;                         ///< Optional column number in the source
     int end_line;                       ///< Optional end line number
@@ -234,7 +227,8 @@ struct DAPDisassembledInstruction {
     char* instruction_bytes;            ///< Raw bytes representing the instruction
     char* instruction;                  ///< Text representing the instruction
     char* symbol;                       ///< Name of the symbol
-    DAPSource* location;                ///< Source location
+    char* source_path;                  ///< Source file path
+    char* source_name;                  ///< Source file name
     int line;                           ///< Line number
     int column;                         ///< Column number
     int end_line;                       ///< End line number
@@ -337,18 +331,6 @@ typedef struct {
     DAPThread* threads;
     size_t num_threads;
 } DAPGetThreadsResult;
-
-typedef struct {
-    DAPResult base;
-    DAPSource* sources;
-    size_t num_sources;
-} DAPLoadSourcesResult;
-
-typedef struct {
-    DAPResult base;
-    char* content;
-    char* mime_type;
-} DAPSourceResult;
 
 typedef struct {
     DAPResult base;

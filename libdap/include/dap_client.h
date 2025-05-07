@@ -107,34 +107,7 @@ int dap_client_initialize(DAPClient* client);
  */
 int dap_client_launch(DAPClient* client, const char* program_path, bool stop_at_entry);
 
-/**
- * @brief Set breakpoints in a source file
- * 
- * @param client Pointer to the client
- * @param source_path Source file path
- * @param breakpoints Array of breakpoints
- * @param num_breakpoints Number of breakpoints
- * @param result Output result structure
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_set_breakpoints(DAPClient* client, const char* source_path, 
-                             const DAPSourceBreakpoint* breakpoints, size_t num_breakpoints,
-                             DAPSetBreakpointsResult* result);
 
-/**
- * @brief Set a breakpoint at a specific line
- *
- * This is a convenience function that wraps dap_client_set_breakpoints to set
- * a single breakpoint at a given line in a source file.
- *
- * @param client Pointer to the client
- * @param source_path Source file path
- * @param line Line number to set breakpoint at
- * @param result Output result structure
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_break(DAPClient* client, const char* source_path, int line, 
-                   DAPSetBreakpointsResult* result);
 
 /**
  * @brief Signal the end of configuration
@@ -303,27 +276,6 @@ int dap_client_set_variable(DAPClient* client, int variables_reference,
 int dap_client_set_expression(DAPClient* client, const char* expression,
                             const char* value, int frame_id);
 
-/**
- * @brief Write registers
- * 
- * @param client Pointer to the client
- * @param registers Array of register values
- * @param register_count Number of registers
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_write_registers(DAPClient* client, const uint32_t* registers,
-                             size_t register_count);
-
-/**
- * @brief Get loaded sources
- * 
- * @param client Pointer to the client
- * @param sources Output array of sources (caller must free)
- * @param source_count Output number of sources
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_get_loaded_sources(DAPClient* client, DAPSource** sources,
-                                size_t* source_count);
 
 /**
  * @brief Step back
@@ -349,16 +301,7 @@ int dap_client_set_instruction_breakpoints(DAPClient* client,
                                          size_t num_breakpoints,
                                          DAPSetInstructionBreakpointsResult* result);
 
-/**
- * @brief Get source content
- * 
- * @param client Pointer to the client
- * @param source_path Source file path
- * @param source_reference Source reference
- * @param result Output result structure
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_source(DAPClient* client, const char* source_path, int source_reference, DAPSourceResult* result);
+
 
 /**
  * @brief Get loaded modules
@@ -370,15 +313,6 @@ int dap_client_source(DAPClient* client, const char* source_path, int source_ref
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
 int dap_client_modules(DAPClient* client, int start_module, int module_count, DAPModulesResult* result);
-
-/**
- * @brief Load source files
- * 
- * @param client Pointer to the client
- * @param result Output result structure
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_load_sources(DAPClient* client, DAPLoadSourcesResult* result);
 
 /**
  * @brief Read memory from the debuggee
@@ -449,59 +383,7 @@ void dap_evaluate_result_free(DAPEvaluateResult* result);
 int dap_client_increase_timeout(DAPClient* client, int new_timeout_ms,
                               int* old_timeout_ms);
 
-/**
- * @brief Free a DAP source structure
- * 
- * @param source Pointer to the source structure to free
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_source_free(DAPSource* source);
 
-/**
- * @brief Parse a JSON object into a DAP source structure
- * 
- * @param json JSON object containing source information
- * @return DAPSource* Newly allocated source structure, or NULL on error
- */
-DAPSource* dap_source_parse(cJSON* json);
-
-/**
- * @brief Update breakpoints from server response
- * 
- * @param client Pointer to the client
- * @param source_path Source file path
- * @param server_breakpoints Array of breakpoints from server
- * @param count Number of breakpoints
- * @return int DAP_ERROR_NONE on success, error code on failure
- */
-int dap_client_update_breakpoints(DAPClient* client, const char* source_path, 
-                               const DAPBreakpoint* server_breakpoints, int count);
-
-/**
- * @brief Get a breakpoint by its ID
- * 
- * @param client Pointer to the client
- * @param id Breakpoint ID to find
- * @return DAPBreakpoint* Pointer to the found breakpoint, NULL if not found
- */
-DAPBreakpoint* dap_client_get_breakpoint_by_id(DAPClient* client, int id);
-
-/**
- * @brief Get breakpoints by source path
- * 
- * @param client Pointer to the client
- * @param source_path Source file path
- * @param count Pointer to store the number of breakpoints found
- * @return DAPBreakpoint* Array of breakpoints (must be freed by caller), NULL on error
- */
-DAPBreakpoint* dap_client_get_breakpoints_by_source(DAPClient* client, const char* source_path, int* count);
-
-/**
- * @brief Free a DAP breakpoint structure
- * 
- * @param breakpoint Pointer to the breakpoint structure to free
- */
-void dap_breakpoint_free(DAPBreakpoint* breakpoint);
 
 // Add these command types
 #define DAP_CMD_STOPPED "stopped"

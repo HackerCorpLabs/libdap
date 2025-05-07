@@ -1674,12 +1674,26 @@ static int init_debugger_state(DAPServer *server) {
 }
 
 /**
- * @brief Set up callbacks and capabilities for the server
+ * @brief Register command callbacks for mock debugger implementation
+ * 
+ * This function connects the mock debugger's command implementations to the DAP server.
+ * Each callback implements the debugger-specific behavior for a DAP command.
+ * 
+ * For initialize:
+ * - Sets default capabilities via dbg_mock_set_default_capabilities()
+ * - No direct initialize callback needed - capabilities setup is sufficient
+ * 
+ * Command callback sequence:
+ * 1. DAP server receives command
+ * 2. Server validates protocol requirements
+ * 3. Server calls registered callback if present
+ * 4. Callback implements debugger-specific behavior
+ * 5. Server handles response and event generation
  * 
  * @param server The DAP server instance
- * @return int 0 on success, non-zero on failure
+ * @return 0 on success, -1 on failure
  */
-int setup_server_callbacks(DAPServer *server) {
+static int setup_server_callbacks(DAPServer *server) {
     if (!server) {
         return -1;
     }
@@ -1996,13 +2010,39 @@ int dbg_mock_test_stop_at_line(int line, const char* file) {
 }
 
 /**
- * @brief Set up the default capabilities for the mock server
+ * @brief Mock debugger's implementation of initialize command
  * 
- * This function configures which DAP capabilities our mock server
- * actually supports based on our implementation.
+ * This callback is called by the DAP server after protocol-level handling of initialize.
+ * It sets up the mock debugger's state and capabilities for a new debug session.
+ * 
+ * Responsibilities:
+ * 1. Set supported debug features via capabilities
+ * 2. Initialize mock debugger state (memory, registers, etc)
+ * 3. Prepare for subsequent commands
+ * 
+ * Capabilities advertised by mock debugger:
+ * - Basic execution control (continue, step, pause)
+ * - Breakpoint support (source lines, functions, conditions)
+ * - Variable inspection and modification
+ * - Memory access (read/write)
+ * - Stack trace and scope information
+ * - Exception handling
+ * 
+ * State initialization:
+ * - Clears breakpoint list
+ * - Resets execution state
+ * - Initializes mock memory and registers
+ * - Sets up exception filters
+ * 
+ * Events generated:
+ * - None directly (initialized event sent by server)
+ * 
+ * Error handling:
+ * - Returns non-zero if initialization fails
+ * - Logs detailed error via DBG_MOCK_LOG
  * 
  * @param server The DAP server instance
- * @return int The number of capabilities set
+ * @return 0 on success, non-zero on failure
  */
 int dbg_mock_set_default_capabilities(DAPServer *server) {
     if (!server) {
@@ -2224,5 +2264,4 @@ int dbg_mock_trigger_breakpoint_hit(int breakpoint_id) {
     DBG_MOCK_LOG("Sent breakpoint stopped event");
     return 0;
 }
-
 

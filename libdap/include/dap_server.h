@@ -400,7 +400,20 @@ typedef struct {
 
 /**
  * @typedef DAPCommandCallback
- * @brief Function signature for command callbacks
+ * @brief Function signature for command implementation callbacks
+ * 
+ * This is the interface between the DAP protocol handling and the actual debugger implementation.
+ * The server calls these callbacks after parsing and validating the DAP protocol messages.
+ * The debugger implementation (e.g. mock_server) provides these callbacks to implement the actual debugging functionality.
+ * 
+ * For initialize command:
+ * - Called after protocol-level validation of initialize request
+ * - Should set up debugger-specific capabilities and state
+ * - Can access parsed client capabilities via server->client_capabilities
+ * - Can modify server capabilities response via server->current_command context
+ * 
+ * @param server The DAP server instance containing command context and state
+ * @return 0 on success, non-zero on failure
  */
 typedef int (*DAPCommandCallback)(struct DAPServer *server);
 

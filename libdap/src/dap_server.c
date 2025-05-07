@@ -267,91 +267,86 @@ int dap_server_process_message(DAPServer *server, const char *message)
  */
 void cleanup_command_context(DAPServer *server)
 {
-    if (!server) return;
+    if (!server) {
+        return;
+    }
     
-    // Helper macro to safely free pointers with additional check for valid memory address range
-    #define SAFE_FREE(ptr) do { \
-        if ((ptr) && (uintptr_t)(ptr) > 1024) { \
-            DAP_SERVER_DEBUG_LOG("Freeing command context pointer %s at %p", #ptr, (void*)(ptr)); \
-            free((void*)(ptr)); \
-            (ptr) = NULL; \
-        } \
-    } while (0)
-
-    DAP_SERVER_DEBUG_LOG("Cleaning up command context for command type %d", server->current_command.type);
-    
+    // Clean up any resources in the command context based on command type
     switch (server->current_command.type) {
-        case DAP_CMD_LAUNCH:
-            // Launch context resources are now stored in debugger_state and are not 
-            // freed here anymore, since they need to persist across the entire debug session
-            break;
-            
-        case DAP_CMD_RESTART:
-            // Clean up restart context
-            SAFE_FREE(server->current_command.context.restart.restart_args);
-            break;
-            
-        case DAP_CMD_DISCONNECT:
-            // Nothing to clean up for disconnect context (no dynamic allocations)
-            break;
-            
-        case DAP_CMD_DISASSEMBLE:
-            // Clean up disassemble context
-            SAFE_FREE(server->current_command.context.disassemble.memory_reference);
-            break;
-            
         case DAP_CMD_STEP_IN:
         case DAP_CMD_STEP_OUT:
         case DAP_CMD_NEXT:
-            // Clean up step context - only free granularity if it was dynamically allocated
-            {
-                static const char* STATEMENT_GRANULARITY = "statement";
-                // Don't free static strings like "statement", only dynamically allocated ones
-                if (server->current_command.context.step.granularity && 
-                    server->current_command.context.step.granularity != STATEMENT_GRANULARITY) {
-                    SAFE_FREE(server->current_command.context.step.granularity);
-                }
-                server->current_command.context.step.granularity = NULL;
+            // Only free the granularity string if it's not the default static string "statement"
+            if (server->current_command.context.step.granularity != NULL && 
+                strcmp(server->current_command.context.step.granularity, "statement") != 0) {
+                free((void*)server->current_command.context.step.granularity);
             }
             break;
             
         case DAP_CMD_SET_BREAKPOINTS:
-            // Clean up breakpoint context
-            SAFE_FREE(server->current_command.context.breakpoint.source_path);
-            SAFE_FREE(server->current_command.context.breakpoint.source_name);
-            
-            // Only free the breakpoints array if it was dynamically allocated
-            SAFE_FREE(server->current_command.context.breakpoint.breakpoints);
+            // Free source path and name
+            if (server->current_command.context.breakpoint.source_path) {
+                free((void*)server->current_command.context.breakpoint.source_path);
+            }
+            if (server->current_command.context.breakpoint.source_name) {
+                free((void*)server->current_command.context.breakpoint.source_name);
+            }
+            // Note: We don't free breakpoints array here as it should be freed by the caller
             break;
             
         case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
-            // Clean up exception breakpoint context
+            // Free filter arrays - typically done by the handler, but clean up just in case
             if (server->current_command.context.exception.filters) {
                 for (size_t i = 0; i < server->current_command.context.exception.filter_count; i++) {
-                    SAFE_FREE(server->current_command.context.exception.filters[i]);
+                    if (server->current_command.context.exception.filters[i]) {
+                        free((void*)server->current_command.context.exception.filters[i]);
+                    }
                 }
-                free(server->current_command.context.exception.filters);
-                server->current_command.context.exception.filters = NULL;
+                free((void*)server->current_command.context.exception.filters);
             }
-            
             if (server->current_command.context.exception.conditions) {
                 for (size_t i = 0; i < server->current_command.context.exception.condition_count; i++) {
-                    SAFE_FREE(server->current_command.context.exception.conditions[i]);
+                    if (server->current_command.context.exception.conditions[i]) {
+                        free((void*)server->current_command.context.exception.conditions[i]);
+                    }
                 }
-                free(server->current_command.context.exception.conditions);
-                server->current_command.context.exception.conditions = NULL;
+                free((void*)server->current_command.context.exception.conditions);
+            }
+            break;
+            
+        case DAP_CMD_LAUNCH:
+            // Free strings in launch context
+            // Note: program_path and other fields are typically owned by the debugger state after launch
+            break;
+            
+        case DAP_CMD_DISASSEMBLE:
+            // Free memory reference string
+            if (server->current_command.context.disassemble.memory_reference) {
+                free((void*)server->current_command.context.disassemble.memory_reference);
+            }
+            break;
+            
+        case DAP_CMD_READ_MEMORY:
+            // Free memory reference string
+            if (server->current_command.context.read_memory.memory_reference) {
+                free((void*)server->current_command.context.read_memory.memory_reference);
+            }
+            break;
+            
+        case DAP_CMD_VARIABLES:
+            // Free format string if set
+            if (server->current_command.context.variables.format) {
+                free((void*)server->current_command.context.variables.format);
             }
             break;
             
         default:
-            // No cleanup needed for other command types yet
+            // No cleanup needed for other command types
             break;
     }
     
-    // Reset the command type to indicate no command is in progress
+    // Reset the command type to invalid to indicate context is clean
     server->current_command.type = DAP_CMD_INVALID;
-    
-    #undef SAFE_FREE
 }
 
 /**

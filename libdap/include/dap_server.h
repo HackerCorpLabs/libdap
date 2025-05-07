@@ -313,10 +313,38 @@ typedef struct {
 } DisassembleCommandContext;
 
 /**
+ * @struct ReadMemoryCommandContext
+ * @brief Context for readMemory command
+ */
+typedef struct {
+    const char* memory_reference;   /**< Memory reference (required) */
+    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    size_t count;                   /**< Number of bytes to read (required) */
+} ReadMemoryCommandContext;
+
+/**
+ * @struct ScopesCommandContext
+ * @brief Context for scopes command
+ */
+typedef struct {
+    int frame_id;                   /**< Stack frame ID for which to retrieve scopes (required) */
+} ScopesCommandContext;
+
+/**
+ * @struct VariablesCommandContext
+ * @brief Context for variables command
+ */
+typedef struct {
+    int variables_reference;        /**< The variables reference to retrieve children for (required) */
+    int filter;                     /**< Optional filter ("indexed" or "named") */
+    int start;                      /**< Optional start index for paged requests */
+    int count;                      /**< Optional number of variables to return */
+    const char* format;             /**< Optional formatting hints */
+} VariablesCommandContext;
+
+/**
  * @typedef DAPCommandCallback
- * @brief Generic callback function for DAP command implementation
- * @param server The DAP server instance that contains all necessary context
- * @return 0 on success, non-zero on failure
+ * @brief Function signature for command callbacks
  */
 typedef int (*DAPCommandCallback)(struct DAPServer *server);
 
@@ -406,6 +434,9 @@ struct DAPServer
             RestartCommandContext restart;          /**< Context for restart command */
             DisconnectCommandContext disconnect;    /**< Context for disconnect command */
             DisassembleCommandContext disassemble;  /**< Context for disassemble command */
+            ReadMemoryCommandContext read_memory;   /**< Context for readMemory command */
+            ScopesCommandContext scopes;            /**< Context for scopes command */
+            VariablesCommandContext variables;       /**< Context for variables command */
             // Add more command-specific contexts as needed
         } context;
     } current_command;

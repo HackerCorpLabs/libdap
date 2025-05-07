@@ -40,6 +40,45 @@ static StatusFlag status_flags[] = {
 
 #define NUM_STATUS_FLAGS (sizeof(status_flags) / sizeof(StatusFlag))
 
+/**
+ * @brief Encodes binary data as a base64 string
+ * 
+ * This implementation is a simple helper for the DAP protocol which requires
+ * memory data to be base64 encoded in readMemory responses.
+ * 
+ * @param data The binary data to encode
+ * @param len The length of the data in bytes
+ * @return char* The base64 encoded string (caller must free)
+ */
+static char* base64_encode(const uint8_t* data, size_t len) {
+    static const char base64_chars[] = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    
+    // Calculate the length of the output string
+    size_t output_len = 4 * ((len + 2) / 3) + 1; // +1 for null terminator
+    
+    // Allocate memory for the output
+    char* output = malloc(output_len);
+    if (!output) {
+        return NULL;
+    }
+    
+    size_t i, j;
+    for (i = 0, j = 0; i < len; i += 3, j += 4) {
+        uint32_t triplet = data[i] << 16;
+        if (i + 1 < len) triplet |= data[i + 1] << 8;
+        if (i + 2 < len) triplet |= data[i + 2];
+        
+        output[j] = base64_chars[(triplet >> 18) & 0x3F];
+        output[j + 1] = base64_chars[(triplet >> 12) & 0x3F];
+        output[j + 2] = (i + 1 < len) ? base64_chars[(triplet >> 6) & 0x3F] : '=';
+        output[j + 3] = (i + 2 < len) ? base64_chars[triplet & 0x3F] : '=';
+    }
+    
+    output[j] = '\0';
+    return output;
+}
+
 // Define CPU registers for ND-100
 static Register cpu_registers[] = {
     {"STS", 0x0000, "bitmask", true, 1001}, // Status register with nested flags
@@ -1425,80 +1464,134 @@ int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response)
 
 int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)args; // Mark as unused
-    if (!server->is_running || !server->attached)
+    if (!server || !args || !response)
     {
-        response->success = false;
-        response->error_message = strdup("Debugger not running or attached");
-        return 0;
+        set_response_error(response, "Invalid arguments");
+        return -1;
     }
 
-    // Get memory read parameters
-    cJSON *address_json = cJSON_GetObjectItem(args, "address");
+    // Initialize the command context for readMemory
+    server->current_command.type = DAP_CMD_READ_MEMORY;
+    memset(&server->current_command.context.read_memory, 0, sizeof(ReadMemoryCommandContext));
+
+    // Parse required arguments - memoryReference
+    cJSON *memory_reference = cJSON_GetObjectItem(args, "memoryReference");
+    if (!memory_reference || !cJSON_IsString(memory_reference))
+    {
+        set_response_error(response, "Missing or invalid memoryReference");
+        return -1;
+    }
+    
+    // Store memory reference in context
+    server->current_command.context.read_memory.memory_reference = strdup(memory_reference->valuestring);
+    if (!server->current_command.context.read_memory.memory_reference) {
+        set_response_error(response, "Failed to allocate memory for memoryReference");
+        return -1;
+    }
+
+    // Parse count parameter (required)
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
-    if (!address_json || !count_json)
+    if (!count_json || !cJSON_IsNumber(count_json))
     {
-        response->success = false;
-        response->error_message = strdup("Missing required parameters");
-        return 0;
+        set_response_error(response, "Missing or invalid count parameter");
+        return -1;
     }
+    server->current_command.context.read_memory.count = (size_t)count_json->valueint;
 
-    uint64_t address = address_json->valueint;
-    int count = count_json->valueint;
+    // Parse optional offset parameter (defaults to 0)
+    server->current_command.context.read_memory.offset = 0;
+    cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
+    if (offset_json && cJSON_IsNumber(offset_json))
+    {
+        server->current_command.context.read_memory.offset = (uint64_t)offset_json->valuedouble;
+    }
 
     // Validate parameters
-    if (count <= 0 || count > 1024)
+    if (server->current_command.context.read_memory.count <= 0 || 
+        server->current_command.context.read_memory.count > 1024)
     {
-        response->success = false;
-        response->error_message = strdup("Invalid count parameter");
+        set_response_error(response, "Invalid count parameter (must be > 0 and <= 1024)");
+        return -1;
+    }
+
+    // Call the implementation callback if registered
+    if (server->command_callbacks[DAP_CMD_READ_MEMORY]) {
+        DAP_SERVER_DEBUG_LOG("Calling implementation callback for readMemory");
+        
+        int callback_result = server->command_callbacks[DAP_CMD_READ_MEMORY](server);
+        if (callback_result < 0) {
+            DAP_SERVER_DEBUG_LOG("readMemory implementation callback failed");
+            set_response_error(response, "readMemory implementation callback failed");
+            return -1;
+        }
+        
+        // The callback should have prepared the memory data for the response
+        // We just need to set success=true and return
+        response->success = true;
         return 0;
     }
+    
+    DAP_SERVER_DEBUG_LOG("No implementation callback for readMemory, using default implementation");
+
+    // Default implementation if no callback is registered
+    // This will be a mock implementation that returns dummy data
+    char *endptr = NULL;
+    uint32_t address = (uint32_t)strtoul(server->current_command.context.read_memory.memory_reference, &endptr, 0);
+    if (endptr == server->current_command.context.read_memory.memory_reference || *endptr != '\0')
+    {
+        set_response_error(response, "Invalid memory reference format");
+        return -1;
+    }
+
+    // Apply offset to address
+    address += (uint32_t)server->current_command.context.read_memory.offset;
 
     // Create response body
     cJSON *body = cJSON_CreateObject();
     if (!body)
     {
-        response->success = false;
-        response->error_message = strdup("Failed to create response body");
-        return 0;
+        set_response_error(response, "Failed to create response body");
+        return -1;
     }
 
-    // Simulate memory read
-    char *data = (char *)malloc(count);
-    if (!data)
-    {
-        cJSON_Delete(body);
-        response->success = false;
-        response->error_message = strdup("Failed to allocate memory");
-        return 0;
-    }
-
-    // Fill with mock data
-    for (int i = 0; i < count; i++)
-    {
-        data[i] = (char)((address + i) & 0xFF);
-    }
-
-    // Add to response
+    // Format address as a string (per DAP spec)
     char address_str[32];
-    snprintf(address_str, sizeof(address_str), "0x%lx", address);
+    snprintf(address_str, sizeof(address_str), "0x%08x", address);
     cJSON_AddStringToObject(body, "address", address_str);
-    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
-    cJSON_AddStringToObject(body, "data", data);
-    free(data);
-
-    // Convert to string
-    char *body_str = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    if (!body_str)
-    {
-        response->success = false;
-        response->error_message = strdup("Failed to format response body");
-        return 0;
+    
+    // Create fake data - a repeating pattern based on the address
+    size_t count = server->current_command.context.read_memory.count;
+    uint8_t *data = malloc(count);
+    if (!data) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to allocate memory for data");
+        return -1;
     }
-
-    response->success = true;
-    response->data = body_str;
+    
+    // Fill with a simple pattern
+    for (size_t i = 0; i < count; i++) {
+        data[i] = (uint8_t)((address + i) & 0xFF);
+    }
+    
+    // Encode as base64
+    char *encoded = base64_encode(data, count);
+    free(data);
+    
+    if (!encoded) {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to encode data as base64");
+        return -1;
+    }
+    
+    cJSON_AddStringToObject(body, "data", encoded);
+    free(encoded);
+    
+    // Add unreadableBytes = 0 (all bytes were readable)
+    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
+    
+    // Set success response
+    set_response_success(response, body);
+    
     return 0;
 }
 
@@ -2526,8 +2619,7 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
 
 int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)server; // Mark as unused
-    if (!args || !response)
+    if (!server || !args || !response)
     {
         set_response_error(response, "Invalid arguments");
         return -1;
@@ -2538,6 +2630,23 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
     {
         set_response_error(response, "Invalid frame ID");
         return -1;
+    }
+
+    // Set up the command context
+    server->current_command.type = DAP_CMD_SCOPES;
+    server->current_command.request_seq = response->request_seq;
+    server->current_command.context.scopes.frame_id = frameId->valueint;
+
+    // Check if there's a registered callback for this command
+    if (server->command_callbacks[DAP_CMD_SCOPES])
+    {
+        int result = server->command_callbacks[DAP_CMD_SCOPES](server);
+        if (result == 0)
+        {
+            // Callback handled the command - response will be sent by the callback
+            return 0;
+        }
+        // If the callback returns non-zero, fall back to default implementation
     }
 
     // Create response body with scopes
@@ -2600,8 +2709,7 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
 
 int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)server; // Mark as unused
-    if (!args || !response)
+    if (!server || !args || !response)
     {
         set_response_error(response, "Invalid arguments");
         return -1;
@@ -2612,6 +2720,61 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
     {
         set_response_error(response, "Invalid variables reference");
         return -1;
+    }
+
+    // Initialize the command context for variables
+    server->current_command.type = DAP_CMD_VARIABLES;
+    server->current_command.request_seq = response->request_seq;
+    memset(&server->current_command.context.variables, 0, sizeof(VariablesCommandContext));
+    
+    // Set the required variables reference
+    server->current_command.context.variables.variables_reference = variablesReference->valueint;
+    
+    // Parse optional filter
+    cJSON *filter = cJSON_GetObjectItem(args, "filter");
+    if (filter && cJSON_IsString(filter))
+    {
+        if (strcmp(filter->valuestring, "indexed") == 0)
+        {
+            server->current_command.context.variables.filter = 1; // indexed
+        }
+        else if (strcmp(filter->valuestring, "named") == 0)
+        {
+            server->current_command.context.variables.filter = 2; // named
+        }
+    }
+    
+    // Parse optional start
+    cJSON *start = cJSON_GetObjectItem(args, "start");
+    if (start && cJSON_IsNumber(start))
+    {
+        server->current_command.context.variables.start = start->valueint;
+    }
+    
+    // Parse optional count
+    cJSON *count = cJSON_GetObjectItem(args, "count");
+    if (count && cJSON_IsNumber(count))
+    {
+        server->current_command.context.variables.count = count->valueint;
+    }
+    
+    // Parse optional format
+    cJSON *format = cJSON_GetObjectItem(args, "format");
+    if (format && cJSON_IsString(format))
+    {
+        server->current_command.context.variables.format = strdup(format->valuestring);
+    }
+    
+    // Check if there's a registered callback for this command
+    if (server->command_callbacks[DAP_CMD_VARIABLES])
+    {
+        int result = server->command_callbacks[DAP_CMD_VARIABLES](server);
+        if (result == 0)
+        {
+            // Callback handled the command - response will be sent by the callback
+            return 0;
+        }
+        // If the callback returns non-zero, fall back to default implementation
     }
 
     // Create response body with variables
@@ -2697,36 +2860,10 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
     default:
     {
         // Create error response
-        response->success = false;
-
-        // Create error object with more user-friendly message
-        cJSON *error = cJSON_CreateObject();
-        if (error)
-        {
-            cJSON_AddNumberToObject(error, "id", 1000);
-            cJSON_AddStringToObject(error, "format", "Invalid variables reference %d - no such variable group exists");
-            cJSON_AddNumberToObject(error, "variablesReference", ref);
-            cJSON_AddBoolToObject(error, "showUser", true);
-
-            // Create response body with error
-            cJSON *body = cJSON_CreateObject();
-            if (body)
-            {
-                cJSON_AddItemToObject(body, "error", error);
-                char *body_str = cJSON_PrintUnformatted(body);
-                if (body_str)
-                {
-                    response->data = body_str;
-                    response->data_size = strlen(body_str);
-                    cJSON_Delete(body);
-                    return 0;
-                }
-                cJSON_Delete(body);
-            }
-            cJSON_Delete(error);
-        }
-        set_response_error(response, "Failed to create error response");
-        return -1;
+        cJSON_Delete(body);
+        cJSON_Delete(variables);
+        set_response_error(response, "Invalid variables reference - no such variable group exists");
+        return 0;
     }
     }
 
@@ -2759,6 +2896,14 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
 
     cJSON_AddItemToObject(body, "variables", variables);
     set_response_success(response, body);
+    
+    // Free any allocated memory for the variables context
+    if (server->current_command.context.variables.format)
+    {
+        free((void*)server->current_command.context.variables.format);
+        server->current_command.context.variables.format = NULL;
+    }
+    
     return 0;
 }
 

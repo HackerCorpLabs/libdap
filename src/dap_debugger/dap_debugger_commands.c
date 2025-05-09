@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include "dap_client.h"
 #include "dap_debugger_types.h"
 #include "dap_debugger_help.h"
@@ -386,8 +387,8 @@ int print_variables(DAPClient* client, DAPVariable* variables, size_t num_variab
                 printf(" = %s", var->value);
                 
                 // Show memory reference if available
-                if (var->memory_reference && *var->memory_reference) {
-                    printf(" (Memory: %s)", var->memory_reference);
+                if (var->memory_reference != 0) {
+                    printf(" (Memory: 0x%08x)", var->memory_reference);
                 }
             } else {
                 printf(" = <undefined>");
@@ -555,11 +556,12 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
         return -1;
     }
 
-    char* memory_reference = NULL;
-    uint64_t offset = 0;
+    uint32_t memory_reference = 0;
+    uint32_t offset = 0;
     size_t instruction_offset = 0;
     size_t instruction_count = 10; // Default to 10 instructions
     bool resolve_symbols = false;
+    bool memory_reference_set = false;
 
     // Parse command line arguments
     char* saveptr;
@@ -567,7 +569,7 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
     while (token != NULL) {
         if (strcmp(token, "-o") == 0) {
             token = strtok_r(NULL, " ", &saveptr);
-            if (token) offset = strtoull(token, NULL, 0);
+            if (token) offset = (uint32_t)strtoull(token, NULL, 0);
         } else if (strcmp(token, "-i") == 0) {
             token = strtok_r(NULL, " ", &saveptr);
             if (token) instruction_offset = strtoul(token, NULL, 0);
@@ -576,13 +578,14 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
             if (token) instruction_count = strtoul(token, NULL, 0);
         } else if (strcmp(token, "-s") == 0) {
             resolve_symbols = true;
-        } else {
-            memory_reference = token;
+        } else if (!memory_reference_set) {
+            memory_reference = (uint32_t)strtoull(token, NULL, 0);
+            memory_reference_set = true;
         }
         token = strtok_r(NULL, " ", &saveptr);
     }
 
-    if (!memory_reference) {
+    if (!memory_reference_set) {
         fprintf(stderr, "Error: Memory reference is required\n");
         return -1;
     }
@@ -598,9 +601,9 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
     }
 
     // Print the results
-    printf("Disassembly of %s:\n", memory_reference);
+    printf("Disassembly of 0x%08x:\n", memory_reference);
     for (size_t i = 0; i < result.num_instructions; i++) {
-        printf("0x%016llx: %s", (unsigned long long)result.instructions[i].address, 
+        printf("0x%s: %s", result.instructions[i].address, 
                result.instructions[i].instruction);
         if (result.instructions[i].symbol) {
             printf(" <%s>", result.instructions[i].symbol);

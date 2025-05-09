@@ -493,104 +493,6 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
-/**
- * @brief Handle execution control commands (continue, step, etc.)
- *
- * This function is currently unused but kept for future execution control implementation.
- * It will be used to centralize the handling of all execution control commands
- * and provide consistent behavior across different execution modes.
- */
-int handle_execution_control(DAPServer *server, DAPCommandType command, cJSON *args, DAPResponse *response)
-{
-    if (!server->is_running || !server->attached)
-    {
-        set_response_error(response, "Debugger is not running or not attached");
-        return -1;
-    }
-
-    // Parse thread ID and single_thread flag
-    int thread_id = 1; // Default to thread 1
-    bool single_thread = false;
-
-    if (args)
-    {
-        cJSON *thread_id_json = cJSON_GetObjectItem(args, "threadId");
-        if (thread_id_json && cJSON_IsNumber(thread_id_json))
-        {
-            thread_id = thread_id_json->valueint;
-        }
-
-        cJSON *single_thread_json = cJSON_GetObjectItem(args, "singleThread");
-        if (single_thread_json && cJSON_IsBool(single_thread_json))
-        {
-            single_thread = cJSON_IsTrue(single_thread_json);
-        }
-    }
-
-    // Validate thread ID
-    if (thread_id != 1)
-    {
-        set_response_error(response, "Invalid thread ID - only thread 1 is supported");
-        return -1;
-    }
-
-    // Handle different commands
-    switch (command)
-    {
-    case DAP_CMD_PAUSE:
-        if (!server->debugger_state.has_stopped)
-        {
-            server->debugger_state.has_stopped = true;
-            // If single_thread is true, only pause the specified thread
-            if (single_thread && thread_id != server->debugger_state.current_thread_id)
-            {
-                set_response_error(response, "Cannot pause non-current thread in single-thread mode");
-                return -1;
-            }
-
-            // Create success response with thread information
-            cJSON *body = cJSON_CreateObject();
-            if (!body)
-            {
-                set_response_error(response, "Failed to create response body");
-                return -1;
-            }
-
-            cJSON_AddNumberToObject(body, "threadId", thread_id);
-            cJSON_AddStringToObject(body, "reason", "pause");
-            cJSON_AddBoolToObject(body, "allThreadsStopped", true);
-
-            set_response_success(response, body);
-            // body is freed by set_response_success
-            return 0;
-        }
-        set_response_error(response, "Debugger is already paused");
-        return -1;
-
-    case DAP_CMD_CONTINUE:
-    case DAP_CMD_NEXT:
-    case DAP_CMD_STEP_IN:
-    case DAP_CMD_STEP_OUT:
-        if (server->debugger_state.has_stopped)
-        {
-            // If single_thread is true, only continue the specified thread
-            if (single_thread && thread_id != server->debugger_state.current_thread_id)
-            {
-                set_response_error(response, "Cannot continue non-current thread in single-thread mode");
-                return -1;
-            }
-            server->debugger_state.has_stopped = false;
-            set_response_success(response, NULL);
-            return 0;
-        }
-        set_response_error(response, "Debugger is not paused");
-        return -1;
-
-    default:
-        set_response_error(response, "Unsupported execution control command");
-        return -1;
-    }
-}
 
 int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
 {
@@ -1245,10 +1147,7 @@ int handleStepCommand(const char *command, DAPServer *server, cJSON *args, DAPRe
 
     // Set success response
     set_response_success(response, body);
-
-    // Send the stopped event after successful step
-    dap_server_send_stopped_event(server, "step", NULL);
-
+    
     return 0;
 }
 
@@ -2188,6 +2087,15 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     // Required properties according to the DAP spec
     cJSON_AddNumberToObject(frame, "id", server->current_command.context.stack_trace.start_frame);
 
+
+    for(int i = 0; i < server->current_command.context.stack_trace.frame_count; i++) 
+    {
+        // TODO refactor StackFrames response to use the frame_count and the frame_array
+    
+    }
+
+
+
     // Use the appropriate name for the frame
     char frame_name[64];
     if (server->debugger_state.program_counter > 0)
@@ -2235,6 +2143,7 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
             cJSON_AddItemToObject(frame, "source", source);
         }
     }
+
 
     // Add presentation hint if using a format
     StackTraceFormat *format_opts = &server->current_command.context.stack_trace.format;
@@ -2700,6 +2609,11 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
             server->current_command.context.variables.count = 0;
         }     
     }
+    else {
+        // Clean up in case of no variables
+        cJSON_Delete(body);
+        cJSON_Delete(variables_array);
+    }
    
     return 0;
 
@@ -2856,6 +2770,44 @@ int handle_restart(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
+// Define a struct for exception breakpoint data
+typedef struct {
+    const char **filter_ids;
+    const char **filter_conditions;
+    int filter_count;
+    int condition_count;
+} ExceptionBreakpointData;
+
+// Helper function to clean up exception breakpoint data
+static void cleanup_exception_breakpoint_data(ExceptionBreakpointData *data) {
+    if (!data) return;
+    
+    if (data->filter_ids) {
+        for (int i = 0; i < data->filter_count; i++) {
+            if (data->filter_ids[i]) {
+                free((void *)data->filter_ids[i]);
+                data->filter_ids[i] = NULL;
+            }
+        }
+        free(data->filter_ids);
+        data->filter_ids = NULL;
+    }
+    
+    if (data->filter_conditions) {
+        for (int i = 0; i < data->condition_count; i++) {
+            if (data->filter_conditions[i]) {
+                free((void *)data->filter_conditions[i]);
+                data->filter_conditions[i] = NULL;
+            }
+        }
+        free(data->filter_conditions);
+        data->filter_conditions = NULL;
+    }
+    
+    data->filter_count = 0;
+    data->condition_count = 0;
+}
+
 int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     if (!server || !args || !response)
@@ -2866,29 +2818,28 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
 
     DAP_SERVER_DEBUG_LOG("Handling setExceptionBreakpoints request");
 
-    // Initialize the command context
+    // Initialize command context
     server->current_command.type = DAP_CMD_SET_EXCEPTION_BREAKPOINTS;
     memset(&server->current_command.context.exception, 0, sizeof(ExceptionBreakpointCommandContext));
 
-    // "filters" (required) - Array of exception filter IDs to activate
+    // Initialize our data structure
+    ExceptionBreakpointData data = {0};
+    
+    // Parse filters array
     cJSON *filters = cJSON_GetObjectItem(args, "filters");
-    if (!filters || !cJSON_IsArray(filters))
-    {
-        // Return success with empty breakpoints array instead of an error
+    if (!filters || !cJSON_IsArray(filters)) {
+        // Return success with empty breakpoints array
         cJSON *body = cJSON_CreateObject();
-        if (!body)
-        {
+        if (!body) {
             set_response_error(response, "Failed to create response body");
-            return 0;
+            return -1;
         }
 
-        // According to DAP spec, the response must include a "breakpoints" array
         cJSON *breakpoints = cJSON_CreateArray();
-        if (!breakpoints)
-        {
+        if (!breakpoints) {
             cJSON_Delete(body);
             set_response_error(response, "Failed to create breakpoints array");
-            return 0;
+            return -1;
         }
 
         cJSON_AddItemToObject(body, "breakpoints", breakpoints);
@@ -2896,151 +2847,100 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         return 0;
     }
 
-    // Get the number of filters
-    int filter_count = cJSON_GetArraySize(filters);
+    // Get filter count and allocate arrays
+    data.filter_count = cJSON_GetArraySize(filters);
+    data.filter_ids = calloc(data.filter_count, sizeof(char *));
+    if (!data.filter_ids) {
+        set_response_error(response, "Failed to allocate memory for filter IDs");
+        return -1;
+    }
 
-    // Allocate arrays for filter IDs and conditions
-    const char **filter_ids = NULL;
-    const char **filter_conditions = NULL;
-
-    if (filter_count > 0)
-    {
-        filter_ids = calloc(filter_count, sizeof(const char *));
-        if (!filter_ids)
-        {
-            set_response_error(response, "Failed to allocate memory for filter IDs");
-            return 0;
-        }
-
-        // "filterOptions" (optional) - Additional configuration for exception filters
-        cJSON *filter_options = cJSON_GetObjectItem(args, "filterOptions");
-
-        // We'll also track conditions if filterOptions is provided
-        if (filter_options && cJSON_IsArray(filter_options))
-        {
-            filter_conditions = calloc(filter_count, sizeof(const char *));
-            if (!filter_conditions)
-            {
-                free((void *)filter_ids);
-                set_response_error(response, "Failed to allocate memory for filter conditions");
-                return 0;
+    // Parse filter IDs
+    for (int i = 0; i < data.filter_count; i++) {
+        cJSON *filter = cJSON_GetArrayItem(filters, i);
+        if (filter && cJSON_IsString(filter)) {
+            data.filter_ids[i] = strdup(filter->valuestring);
+            if (!data.filter_ids[i]) {
+                cleanup_exception_breakpoint_data(&data);
+                set_response_error(response, "Failed to allocate memory for filter ID");
+                return -1;
             }
         }
+    }
 
-        // Extract each filter ID and any matching conditions from filterOptions
-        for (int i = 0; i < filter_count; i++)
-        {
-            cJSON *filter = cJSON_GetArrayItem(filters, i);
-            if (filter && cJSON_IsString(filter))
-            {
-                filter_ids[i] = strdup(filter->valuestring);
+    // Parse filter options if present
+    cJSON *filter_options = cJSON_GetObjectItem(args, "filterOptions");
+    if (filter_options && cJSON_IsArray(filter_options)) {
+        data.filter_conditions = calloc(data.filter_count, sizeof(char *));
+        if (!data.filter_conditions) {
+            cleanup_exception_breakpoint_data(&data);
+            set_response_error(response, "Failed to allocate memory for filter conditions");
+            return -1;
+        }
 
-                // Look for matching filter condition if filter_options is provided
-                if (filter_conditions && filter_options && cJSON_IsArray(filter_options))
-                {
-                    int option_count = cJSON_GetArraySize(filter_options);
-                    for (int j = 0; j < option_count; j++)
-                    {
-                        cJSON *option = cJSON_GetArrayItem(filter_options, j);
-                        if (!option || !cJSON_IsObject(option))
-                            continue;
-
-                        // "filterId" - Matches ID from filters array
-                        cJSON *filter_id = cJSON_GetObjectItem(option, "filterId");
-                        if (!filter_id || !cJSON_IsString(filter_id))
-                            continue;
-
-                        if (strcmp(filter_id->valuestring, filter->valuestring) == 0)
-                        {
-                            // Found matching filter option
-                            // "condition" - Expression for conditional exception breakpoints
-                            cJSON *condition = cJSON_GetObjectItem(option, "condition");
-                            if (condition && cJSON_IsString(condition))
-                            {
-                                filter_conditions[i] = strdup(condition->valuestring);
-                            }
-                            break;
-                        }
+        for (int i = 0; i < data.filter_count; i++) {
+            cJSON *option = cJSON_GetArrayItem(filter_options, i);
+            if (option) {
+                cJSON *condition = cJSON_GetObjectItem(option, "condition");
+                if (condition && cJSON_IsString(condition)) {
+                    data.filter_conditions[i] = strdup(condition->valuestring);
+                    if (!data.filter_conditions[i]) {
+                        cleanup_exception_breakpoint_data(&data);
+                        set_response_error(response, "Failed to allocate memory for filter condition");
+                        return -1;
                     }
                 }
             }
         }
+        data.condition_count = data.filter_count;
     }
 
-    // Store pointers in the context
-    server->current_command.context.exception.filters = filter_ids;
-    server->current_command.context.exception.filter_count = filter_count;
-    server->current_command.context.exception.conditions = filter_conditions;
-    server->current_command.context.exception.condition_count = filter_conditions ? filter_count : 0;
-     
-     int callback_result =  dap_server_execute_callback(server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS);
+    // Store data in command context for callback
+    server->current_command.context.exception.filters = data.filter_ids;
+    server->current_command.context.exception.filter_count = data.filter_count;
+    server->current_command.context.exception.conditions = data.filter_conditions;
+    server->current_command.context.exception.condition_count = data.condition_count;
+
+    // Execute callback
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS);
     
-     if (callback_result != 0)
-     {
-        set_response_error(response, "Callback failed for Set Exception Breakpoints");
-        DAP_SERVER_DEBUG_LOG("Set Exception Breakpoing implementation callback failed with code %d", callback_result);
-        return -1;
-     }
-
-    // Create response with breakpoints array matching filter count
+    // Create response
     cJSON *body = cJSON_CreateObject();
-    if (!body)
-    {
-        // Free allocated memory
-        free_filter_arrays(filter_ids, filter_conditions, filter_count);
+    if (!body) {
+        cleanup_exception_breakpoint_data(&data);
         set_response_error(response, "Failed to create response body");
-        return 0;
+        return -1;
     }
 
-    // "breakpoints" array - contains status info for each exception breakpoint filter
     cJSON *breakpoints = cJSON_CreateArray();
-    if (!breakpoints)
-    {
+    if (!breakpoints) {
         cJSON_Delete(body);
-        // Free allocated memory
-        free_filter_arrays(filter_ids, filter_conditions, filter_count);
+        cleanup_exception_breakpoint_data(&data);
         set_response_error(response, "Failed to create breakpoints array");
-        return 0;
+        return -1;
     }
 
-    // Add one breakpoint object for each filter
-    for (int i = 0; i < filter_count; i++)
-    {
+    // Add breakpoints to response
+    for (int i = 0; i < data.filter_count; i++) {
         cJSON *breakpoint = cJSON_CreateObject();
-        if (!breakpoint)
-        {
+        if (!breakpoint) {
             cJSON_Delete(body);
             cJSON_Delete(breakpoints);
-            // Free allocated memory
-            free_filter_arrays(filter_ids, filter_conditions, filter_count);
+            cleanup_exception_breakpoint_data(&data);
             set_response_error(response, "Failed to create breakpoint object");
-            return 0;
+            return -1;
         }
 
-        // "verified" (required) - Whether the breakpoint is valid and could be set
         cJSON_AddBoolToObject(breakpoint, "verified", true);
-
-        // "id" (optional) - Unique identifier for this breakpoint
-        // Use base ID of 1000 to differentiate from regular breakpoints
-        cJSON_AddNumberToObject(breakpoint, "id", 1000 + i);
-
-        // "message" (optional) - Error or information message about the breakpoint
-        if (filter_ids[i])
-        {
-            char message[128];
-            snprintf(message, sizeof(message), "Exception breakpoint: %s", filter_ids[i]);
-            cJSON_AddStringToObject(breakpoint, "message", message);
-        }
-
-        // Add the breakpoint to the array
+        cJSON_AddNumberToObject(breakpoint, "id", i);
         cJSON_AddItemToArray(breakpoints, breakpoint);
     }
 
     cJSON_AddItemToObject(body, "breakpoints", breakpoints);
     set_response_success(response, body);
 
-    // Free allocated memory - the callback should not have freed any of this
-    free_filter_arrays(filter_ids, filter_conditions, filter_count);
+    // Clean up our data structure
+    //cleanup_exception_breakpoint_data(&data);
 
     return 0;
 }
@@ -3054,6 +2954,7 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
  */
 void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count)
 {
+    // First check if we have valid input
     if (!filter_ids || count <= 0)
     {
         return;
@@ -3062,19 +2963,29 @@ void free_filter_arrays(const char **filter_ids, const char **filter_conditions,
     // Free each filter ID and condition string
     for (int i = 0; i < count; i++)
     {
+        // Check if the current element exists before freeing
         if (filter_ids[i])
         {
-            free((void *)filter_ids[i]);
+            char *ptr = (char *)filter_ids[i];
+            filter_ids[i] = NULL;  // Clear the pointer before freeing
+            free(ptr);
         }
-        if (filter_conditions[i])
+
+        // Check if filter_conditions exists and the current element exists before freeing
+        if (filter_conditions && filter_conditions[i])
         {
-            free((void *)filter_conditions[i]);
+            char *ptr = (char *)filter_conditions[i];
+            filter_conditions[i] = NULL;  // Clear the pointer before freeing
+            free(ptr);
         }
     }
 
     // Free the arrays themselves
     free((void *)filter_ids);
-    free((void *)filter_conditions);
+    if (filter_conditions)
+    {
+        free((void *)filter_conditions);
+    }
 }
 
 int handle_source(DAPServer *server, cJSON *args, DAPResponse *response)

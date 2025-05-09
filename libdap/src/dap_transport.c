@@ -37,6 +37,8 @@
 #include <netinet/tcp.h>  // For TCP_NODELAY
 #include <arpa/inet.h>    // For inet_ntop
 #include <unistd.h>       // For close
+#include <sys/select.h>
+#include <sys/time.h>
 #include "dap_transport.h"
 #include "dap_error.h"
 
@@ -361,6 +363,58 @@ int dap_transport_send(DAPTransport* transport, const char* message) {
 }
 
 /**
+ * @brief Check if a file descriptor has an error condition
+ * 
+ * @param fd File descriptor to check
+ * @param timeout_ms Timeout in milliseconds
+ * @return true if error condition exists, false otherwise
+ */
+static bool check_fd_error(int fd, int timeout_ms) {
+    fd_set error_fds;
+    struct timeval tv;
+    
+    // Initialize the file descriptor set
+    FD_ZERO(&error_fds);
+    FD_SET(fd, &error_fds);
+    
+    // Set timeout
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    
+    // Check for error condition using select
+    int result = select(fd + 1, NULL, NULL, &error_fds, &tv);
+    
+    // Return true if select indicates an error condition
+    return (result > 0 && FD_ISSET(fd, &error_fds));
+}
+
+/**
+ * @brief Check if a file descriptor has data available to read
+ * 
+ * @param fd File descriptor to check
+ * @param timeout_ms Timeout in milliseconds
+ * @return true if data is available to read, false otherwise
+ */
+static bool check_fd_readable(int fd, int timeout_ms) {
+    fd_set read_fds;
+    struct timeval tv;
+    
+    // Initialize the file descriptor set
+    FD_ZERO(&read_fds);
+    FD_SET(fd, &read_fds);
+    
+    // Set timeout
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    
+    // Check for readability using select
+    int result = select(fd + 1, &read_fds, NULL, NULL, &tv);
+    
+    // Return true if select indicates data is available to read
+    return (result > 0 && FD_ISSET(fd, &read_fds));
+}
+
+/**
  * @brief Receive a message from the transport
  * 
  * @param transport The transport to receive from
@@ -376,8 +430,17 @@ int dap_transport_receive(DAPTransport* transport, char** message) {
         return -1;
     }
 
+    if (check_fd_error(transport->client_fd, 10)) {
+        return -1;
+    }
+
+    if (!check_fd_readable(transport->client_fd, 10)) {
+        return 0;
+    }
+    
     // Read header first
     char header_buffer[1024];
+
     ssize_t header_received = recv(transport->client_fd, header_buffer, sizeof(header_buffer) - 1, 0);
     if (header_received <= 0) {
         if (transport->debuglog) {

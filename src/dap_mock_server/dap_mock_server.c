@@ -389,6 +389,7 @@ static int handle_step_command(DAPServer *server, const char* step_type) {
     DBG_MOCK_LOG("%s", log_message);
     dap_server_send_output(server, log_message);
     
+
     // Handle different granularity types
     switch (ctx->granularity) {
         case DAP_STEP_GRANULARITY_INSTRUCTION:
@@ -437,6 +438,9 @@ static int handle_step_command(DAPServer *server, const char* step_type) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_next(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_NEXT, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "next");
 }
 
@@ -449,6 +453,9 @@ static int cmd_next(DAPServer *server) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_step_in(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_STEP_IN, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "step in");
 }
 
@@ -461,6 +468,9 @@ static int cmd_step_in(DAPServer *server) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_step_out(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_STEP_OUT, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "step out");
 }
 
@@ -1562,9 +1572,9 @@ static void add_register_variables(DAPServer *server, char* info_message, size_t
         // Format value based on type
         char value_str[32];
         if (strcmp(cpu_registers[i].type, "integer") == 0) {
-            snprintf(value_str, sizeof(value_str), "0x%04X", cpu_registers[i].value);
+            snprintf(value_str, sizeof(value_str), "%06o", cpu_registers[i].value);
         } else if (strcmp(cpu_registers[i].type, "bitmask") == 0) {
-            snprintf(value_str, sizeof(value_str), "0b%04X", cpu_registers[i].value);
+            snprintf(value_str, sizeof(value_str), "%06o", cpu_registers[i].value);
         } else {
             snprintf(value_str, sizeof(value_str), "%o", cpu_registers[i].value);
         }

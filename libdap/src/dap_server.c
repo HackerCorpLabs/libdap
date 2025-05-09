@@ -777,7 +777,7 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
     }
 
     // Log the full response content
-    DAP_SERVER_DEBUG_LOG("Sending response: %s", response_str);
+    //DAP_SERVER_DEBUG_LOG("Sending response: %s", response_str);
 
     if (dap_transport_send(server->transport, response_str) < 0)
     {
@@ -827,6 +827,8 @@ int dap_server_run(DAPServer *server)
 
     while (server->is_running)
     {
+
+     
         if (dap_transport_accept(server->transport) < 0)
         {
             continue;
@@ -847,18 +849,24 @@ int dap_server_run(DAPServer *server)
                 break;
             }
 
-            if (!message)
-            {
-                break;
-            }
+            if (message)
+            {                
+                if (dap_server_process_message(server, message) < 0)
+                {
+                    free(message);
+                    continue;
+                }
 
-            if (dap_server_process_message(server, message) < 0)
-            {
                 free(message);
-                continue;
             }
 
-            free(message);
+
+            DAPCommandCallback check_cpu_event = server->command_callbacks[DAP_CHECK_CPU_EVENTS];
+            if (check_cpu_event)
+            {
+                check_cpu_event(server);
+            }
+
         }
     }
 

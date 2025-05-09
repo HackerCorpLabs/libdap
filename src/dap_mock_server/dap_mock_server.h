@@ -162,7 +162,7 @@ int dbg_mock_trigger_breakpoint_hit(int breakpoint_id);
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
  */
-int mock_handle_stack_trace(DAPServer *server);
+extern int mock_handle_stack_trace(DAPServer *server);
 
 #ifdef __cplusplus
 }

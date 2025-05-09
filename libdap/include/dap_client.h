@@ -319,39 +319,39 @@ int dap_client_modules(DAPClient* client, int start_module, int module_count, DA
  * 
  * @param client Pointer to the client
  * @param memory_reference Memory reference to read from
- * @param offset Offset from the memory reference
+ * @param offset Offset to add to memory reference
  * @param count Number of bytes to read
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_read_memory(DAPClient* client, const char* memory_reference, uint64_t offset, size_t count, DAPReadMemoryResult* result);
+int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count, DAPReadMemoryResult* result);
 
 /**
  * @brief Write memory to the debuggee
  * 
  * @param client Pointer to the client
  * @param memory_reference Memory reference to write to
- * @param offset Offset from the memory reference
- * @param data Data to write
+ * @param offset Offset to add to memory reference
+ * @param data Data to write (base64 encoded)
  * @param allow_partial Whether to allow partial writes
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_write_memory(DAPClient* client, const char* memory_reference, uint64_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result);
+int dap_client_write_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result);
 
 /**
- * @brief Disassemble memory
+ * @brief Disassemble memory from the debuggee
  * 
  * @param client Pointer to the client
  * @param memory_reference Memory reference to disassemble
- * @param offset Offset from the memory reference
- * @param instruction_offset Instruction offset
+ * @param offset Offset to add to memory reference
+ * @param instruction_offset Offset in instructions to add to memory reference
  * @param instruction_count Number of instructions to disassemble
  * @param resolve_symbols Whether to resolve symbols
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_disassemble(DAPClient* client, const char* memory_reference, uint64_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result);
+int dap_client_disassemble(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result);
 
 /**
  * @brief Evaluate an expression in the debug target

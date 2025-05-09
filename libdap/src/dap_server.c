@@ -323,24 +323,15 @@ void cleanup_command_context(DAPServer *server)
             break;
             
         case DAP_CMD_DISASSEMBLE:
-            // Free memory reference string
-            if (server->current_command.context.disassemble.memory_reference) {
-                free((void*)server->current_command.context.disassemble.memory_reference);
-            }
+            // No longer need to free memory_reference as it's now a uint32_t
             break;
             
         case DAP_CMD_READ_MEMORY:
-            // Free memory reference string
-            if (server->current_command.context.read_memory.memory_reference) {
-                free((void*)server->current_command.context.read_memory.memory_reference);
-            }
+            // No longer need to free memory_reference as it's now a uint32_t
             break;
             
         case DAP_CMD_WRITE_MEMORY:
-            // Free dynamically allocated strings
-            if (server->current_command.context.write_memory.memory_reference) {
-                free((void*)server->current_command.context.write_memory.memory_reference);
-            }
+            // Only free the data string, memory_reference is now a uint32_t
             if (server->current_command.context.write_memory.data) {
                 free((void*)server->current_command.context.write_memory.data);
             }
@@ -384,11 +375,7 @@ void cleanup_command_context(DAPServer *server)
                     
                     if (frame->source_name) {
                         free(frame->source_name);
-                    }
-                    
-                    if (frame->instruction_pointer_reference) {
-                        free(frame->instruction_pointer_reference);
-                    }
+                    }                                        
                     
                     if (frame->module_id) {
                         free(frame->module_id);

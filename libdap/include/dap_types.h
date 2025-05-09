@@ -77,7 +77,7 @@ typedef struct DAPStackFrame {
     int column;                         ///< Column number in the source
     int end_line;                       ///< Optional end line number
     int end_column;                     ///< Optional end column number
-    char* instruction_pointer_reference;  ///< Optional instruction pointer reference
+    uint32_t instruction_pointer_reference;  ///< Optional instruction pointer reference (memory address)
     char* module_id;                     ///< Optional module ID
     DAPStackFramePresentationHint presentation_hint; ///< Optional presentation hint
     bool can_restart;                    ///< Whether the frame can be restarted
@@ -171,7 +171,7 @@ typedef struct DAPVariable {
     int indexed_variables;           /**< Number of indexed child variables */
     char* evaluate_name;             /**< Expression that evaluates to this variable (optional) */
     DAPVariablePresentationHint presentation_hint; /**< UI hints (kind, attributes, visibility) */
-    char* memory_reference;          /**< Memory address as string if variable represents memory (optional) */
+    uint32_t memory_reference;          /**< Memory address as int if variable represents memory (optional) */
 } DAPVariable;
 
 /**
@@ -196,7 +196,7 @@ typedef struct DAPBreakpoint {
     int column;                         ///< Optional column number in the source
     int end_line;                       ///< Optional end line number
     int end_column;                     ///< Optional end column number
-    char* instruction_reference;        ///< Optional instruction reference
+    uint32_t instruction_reference;        ///< Optional instruction reference (memory address)
     int offset;                         ///< Optional offset from instruction reference
     char* condition;                    ///< Optional condition expression
     char* hit_condition;                ///< Optional hit condition expression
@@ -348,7 +348,7 @@ typedef struct {
 typedef struct {
     DAPResult base;
     size_t bytes_written;
-    uint64_t offset;
+    uint32_t offset;
 } DAPWriteMemoryResult;
 
 typedef struct {
@@ -391,7 +391,7 @@ typedef struct {
 
 // Instruction breakpoint structure
 typedef struct {
-    char* instruction_reference; ///< Instruction reference
+    uint32_t instruction_reference; ///< Instruction reference (memory address)
     int offset;                ///< Offset from instruction reference
     char* condition;           ///< Condition expression
     char* hit_condition;       ///< Hit condition expression

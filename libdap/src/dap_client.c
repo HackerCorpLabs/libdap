@@ -612,9 +612,6 @@ int dap_client_modules(DAPClient* client, int start_module, int module_count, DA
     return DAP_ERROR_NONE;
 }
 
-
-
-
 /**
  * @brief Read memory from the debuggee
  * 
@@ -625,8 +622,8 @@ int dap_client_modules(DAPClient* client, int start_module, int module_count, DA
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_read_memory(DAPClient* client, const char* memory_reference, uint64_t offset, size_t count, DAPReadMemoryResult* result) {
-    if (!client || !memory_reference || !result) {
+int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count, DAPReadMemoryResult* result) {
+    if (!client || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
 
@@ -635,7 +632,11 @@ int dap_client_read_memory(DAPClient* client, const char* memory_reference, uint
         return DAP_ERROR_MEMORY;
     }
 
-    cJSON_AddStringToObject(args, "memoryReference", memory_reference);
+    // Convert memory_reference to string (needed for DAP protocol)
+    char memory_ref_str[32];
+    snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
+    
     cJSON_AddNumberToObject(args, "offset", offset);
     cJSON_AddNumberToObject(args, "count", count);
 
@@ -699,8 +700,8 @@ int dap_client_read_memory(DAPClient* client, const char* memory_reference, uint
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_write_memory(DAPClient* client, const char* memory_reference, uint64_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result) {
-    if (!client || !memory_reference || !data || !result) {
+int dap_client_write_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result) {
+    if (!client || !data || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
 
@@ -709,7 +710,11 @@ int dap_client_write_memory(DAPClient* client, const char* memory_reference, uin
         return DAP_ERROR_MEMORY;
     }
 
-    cJSON_AddStringToObject(args, "memoryReference", memory_reference);
+    // Convert memory_reference to string (needed for DAP protocol)
+    char memory_ref_str[32];
+    snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
+    
     cJSON_AddNumberToObject(args, "offset", offset);
     cJSON_AddStringToObject(args, "data", data);
     cJSON_AddBoolToObject(args, "allowPartial", allow_partial);
@@ -748,7 +753,7 @@ int dap_client_write_memory(DAPClient* client, const char* memory_reference, uin
     }
 
     result->bytes_written = bytes_written->valueint;
-    result->offset = offset_result ? (uint64_t)offset_result->valueint : offset;
+    result->offset = offset_result ? (uint32_t)offset_result->valueint : offset;
 
     cJSON_Delete(root);
     return DAP_ERROR_NONE;
@@ -766,8 +771,8 @@ int dap_client_write_memory(DAPClient* client, const char* memory_reference, uin
  * @param result Output result structure
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
-int dap_client_disassemble(DAPClient* client, const char* memory_reference, uint64_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result) {
-    if (!client || !memory_reference || !result) {
+int dap_client_disassemble(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result) {
+    if (!client || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
 
@@ -776,136 +781,104 @@ int dap_client_disassemble(DAPClient* client, const char* memory_reference, uint
         return DAP_ERROR_MEMORY;
     }
 
-    cJSON_AddStringToObject(args, "memoryReference", memory_reference);
-    cJSON_AddNumberToObject(args, "offset", offset);
-    cJSON_AddNumberToObject(args, "instructionOffset", instruction_offset);
-    cJSON_AddNumberToObject(args, "instructionCount", instruction_count);
+    // Format memory reference as a hex string
+    char memory_ref_str[32];
+    snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%08x", memory_reference);
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
+    
+    // Add optional parameters
+    if (offset > 0) {
+        cJSON_AddNumberToObject(args, "offset", (double)offset);
+    }
+    
+    if (instruction_offset > 0) {
+        cJSON_AddNumberToObject(args, "instructionOffset", (double)instruction_offset);
+    }
+    
+    cJSON_AddNumberToObject(args, "instructionCount", (double)instruction_count);
     cJSON_AddBoolToObject(args, "resolveSymbols", resolve_symbols);
 
-    char* response = NULL;
-    int error = dap_client_send_request(client, DAP_CMD_DISASSEMBLE, args, &response);
+    // Initialize result struct
+    memset(result, 0, sizeof(DAPDisassembleResult));
+    
+    // Send request
+    char* response_body = NULL;
+    int err = dap_client_send_request(client, DAP_CMD_DISASSEMBLE, args, &response_body);
     cJSON_Delete(args);
-
-    if (error != DAP_ERROR_NONE) {
-        return error;
+    
+    if (err != DAP_ERROR_NONE) {
+        return err;
     }
-
-    if (!response) {
-        return DAP_ERROR_PARSE_ERROR;
+    
+    if (!response_body) {
+        return DAP_ERROR_INVALID_FORMAT;
     }
-
-    cJSON* root = cJSON_Parse(response);
-    free(response);
-
+    
+    // Parse response
+    cJSON* root = cJSON_Parse(response_body);
+    free(response_body);
+    
     if (!root) {
         return DAP_ERROR_PARSE_ERROR;
     }
-
+    
+    // Get body
     cJSON* body = cJSON_GetObjectItem(root, "body");
     if (!body) {
         cJSON_Delete(root);
-        return DAP_ERROR_PARSE_ERROR;
+        return DAP_ERROR_INVALID_FORMAT;
     }
-
+    
+    // Get instructions array
     cJSON* instructions_json = cJSON_GetObjectItem(body, "instructions");
     if (!instructions_json || !cJSON_IsArray(instructions_json)) {
         cJSON_Delete(root);
-        return DAP_ERROR_PARSE_ERROR;
+        return DAP_ERROR_INVALID_FORMAT;
     }
-
-    result->num_instructions = cJSON_GetArraySize(instructions_json);
-    result->instructions = malloc(result->num_instructions * sizeof(DAPDisassembledInstruction));
+    
+    // Count instructions
+    int count = cJSON_GetArraySize(instructions_json);
+    if (count <= 0) {
+        cJSON_Delete(root);
+        result->instructions = NULL;
+        result->num_instructions = 0;
+        return DAP_ERROR_NONE;
+    }
+    
+    // Allocate instructions array
+    result->instructions = calloc(count, sizeof(DAPDisassembledInstruction));
     if (!result->instructions) {
         cJSON_Delete(root);
         return DAP_ERROR_MEMORY;
     }
-
-    memset(result->instructions, 0, result->num_instructions * sizeof(DAPDisassembledInstruction));
-
-    size_t i;
-    for (i = 0; i < result->num_instructions; i++) {
-        cJSON* instruction = cJSON_GetArrayItem(instructions_json, i);
-        if (!instruction) {
-            for (size_t j = 0; j < i; j++) {
-                free(result->instructions[j].address);
-                free(result->instructions[j].instruction_bytes);
-                free(result->instructions[j].instruction);
-                free(result->instructions[j].symbol);
-      
-            }
-            free(result->instructions);
-            cJSON_Delete(root);
-            return DAP_ERROR_PARSE_ERROR;
-        }
-
-        cJSON* address = cJSON_GetObjectItem(instruction, "address");
-        cJSON* instruction_bytes = cJSON_GetObjectItem(instruction, "instructionBytes");
-        cJSON* instruction_text = cJSON_GetObjectItem(instruction, "instruction");
-        cJSON* symbol = cJSON_GetObjectItem(instruction, "symbol");
-        cJSON* location = cJSON_GetObjectItem(instruction, "location");        
-        cJSON* line = cJSON_GetObjectItem(instruction, "line");
-        cJSON* column = cJSON_GetObjectItem(instruction, "column");
-        cJSON* end_line = cJSON_GetObjectItem(instruction, "endLine");
-        cJSON* end_column = cJSON_GetObjectItem(instruction, "endColumn");
-
-        if (address) {
+    
+    result->num_instructions = count;
+    int i;
+    // Parse each instruction
+    for (i = 0; i < count; i++) {
+        cJSON* instr = cJSON_GetArrayItem(instructions_json, i);
+        if (!instr) continue;
+        
+        cJSON* address = cJSON_GetObjectItem(instr, "address");
+        if (address && cJSON_IsString(address)) {
             result->instructions[i].address = strdup(address->valuestring);
-            if (!result->instructions[i].address) {
-                goto cleanup_error;
-            }
         }
-        if (instruction_bytes) {
-            result->instructions[i].instruction_bytes = strdup(instruction_bytes->valuestring);
-            if (!result->instructions[i].instruction_bytes) {
-                goto cleanup_error;
-            }
-        }
-        if (instruction_text) {
+        
+        cJSON* instruction_text = cJSON_GetObjectItem(instr, "instruction");
+        if (instruction_text && cJSON_IsString(instruction_text)) {
             result->instructions[i].instruction = strdup(instruction_text->valuestring);
-            if (!result->instructions[i].instruction) {
-                goto cleanup_error;
-            }
         }
-        if (symbol) {
+        
+        // Optional fields
+        cJSON* symbol = cJSON_GetObjectItem(instr, "symbol");
+        if (symbol && cJSON_IsString(symbol)) {
             result->instructions[i].symbol = strdup(symbol->valuestring);
-            if (!result->instructions[i].symbol) {
-                goto cleanup_error;
-            }
-        }
-
-        if (location)
-        {
-            // TODO:MAYBE Capture location.path and location.name
-        }
-       
-        if (line) {
-            result->instructions[i].line = line->valueint;
-        }
-        if (column) {
-            result->instructions[i].column = column->valueint;
-        }
-        if (end_line) {
-            result->instructions[i].end_line = end_line->valueint;
-        }
-        if (end_column) {
-            result->instructions[i].end_column = end_column->valueint;
         }
     }
-
+    
     cJSON_Delete(root);
     return DAP_ERROR_NONE;
 
-cleanup_error:
-    for (size_t j = 0; j < i; j++) {
-        free(result->instructions[j].address);
-        free(result->instructions[j].instruction_bytes);
-        free(result->instructions[j].instruction);
-        free(result->instructions[j].symbol);
-        
-    }
-    free(result->instructions);
-    cJSON_Delete(root);
-    return DAP_ERROR_MEMORY;
 }
 
 /**
@@ -1634,7 +1607,7 @@ void dap_get_variables_result_free(DAPGetVariablesResult* result) {
             free(var->name);
             free(var->value);
             free(var->type);
-            free(var->memory_reference);
+            // memory_reference is now uint32_t, no need to free it
             free(var->evaluate_name);
             // presentationHint is now a struct, no need to free it
         }
@@ -1731,9 +1704,10 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
 
         cJSON* memory_reference = cJSON_GetObjectItem(variable_item, "memoryReference");
         if (memory_reference && cJSON_IsString(memory_reference)) {
-            var->memory_reference = strdup(memory_reference->valuestring);
-        } else {
-            var->memory_reference = NULL;
+            // Convert the memoryReference string to uint32_t
+            unsigned int mem_ref_val = 0;
+            sscanf(memory_reference->valuestring, "0x%x", &mem_ref_val);
+            var->memory_reference = (uint32_t)mem_ref_val;
         }
 
         cJSON* presentation_hint = cJSON_GetObjectItem(variable_item, "presentationHint");
@@ -1974,8 +1948,6 @@ void dap_disassemble_result_free(DAPDisassembleResult* result) {
     result->instructions = NULL;
     result->num_instructions = 0;
 }
-
-
 
 /**
  * @brief Process a received DAP event

@@ -95,8 +95,12 @@ typedef enum {
     DAP_CMD_REVERSE_CONTINUE,    ///< Reverse continue request
     DAP_CMD_RESTART_FRAME,       ///< Restart frame request
     DAP_CMD_GOTO,                ///< Goto request
-    DAP_CMD_SET_EXCEPTION_FILTERS, ///< Set exception filters request
-    DAP_CMD_MAX                    /// Last entry in the enum (used for bounds checking and allocation)
+    DAP_CMD_SET_EXCEPTION_FILTERS, ///< Set exception filters request    
+    //---
+    DAP_WAIT_FOR_DEBUGGER,         ///Always called before any other DAP command to wait for the debugger to be ready for access to CPU registers and memory
+    DAP_RELEASE_DEBUGGER,          ///Always called after all DAP commands to release the debugger
+    //--
+    DAP_CMD_MAX         
 } DAPCommandType;
 
 /**

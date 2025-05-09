@@ -234,6 +234,18 @@ typedef struct {
     int target_id;               /**< Target ID (used for stepIn) */
 } StepCommandContext;
 
+/// @brief ContinueCommandContext
+/// @brief Context for continue command
+typedef struct {
+    int thread_id;               /**< Thread ID to continue */
+    bool single_thread;          /**< Whether to continue only the specified thread */
+
+    ///## Return results
+
+    /// @brief Indicates if all threads were resumed or just one thread
+    bool all_threads_continue;   /**< Whether to continue all threads */
+} ContinueCommandContext;
+
 /**
  * @struct BreakpointCommandContext
  * @brief Context for breakpoint commands
@@ -376,8 +388,8 @@ typedef struct {
  * @brief Context for disassemble command
  */
 typedef struct {
-    const char* memory_reference;   /**< Memory reference to the function to disassemble (required) */
-    uint64_t offset;                /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
+    uint32_t memory_reference;      /**< Memory reference to the function to disassemble (required) */
+    uint32_t offset;                /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
     int instruction_offset;         /**< Offset (in instructions) to add to the memory reference before disassembling (optional) */
     int instruction_count;          /**< Number of instructions to disassemble (optional, defaults to 10) */
     bool resolve_symbols;           /**< Whether to return symbols with the disassembled instructions (optional, default: false) */
@@ -388,8 +400,8 @@ typedef struct {
  * @brief Context for readMemory command
  */
 typedef struct {
-    const char* memory_reference;   /**< Memory reference (required) */
-    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    uint32_t memory_reference;      /**< Memory reference (required) */
+    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
     size_t count;                   /**< Number of bytes to read (required) */
 } ReadMemoryCommandContext;
 
@@ -398,10 +410,13 @@ typedef struct {
  * @brief Context for writeMemory command
  */
 typedef struct {
-    const char* memory_reference;   /**< Memory reference (required) */
-    uint64_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
-    const char* data;               /**< Data to write in base64 encoding (required) */
+    uint32_t memory_reference;      /**< Memory reference (required) */
+    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    char* data;                     /**< Data to write in base64 encoding (required) */
     bool allow_partial;             /**< Whether to allow partial writes (optional) */
+
+    //# Resutls - populated by the command handler
+    uint16_t bytes_written;          /**< Number of bytes written (optional) */
 } WriteMemoryCommandContext;
 
 /**
@@ -441,6 +456,14 @@ typedef struct {
     const char* name;              /**< The name of the variable in the container (required) */
     const char* value;             /**< The value to set (required) */
     const char* format;            /**< Optional formatting hints */
+    
+    // Results - populated by the command handler
+    const char* new_value;         /**< Updated value after setting (optional) */
+    const char* type;              /**< Type of the variable (optional) */
+    int variables_reference_return;       /**< Reference to children of this variable (if any) <=== TODO: CHECK IF THIS IS CORRECT */
+    int named_variables;           /**< Number of named children (optional) */
+    int indexed_variables;         /**< Number of indexed children (optional) */
+    uint32_t memory_reference;     /**< Memory reference for this variable (if applicable) */
 } SetVariableCommandContext;
 
 /**
@@ -537,6 +560,7 @@ struct DAPServer
         // Command-specific data stored in a union to avoid using cJSON directly
         union {
             StepCommandContext step;                /**< Context for step commands */
+            ContinueCommandContext continue_cmd;   /**< Context for continue command */
             BreakpointCommandContext breakpoint;    /**< Context for breakpoint commands */
             ExceptionBreakpointCommandContext exception; /**< Context for exception breakpoints */
             LaunchCommandContext launch;            /**< Context for launch command */

@@ -48,19 +48,15 @@ static int cmd_step_in(DAPServer *server);
 static int cmd_step_out(DAPServer *server);
 static int cmd_continue(DAPServer *server);
 static int cmd_read_memory(DAPServer *server);
+static int cmd_write_memory(DAPServer *server);
 static int cmd_scopes(DAPServer *server);
 static int cmd_variables(DAPServer *server);
+static int cmd_set_variable(DAPServer *server);
 static int on_set_exception_breakpoints(DAPServer *server);
 static bool on_should_break_on_exception(DAPServer *server, const char* exception_id, bool is_uncaught, void* user_data);
 static int clear_breakpoints_for_source(const char* source_path);
-static int cmd_set_breakpoints(DAPServer* server);
-static int cmd_launch(DAPServer* server);
-static int cmd_restart(DAPServer* server);
-static int cmd_disconnect(DAPServer* server);
-static int cmd_disassemble(DAPServer* server);
-static int cmd_set_variable(DAPServer *server);
-static int cmd_write_memory(DAPServer *server);
 static int setup_server_callbacks(DAPServer *server);
+
 
 // Forward declaration for functions from libdap that we need
 int dap_server_send_output_category(DAPServer *server, DAPOutputCategory category, const char *output);
@@ -233,75 +229,64 @@ static int cmd_read_memory(DAPServer *server) {
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Reading memory...\n");
     
     // Extract parameters from the command context
-    uint64_t memory_reference = server->current_command.context.read_memory.memory_reference;
-    uint64_t offset = server->current_command.context.read_memory.offset;
+    uint32_t memory_reference = server->current_command.context.read_memory.memory_reference;
+    uint32_t offset = server->current_command.context.read_memory.offset;
     size_t count = server->current_command.context.read_memory.count;
     
-    DBG_MOCK_LOG("Memory reference: %s, offset: %llu, count: %zu", 
-              memory_reference, (unsigned long long)offset, count);
+    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, count: %zu", 
+               memory_reference, (unsigned long long)offset, count);
     
-    // Convert memory reference to an address
-    char* endptr = NULL;
-    uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
-    if (endptr == memory_reference || *endptr != '\0') {
-        DBG_MOCK_LOG("Invalid memory reference format: %s", memory_reference);
-        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: Invalid memory reference format\n");
+    // Mock implementation simply returns some dummy data
+    uint32_t address = 0x1000 + (uint32_t)offset;  // Example address calculation
+    
+    size_t bytes_to_read = count;
+    // For the demo, we'll limit the number of bytes to read
+    if (bytes_to_read > 64) {
+        bytes_to_read = 64;
+    }
+    
+    // Check if address is out of range for our mock memory
+    if (address >= 0x8000) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
+        
+        // Create error response
+        cJSON *body = cJSON_CreateObject();
+        cJSON_AddStringToObject(body, "error", "Address out of range");
         return -1;
     }
     
-    // Apply offset to address
-    address += (uint32_t)offset;
-    
-    // Ensure the address is within range
-    if (address >= sizeof(mock_memory)) {
-        DBG_MOCK_LOG("Address out of range: 0x%x", address);
-        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Error: Address out of range\n");
-        return -1;
-    }
-    
-    // Determine how many bytes we can actually read
-    size_t available_bytes = sizeof(mock_memory) - address;
-    size_t bytes_to_read = (count <= available_bytes) ? count : available_bytes;
-    size_t unreadable_bytes = count - bytes_to_read;
-    
-    // Send informative message about the memory being read
     char info_message[256];
     snprintf(info_message, sizeof(info_message), 
-             "Reading %zu bytes from address 0x%08x (reference: %s, offset: 0x%llx)\n", 
-             bytes_to_read, address, memory_reference, (unsigned long long)offset);
+             "Reading %zu bytes from address 0x%08x (reference: 0x%08x, offset: 0x%llx)\n", 
+              bytes_to_read, address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     
-    if (unreadable_bytes > 0) {
-        snprintf(info_message, sizeof(info_message),
-                "Note: %zu bytes were unreadable (beyond memory limit)\n", unreadable_bytes);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
+    // Generate some mock memory data
+    char *data = (char *)malloc(bytes_to_read * 2 + 1);
+    if (!data) {
+        return -1;
     }
     
-    // Format address as a string for the human-readable output
+    for (size_t i = 0; i < bytes_to_read; i++) {
+        uint8_t value = (uint8_t)((address + i) % 256);
+        sprintf(data + (i * 2), "%02x", value);
+    }
+    data[bytes_to_read * 2] = '\0';
+    
+    // Create the response body
+    cJSON *body = cJSON_CreateObject();
+    
     char address_str[32];
     snprintf(address_str, sizeof(address_str), "0x%08x", address);
+    cJSON_AddStringToObject(body, "address", address_str);
+    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
+    cJSON_AddStringToObject(body, "data", data);
     
-    // Show a summary of the data for informative purposes
-    if (bytes_to_read > 0) {
-        // Show a brief hex dump for the first few bytes
-        size_t display_bytes = bytes_to_read > 16 ? 16 : bytes_to_read;
-        char hex_dump[100] = "Data preview: ";
-        size_t pos = strlen(hex_dump);
-        
-        for (size_t i = 0; i < display_bytes && pos < sizeof(hex_dump) - 5; i++) {
-            snprintf(hex_dump + pos, sizeof(hex_dump) - pos, "%02x ", mock_memory[address + i]);
-            pos = strlen(hex_dump);
-        }
-        
-        if (bytes_to_read > display_bytes) {
-            strcat(hex_dump, "...");
-        }
-        
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, hex_dump);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "\n");
-    }
+    free(data);
     
-    // The actual response with the memory data will be handled by the main handler in dap_server_cmds.c
+    // Send the response
+    dap_server_send_response(server, DAP_CMD_READ_MEMORY, server->sequence++, 
+                            server->current_command.request_seq, true, body);
     
     return 0;
 }
@@ -329,47 +314,50 @@ static int cmd_write_memory(DAPServer *server) {
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Writing memory...\n");
     
     // Extract parameters from the command context
-    const char* memory_reference = server->current_command.context.write_memory.memory_reference;
-    uint64_t offset = server->current_command.context.write_memory.offset;
+    uint32_t memory_reference = server->current_command.context.write_memory.memory_reference;
+    uint32_t offset = server->current_command.context.write_memory.offset;
     const char* data = server->current_command.context.write_memory.data;
     bool allow_partial = server->current_command.context.write_memory.allow_partial;
     
-    DBG_MOCK_LOG("Memory reference: %s, offset: %llu, allow_partial: %d", 
-              memory_reference, (unsigned long long)offset, allow_partial);
+    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, allow_partial: %d", 
+               memory_reference, (unsigned long long)offset, allow_partial);
     
-    // Convert memory reference to an address
-    char* endptr = NULL;
-    uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
-    if (endptr == memory_reference || *endptr != '\0') {
-        DBG_MOCK_LOG("Invalid memory reference format: %s", memory_reference);
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Invalid memory reference format\n");
+    if (!data) {
+        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: No data provided\n");
         return -1;
     }
     
-    // Apply offset to address
-    address += (uint32_t)offset;
+    // Decode base64 data (skipped in this mock implementation)
+    // In a real implementation, you would decode the base64 data
+    // For mock purposes, we'll just use the length of the string
+    size_t data_length = strlen(data) / 2;  // Each byte is represented by 2 hex chars
     
-    // Ensure the address is within range
-    if (address >= sizeof(mock_memory)) {
-        DBG_MOCK_LOG("Address out of range: 0x%x", address);
+    // Mock implementation pretends to write to memory
+    uint32_t address = 0x1000 + (uint32_t)offset;  // Example address calculation
+    
+    // Check if address is out of range for our mock memory
+    if (address >= 0x8000) {
         dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
         return -1;
     }
     
-    // Send informative message about the memory being written
     char info_message[256];
     snprintf(info_message, sizeof(info_message), 
-             "Writing to memory at address 0x%08x (reference: %s, offset: 0x%llx)\n", 
-             address, memory_reference, (unsigned long long)offset);
+             "Writing to memory at address 0x%08x (reference: 0x%08x, offset: 0x%llx)\n", 
+              address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     
-    // Indicate partial write status
-    if (allow_partial) {
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, 
-                                     "Note: Partial writes are allowed if memory boundary is reached\n");
-    }
+    // Pretend to write some data
+    snprintf(info_message, sizeof(info_message), "Wrote %zu bytes of data\n", data_length);
+    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     
-    // The actual memory writing and response creation will be handled by the main handler
+    // Create the response body
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "bytesWritten", data_length);
+    
+    // Send the response
+    dap_server_send_response(server, DAP_CMD_WRITE_MEMORY, server->sequence++, 
+                            server->current_command.request_seq, true, body);
     
     return 0;
 }
@@ -1134,149 +1122,147 @@ static int cmd_disassemble(DAPServer* server) {
     }
     
     // Extract parameters from the command context
-    const char* memory_reference = server->current_command.context.disassemble.memory_reference;
-    uint64_t offset = server->current_command.context.disassemble.offset;
+    uint32_t memory_reference = server->current_command.context.disassemble.memory_reference;
+    uint32_t offset = server->current_command.context.disassemble.offset;
     int instruction_offset = server->current_command.context.disassemble.instruction_offset;
     int instruction_count = server->current_command.context.disassemble.instruction_count;
     bool resolve_symbols = server->current_command.context.disassemble.resolve_symbols;
     
-    if (!memory_reference) {
-        DAP_SERVER_DEBUG_LOG("Missing memory reference for disassemble command");
-        return -1;
-    }
-    
     // Log what we're disassembling
-    DAP_SERVER_DEBUG_LOG("Disassembling memory reference: %s (offset: 0x%llx, count: %d, instruction_offset: %d)",
-                      memory_reference, (unsigned long long)offset, instruction_count, instruction_offset);
+    DAP_SERVER_DEBUG_LOG("Disassembling memory reference: 0x%08x", memory_reference);
+    DAP_SERVER_DEBUG_LOG("Offset: 0x%llx, count: %d, instruction_offset: %d", 
+                      (unsigned long long)offset, instruction_count, instruction_offset);
     
     // Send console output indicating what we're disassembling
     char message[256];
-    snprintf(message, sizeof(message), "Disassembling at %s + 0x%llx (%d instructions)...\n", 
+    snprintf(message, sizeof(message), "Disassembling at 0x%08x + 0x%llx (%d instructions)...\n", 
              memory_reference, (unsigned long long)offset, instruction_count);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, message);
     
-    // Parse memory reference to get base address
-    char* endptr = NULL;
-    uint32_t address = (uint32_t)strtoul(memory_reference, &endptr, 0);
-    if (endptr == memory_reference || *endptr != '\0') {
-        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Invalid memory reference format!\n");
-        return -1;
+    // Set a default count if not specified
+    if (instruction_count <= 0)
+    {
+        instruction_count = 10; // Default to 10 instructions
     }
     
-    // Apply byte offset
-    address += (uint32_t)offset;
-    
-    // Create response body
+    // Create the response body
     cJSON* body = cJSON_CreateObject();
-    if (!body) {
-        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create response body!\n");
-        return -1;
-    }
-    
-    // Create instructions array
     cJSON* instructions = cJSON_CreateArray();
-    if (!instructions) {
-        cJSON_Delete(body);
-        dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create instructions array!\n");
-        return -1;
-    }
     
-    // Mock instructions for ND-100 CPU
-    // - A mock instruction set with 8 registers (R0-R7)
-    // - Instruction size is 4 bytes
-    // - Simple MOV, ADD, SUB, JMP instructions
-    const char* opcodes[] = {
-        "MOV", "ADD", "SUB", "JMP", "LDI", "STI", "CMP", "BNE", "BEQ", "BGT", "BLT"
-    };
-    int num_opcodes = sizeof(opcodes) / sizeof(opcodes[0]);
+    // Starting address for our disassembly
+    uint32_t start_address = memory_reference + offset;
     
-    // Generate disassembly
-    uint32_t start_addr = address;
-    // Apply instruction offset (each instruction is 4 bytes)
-    if (instruction_offset > 0) {
-        start_addr += (uint32_t)(instruction_offset * 4);
-    }
-    
-    uint32_t current_addr = start_addr;
-    char first_addr_str[16] = {0}; // Store the first address string for the completion message
-    
-    for (int i = 0; i < instruction_count; i++) {
-        cJSON* instruction = cJSON_CreateObject();
-        if (!instruction) {
-            dap_server_send_output_category(server, DAP_OUTPUT_STDERR, "Failed to create instruction object!\n");
-            cJSON_Delete(body);
-            cJSON_Delete(instructions);
-            return -1;
+    // Mock out some disassembly for the ND100X CPU (or any other processor)
+    // Each instruction is 16 bits (2 bytes)
+    for (int i = 0; i < instruction_count; i++)
+    {
+        // Calculate the current instruction address
+        uint32_t instr_addr = start_address + (i * 2) + (instruction_offset * 2);
+        
+        // Create an instruction object
+        cJSON* instr = cJSON_CreateObject();
+        
+        // Format the address as a string
+        char addr_str[32];
+        snprintf(addr_str, sizeof(addr_str), "0x%08X", instr_addr);
+        cJSON_AddStringToObject(instr, "address", addr_str);
+        
+        // For the mock implementation, generate pseudo-random instruction bytes based on the address
+        uint16_t instr_value = (uint16_t)((instr_addr * 17) % 0xFFFF);
+        char instr_bytes[8];
+        snprintf(instr_bytes, sizeof(instr_bytes), "%04X", instr_value);
+        cJSON_AddStringToObject(instr, "instructionBytes", instr_bytes);
+        
+        // Generate a mock instruction based on the value
+        char instr_text[64];
+        
+        // Use the instruction value to determine what kind of instruction to show
+        switch (instr_value % 8)
+        {
+            case 0:
+                snprintf(instr_text, sizeof(instr_text), "mov r%d, r%d", instr_value % 16, (instr_value >> 4) % 16);
+                break;
+            case 1:
+                snprintf(instr_text, sizeof(instr_text), "add r%d, r%d", instr_value % 16, (instr_value >> 4) % 16);
+                break;
+            case 2:
+                snprintf(instr_text, sizeof(instr_text), "sub r%d, r%d", instr_value % 16, (instr_value >> 4) % 16);
+                break;
+            case 3:
+                snprintf(instr_text, sizeof(instr_text), "and r%d, 0x%02X", instr_value % 16, (instr_value >> 8) & 0xFF);
+                break;
+            case 4:
+                snprintf(instr_text, sizeof(instr_text), "or r%d, 0x%02X", instr_value % 16, (instr_value >> 8) & 0xFF);
+                break;
+            case 5:
+                snprintf(instr_text, sizeof(instr_text), "jmp 0x%04X", (instr_addr + instr_value) & 0xFFFF);
+                break;
+            case 6:
+                snprintf(instr_text, sizeof(instr_text), "call 0x%04X", (instr_addr + instr_value) & 0xFFFF);
+                break;
+            case 7:
+                snprintf(instr_text, sizeof(instr_text), "ret");
+                break;
         }
         
-        // Format address as hexadecimal
-        char addr_str[16];
-        snprintf(addr_str, sizeof(addr_str), "0x%04x", current_addr);
+        cJSON_AddStringToObject(instr, "instruction", instr_text);
         
-        // Store the first address for the completion message
-        if (i == 0) {
-            strncpy(first_addr_str, addr_str, sizeof(first_addr_str) - 1);
-        }
-        
-        cJSON_AddStringToObject(instruction, "address", addr_str);
-        
-        // Generate a mock instruction based on the address
-        const char* opcode = opcodes[current_addr % num_opcodes];
-        int src_reg = (current_addr / 4) % 8;
-        int dst_reg = ((current_addr / 4) + 1) % 8;
-        
-        char instr_text[32];
-        if (strcmp(opcode, "JMP") == 0) {
-            // Jump instructions use a single address
-            snprintf(instr_text, sizeof(instr_text), "%s 0x%04x", opcode, current_addr + 16);
-        } else if (strcmp(opcode, "BEQ") == 0 || strcmp(opcode, "BNE") == 0 || 
-                   strcmp(opcode, "BGT") == 0 || strcmp(opcode, "BLT") == 0) {
-            // Branch instructions compare a register and jump
-            snprintf(instr_text, sizeof(instr_text), "%s R%d, 0x%04x", opcode, src_reg, current_addr + 8);
-        } else {
-            // Regular two-operand instructions
-            snprintf(instr_text, sizeof(instr_text), "%s R%d, R%d", opcode, dst_reg, src_reg);
-        }
-        
-        cJSON_AddStringToObject(instruction, "instruction", instr_text);
-        
-        // Add symbol information if requested
-        if (resolve_symbols) {
-            // Generate mock symbol information based on address
-            if (current_addr % 32 == 0) {
+        // Add symbol information if requested and available
+        if (resolve_symbols)
+        {
+            // In a real implementation, you would look up symbols in your debug info
+            // For the mock implementation, we'll occasionally add symbol info
+            if (i % 3 == 0)
+            {
                 char symbol[32];
-                snprintf(symbol, sizeof(symbol), "function_%04x", current_addr);
-                cJSON_AddStringToObject(instruction, "symbol", symbol);
+                snprintf(symbol, sizeof(symbol), "func_%04x", instr_addr & 0xFFFF);
+                cJSON_AddStringToObject(instr, "symbol", symbol);
             }
         }
         
-        // Add to instructions array
-        cJSON_AddItemToArray(instructions, instruction);
+        // Occasionally add source location information
+        if (i % 5 == 0 && server->debugger_state.source_path)
+        {
+            cJSON* location = cJSON_CreateObject();
+            
+            // Create source object
+            cJSON* source = cJSON_CreateObject();
+            cJSON_AddStringToObject(source, "path", server->debugger_state.source_path);
+            
+            // Extract file name from path
+            const char* source_name = strrchr(server->debugger_state.source_path, '/');
+            if (source_name)
+            {
+                source_name++; // Skip the '/'
+            }
+            else
+            {
+                source_name = server->debugger_state.source_path;
+            }
+            cJSON_AddStringToObject(source, "name", source_name);
+            
+            cJSON_AddItemToObject(location, "source", source);
+            
+            // Add line and column information
+            int line = ((instr_addr & 0xFF) % 50) + 1; // Mock line number between 1-50
+            cJSON_AddNumberToObject(location, "line", line);
+            cJSON_AddNumberToObject(location, "column", 1);
+            cJSON_AddNumberToObject(location, "endLine", line);
+            cJSON_AddNumberToObject(location, "endColumn", 20);
+            
+            cJSON_AddItemToObject(instr, "location", location);
+        }
         
-        // Move to next instruction (4 bytes per instruction in this architecture)
-        current_addr += 4;
+        // Add the instruction to the array
+        cJSON_AddItemToArray(instructions, instr);
     }
     
-    // Attach instructions array to response body
+    // Add the instructions array to the response body
     cJSON_AddItemToObject(body, "instructions", instructions);
     
-    // Generate response JSON
-    char* response_str = cJSON_Print(body);
-    if (response_str) {
-        // In a callback implementation, we don't need to set response fields directly
-        // Instead, the handler in dap_server_cmds.c will take care of that
-        // Just log some debugging information and free our temporary string
-        DAP_SERVER_DEBUG_LOG("Generated disassembly response of %zu bytes", strlen(response_str));
-        free(response_str);
-    }
-    
-    // Free the response body - the disassemble handler will generate its own response
-    cJSON_Delete(body);
-    
-    // Send a human-friendly completion message
-    snprintf(message, sizeof(message), "Disassembly complete: %d instructions starting at %s.\n", 
-             instruction_count, first_addr_str);
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, message);
+    // Send the response
+    dap_server_send_response(server, DAP_CMD_DISASSEMBLE, server->sequence++, 
+                            server->current_command.request_seq, true, body);
     
     return 0;
 }
@@ -1382,7 +1368,7 @@ static DAPVariable* add_variable_to_array(
     const char* value,
     const char* type,
     int variables_reference,
-    const char* memory_reference,
+    uint32_t memory_reference,
     const char* kind,
     const char** attributes,
     int num_attributes
@@ -1429,10 +1415,8 @@ static DAPVariable* add_variable_to_array(
     var->indexed_variables = 0;
     var->evaluate_name = NULL;
     
-    if (memory_reference)
-        var->memory_reference = strdup(memory_reference);
-    else
-        var->memory_reference = NULL;
+    // Set memory reference (now a uint32_t, no longer allocated)
+    var->memory_reference = memory_reference;
     
     // Handle presentation hint
     // Default initialization
@@ -1525,7 +1509,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "42",          // value
         "integer",     // type
         0,             // variablesReference
-        NULL,          // memoryReference
+        0,             // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes
@@ -1538,7 +1522,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "true",        // value
         "boolean",     // type
         0,             // variablesReference
-        NULL,          // memoryReference
+        0,             // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes
@@ -1551,7 +1535,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "\"Hello, DAP!\"", // value
         "string",      // type
         0,             // variablesReference
-        NULL,          // memoryReference
+        0,             // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes
@@ -1585,9 +1569,8 @@ static void add_register_variables(DAPServer *server, char* info_message, size_t
             snprintf(value_str, sizeof(value_str), "%o", cpu_registers[i].value);
         }
         
-        // Create memory reference
-        char mem_ref[32];
-        snprintf(mem_ref, sizeof(mem_ref), "0x%04X", (int)(i * 2));
+        // Create memory reference as uint32_t (using register index * 2 as mock address)
+        uint32_t mem_ref = (uint32_t)(i * 2);
         
         // Add register
         add_variable_to_array(
@@ -1628,7 +1611,7 @@ static void add_status_flag_variables(DAPServer *server, char* info_message, siz
             status_flags[i].value ? "true" : "false", // value
             status_flags[i].type,              // type
             0,                                 // variablesReference
-            NULL,                              // memoryReference
+            0,                                 // memoryReference (no memory reference for status flags)
             property_kind,                     // kind
             readonly_attrs,                    // attributes
             1                                  // num_attributes
@@ -1650,7 +1633,7 @@ static void add_memory_region_variables(DAPServer *server, char* info_message, s
     // Add memory region variables
     const char *regions[] = {"Stack", "Heap", "Code"};
     const char *ranges[] = {"0x0000-0x1FFF", "0x2000-0x4FFF", "0x5000-0xFFFF"};
-    const char *mem_refs[] = {"0x0000", "0x2000", "0x5000"};
+    const uint32_t mem_refs[] = {0x0000, 0x2000, 0x5000};
     
     // Property kind - readonly
     const char* property_kind = "property";
@@ -2023,7 +2006,7 @@ static int cmd_variables(DAPServer *server) {
  * @param server The DAP server instance
  * @return int 0 on success, non-zero on failure
  */
-static int cmd_set_variable(DAPServer *server)
+int cmd_set_variable(DAPServer *server)
 {
     if (!server) {
         return -1;

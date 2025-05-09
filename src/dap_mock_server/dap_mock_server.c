@@ -233,7 +233,7 @@ static int cmd_read_memory(DAPServer *server) {
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Reading memory...\n");
     
     // Extract parameters from the command context
-    const char* memory_reference = server->current_command.context.read_memory.memory_reference;
+    uint64_t memory_reference = server->current_command.context.read_memory.memory_reference;
     uint64_t offset = server->current_command.context.read_memory.offset;
     size_t count = server->current_command.context.read_memory.count;
     

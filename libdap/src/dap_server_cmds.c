@@ -19,66 +19,49 @@
 #include "dap_server_cmds.h"
 #include <cjson/cJSON.h>
 
-#define MAX_PATH_LENGTH 1024  // Define a safe maximum path length
-
-// Define status flags for the status register
-static StatusFlag status_flags[] = {
-    {"PTM", false, "flag"},  // Page Table Flag
-    {"TG", false, "flag"},   // Floating point rounding flag
-    {"K", false, "flag"},    // Accumulator
-    {"Z", false, "flag"},    // Error flag
-    {"Q", false, "flag"},    // Dynamic overflow flag
-    {"O", false, "flag"},    // Static overflow flag
-    {"C", false, "flag"},    // Carry flag
-    {"M", false, "flag"},    // Multi-shift link flag
-    {"PIL", false, "level"}, // Program Level (4 bits) - changed to bool for compatibility
-    {"N100", true, "flag"},  // ND-100 flag (always 1)
-    {"SEXI", false, "flag"}, // Memory management extended mode
-    {"PONI", false, "flag"}, // Memory management ON flag
-    {"IONI", false, "flag"}  // Interrupt system ON flag
-};
-
-#define NUM_STATUS_FLAGS (sizeof(status_flags) / sizeof(StatusFlag))
-
 /**
  * @brief Encodes binary data as a base64 string
- * 
+ *
  * This implementation is a simple helper for the DAP protocol which requires
  * memory data to be base64 encoded in readMemory responses.
- * 
+ *
  * @param data The binary data to encode
  * @param len The length of the data in bytes
  * @return char* The base64 encoded string (caller must free)
  */
-static char* base64_encode(const uint8_t* data, size_t len) {
-    static const char base64_chars[] = 
+static char *base64_encode(const uint8_t *data, size_t len)
+{
+    static const char base64_chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    
+
     // Calculate the length of the output string
     size_t output_len = 4 * ((len + 2) / 3) + 1; // +1 for null terminator
-    
+
     // Allocate memory for the output
-    char* output = malloc(output_len);
-    if (!output) {
+    char *output = malloc(output_len);
+    if (!output)
+    {
         return NULL;
     }
-    
+
     size_t i, j;
-    for (i = 0, j = 0; i < len; i += 3, j += 4) {
+    for (i = 0, j = 0; i < len; i += 3, j += 4)
+    {
         uint32_t triplet = data[i] << 16;
-        if (i + 1 < len) triplet |= data[i + 1] << 8;
-        if (i + 2 < len) triplet |= data[i + 2];
-        
+        if (i + 1 < len)
+            triplet |= data[i + 1] << 8;
+        if (i + 2 < len)
+            triplet |= data[i + 2];
+
         output[j] = base64_chars[(triplet >> 18) & 0x3F];
         output[j + 1] = base64_chars[(triplet >> 12) & 0x3F];
         output[j + 2] = (i + 1 < len) ? base64_chars[(triplet >> 6) & 0x3F] : '=';
         output[j + 3] = (i + 2 < len) ? base64_chars[triplet & 0x3F] : '=';
     }
-    
+
     output[j] = '\0';
     return output;
 }
-
 
 // Forward declarations for helper functions
 void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count);
@@ -110,19 +93,20 @@ int send_initialized_event(DAPServer *server)
 
     // Send the event
     int result = dap_server_send_event(server, "initialized", body);
-    
+
     // Clean up
     cJSON_Delete(body);
-    
+
     return result;
 }
 
 /**
  * @brief Structure representing a single server capability
  */
-typedef struct {
-    const char *name;     // Name of the capability in the DAP spec
-    bool supported;       // Whether the capability is supported
+typedef struct
+{
+    const char *name; // Name of the capability in the DAP spec
+    bool supported;   // Whether the capability is supported
 } DAPCapability;
 
 /**
@@ -131,72 +115,106 @@ typedef struct {
  * All capabilities are initialized as false by default
  */
 static DAPCapability server_capabilities[DAP_CAP_COUNT] = {
-    {"supportsConfigurationDoneRequest",      false},
-    {"supportsFunctionBreakpoints",           false},
-    {"supportsConditionalBreakpoints",        false},
-    {"supportsHitConditionalBreakpoints",     false},
-    {"supportsEvaluateForHovers",             false},
-    {"supportsSetVariable",                   false},
-    {"supportsCompletionsRequest",            false},
-    {"supportsModulesRequest",                false},
-    {"supportsRestartRequest",                false},
-    {"supportsExceptionOptions",              false},
-    {"supportsValueFormattingOptions",        false},
-    {"supportsExceptionInfoRequest",          false},
-    {"supportTerminateDebuggee",              false},  // NOTE! This is not the same as terminateRequest. And be aware of the single vs plural in the name. Its single!
-    {"supportsDelayedStackTraceLoading",      false},
-    {"supportsLoadedSourcesRequest",          false},
-    {"supportsLogPoints",                     false},
-    {"supportsTerminateThreadsRequest",       false},
-    {"supportsSetExpression",                 false},
-    {"supportsTerminateRequest",              false},
-    {"supportsDataBreakpoints",               false},
-    {"supportsReadMemoryRequest",             false},
-    {"supportsWriteMemoryRequest",            false},
-    {"supportsDisassembleRequest",            false},
-    {"supportsCancelRequest",                 false},
-    {"supportsBreakpointLocationsRequest",    false},
-    {"supportsSteppingGranularity",           false},
-    {"supportsInstructionBreakpoints",        false},
-    {"supportsExceptionFilterOptions",        false},
+    {"supportsConfigurationDoneRequest", false},
+    {"supportsFunctionBreakpoints", false},
+    {"supportsConditionalBreakpoints", false},
+    {"supportsHitConditionalBreakpoints", false},
+    {"supportsEvaluateForHovers", false},
+    {"supportsSetVariable", false},
+    {"supportsCompletionsRequest", false},
+    {"supportsModulesRequest", false},
+    {"supportsRestartRequest", false},
+    {"supportsExceptionOptions", false},
+    {"supportsValueFormattingOptions", false},
+    {"supportsExceptionInfoRequest", false},
+    {"supportTerminateDebuggee", false}, // NOTE! This is not the same as terminateRequest. And be aware of the single vs plural in the name. Its single!
+    {"supportsDelayedStackTraceLoading", false},
+    {"supportsLoadedSourcesRequest", false},
+    {"supportsLogPoints", false},
+    {"supportsTerminateThreadsRequest", false},
+    {"supportsSetExpression", false},
+    {"supportsTerminateRequest", false},
+    {"supportsDataBreakpoints", false},
+    {"supportsReadMemoryRequest", false},
+    {"supportsWriteMemoryRequest", false},
+    {"supportsDisassembleRequest", false},
+    {"supportsCancelRequest", false},
+    {"supportsBreakpointLocationsRequest", false},
+    {"supportsSteppingGranularity", false},
+    {"supportsInstructionBreakpoints", false},
+    {"supportsExceptionFilterOptions", false},
     {"supportsSingleThreadExecutionRequests", false},
-    {"supportsStepBack",                      false},
-    {"supportsRestartFrame",                  false},
-    {"supportsGotoTargetsRequest",            false},
-    {"supportsStepInTargetsRequest",          false},
-    {"supportsClipboardContext",              false},
+    {"supportsStepBack", false},
+    {"supportsRestartFrame", false},
+    {"supportsGotoTargetsRequest", false},
+    {"supportsStepInTargetsRequest", false},
+    {"supportsClipboardContext", false},
 };
 
 /**
  * @brief Set a capability in the capability array
- * 
+ *
  * @param capability_id The capability enum value to set
  * @param supported Whether the capability is supported
  * @return int 0 on success, -1 if capability_id is out of range
  */
 int dap_server_set_capability(DAPCapabilityID capability_id, bool supported)
 {
-    if (capability_id >= 0 && capability_id < DAP_CAP_COUNT) {
+    if (capability_id >= 0 && capability_id < DAP_CAP_COUNT)
+    {
         server_capabilities[capability_id].supported = supported;
         return 0;
     }
     return -1;
 }
 
+static int dap_server_execute_callback(DAPServer *server, DAPCommandType cmd)
+{
+    if (!server)
+    {
+        return -1;
+    }
+
+    // Check if the command type is valid
+    if (cmd < 0 || cmd >= DAP_CMD_MAX)
+    {
+        return -1;
+    }
+
+    // Call the implementation callback for the command
+    DAPCommandCallback pre = server->command_callbacks[DAP_WAIT_FOR_DEBUGGER];
+    DAPCommandCallback callback = server->command_callbacks[cmd];
+    DAPCommandCallback post = server->command_callbacks[DAP_RELEASE_DEBUGGER];
+
+    if (callback)
+    {
+        pre(server);                   // Wait for the debugger to be ready
+        int result = callback(server); // DO the command
+        post(server);                  // Release the debugger
+        return result;
+    }
+    else
+    {
+        DAP_SERVER_DEBUG_LOG("No implementation callback for command %d", cmd);
+        return -1;
+    }
+}
+
 /**
  * @brief Enum for DAP exception filter types
- * 
- * Per DAP specification, an ExceptionBreakpointsFilter represents a specific way of handling 
+ *
+ * Per DAP specification, an ExceptionBreakpointsFilter represents a specific way of handling
  * exceptions that can be enabled or disabled by the client. Each filter is shown in the UI
  * as a checkbox option for configuring how exceptions are dealt with during debugging.
  */
-typedef enum {
+typedef enum
+{
     DAP_EXC_FILTER_ALL,      // Breaks when any exception is thrown, whether caught or not
     DAP_EXC_FILTER_UNCAUGHT, // Breaks only on exceptions that aren't caught by user code
-    
+
     // Keep this last to get the total count of filters
     DAP_EXC_FILTER_COUNT
-    
+
     /* To add new exception filters:
      * 1. Add a new enum value above DAP_EXC_FILTER_COUNT
      * 2. Add a corresponding entry in the exception_filters array
@@ -205,13 +223,14 @@ typedef enum {
 
 /**
  * @brief Structure representing an exception breakpoint filter
- * 
- * According to DAP spec, these filters are exposed to the client during initialization 
+ *
+ * According to DAP spec, these filters are exposed to the client during initialization
  * as part of the 'exceptionBreakpointFilters' capability. The client UI shows each filter
  * as an option that can be enabled/disabled. When enabled, the debug adapter will break
  * execution when exceptions matching the filter criteria are thrown.
  */
-typedef struct {
+typedef struct
+{
     const char *id;          // Filter ID used in requests (matches the filter in enum)
     const char *label;       // Human-readable filter name shown in the UI
     const char *description; // Description of when this filter applies
@@ -223,45 +242,45 @@ typedef struct {
  * Indexed by DAPExceptionFilterID enum values
  */
 static const DAPExceptionFilter exception_filters[DAP_EXC_FILTER_COUNT] = {
-    {"all",      "All Exceptions",       "Break on all exceptions",           false},
-    {"uncaught", "Uncaught Exceptions",  "Break on uncaught exceptions",      true},
+    {"all", "All Exceptions", "Break on all exceptions", false},
+    {"uncaught", "Uncaught Exceptions", "Break on uncaught exceptions", true},
 };
-
-
 
 /**
  * @brief Set multiple capabilities at once
- * 
+ *
  * This function accepts a variable number of capability ID and boolean pairs,
  * terminated by DAP_CAP_COUNT. For example:
- * 
+ *
  * dap_server_set_capabilities(
  *     DAP_CAP_CONFIG_DONE_REQUEST, true,
  *     DAP_CAP_FUNCTION_BREAKPOINTS, true,
  *     DAP_CAP_CONDITIONAL_BREAKPOINTS, true,
  *     DAP_CAP_COUNT  // Terminator
  * );
- * 
+ *
  * @param ... Variable number of DAPCapabilityID and boolean pairs, terminated by DAP_CAP_COUNT
  * @return int The number of capabilities actually set
  */
 int dap_server_set_capabilities(DAPServer *server, ...)
 {
     (void)server; // Parameter currently unused, but included for future use
-    
+
     va_list args;
     va_start(args, server);
-    
+
     int count = 0;
     DAPCapabilityID capability_id;
-    
-    while ((capability_id = va_arg(args, DAPCapabilityID)) != DAP_CAP_COUNT) {
-        bool supported = va_arg(args, int);  // bool is promoted to int in va_arg
-        if (dap_server_set_capability(capability_id, supported) == 0) {
+
+    while ((capability_id = va_arg(args, DAPCapabilityID)) != DAP_CAP_COUNT)
+    {
+        bool supported = va_arg(args, int); // bool is promoted to int in va_arg
+        if (dap_server_set_capability(capability_id, supported) == 0)
+        {
             count++;
         }
     }
-    
+
     va_end(args);
     return count;
 }
@@ -283,116 +302,142 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     {
         // Parse and store important client capabilities
         cJSON *client_id = cJSON_GetObjectItem(args, "clientID");
-        if (client_id && cJSON_IsString(client_id)) {
-            if (server->client_capabilities.clientID) {
+        if (client_id && cJSON_IsString(client_id))
+        {
+            if (server->client_capabilities.clientID)
+            {
                 free(server->client_capabilities.clientID);
             }
             server->client_capabilities.clientID = strdup(client_id->valuestring);
         }
-        
+
         cJSON *client_name = cJSON_GetObjectItem(args, "clientName");
-        if (client_name && cJSON_IsString(client_name)) {
-            if (server->client_capabilities.clientName) {
+        if (client_name && cJSON_IsString(client_name))
+        {
+            if (server->client_capabilities.clientName)
+            {
                 free(server->client_capabilities.clientName);
             }
             server->client_capabilities.clientName = strdup(client_name->valuestring);
         }
-        
+
         cJSON *adapter_id = cJSON_GetObjectItem(args, "adapterID");
-        if (adapter_id && cJSON_IsString(adapter_id)) {
-            if (server->client_capabilities.adapterID) {
+        if (adapter_id && cJSON_IsString(adapter_id))
+        {
+            if (server->client_capabilities.adapterID)
+            {
                 free(server->client_capabilities.adapterID);
             }
             server->client_capabilities.adapterID = strdup(adapter_id->valuestring);
         }
-        
+
         cJSON *locale = cJSON_GetObjectItem(args, "locale");
-        if (locale && cJSON_IsString(locale)) {
-            if (server->client_capabilities.locale) {
+        if (locale && cJSON_IsString(locale))
+        {
+            if (server->client_capabilities.locale)
+            {
                 free(server->client_capabilities.locale);
             }
             server->client_capabilities.locale = strdup(locale->valuestring);
         }
-        
+
         // Store path format (path or uri)
         cJSON *path_format = cJSON_GetObjectItem(args, "pathFormat");
-        if (path_format && cJSON_IsString(path_format)) {
-            if (server->client_capabilities.pathFormat) {
+        if (path_format && cJSON_IsString(path_format))
+        {
+            if (server->client_capabilities.pathFormat)
+            {
                 free(server->client_capabilities.pathFormat);
             }
             server->client_capabilities.pathFormat = strdup(path_format->valuestring);
         }
-        
+
         // Store line/column formatting preferences
         cJSON *lines_start_at_1 = cJSON_GetObjectItem(args, "linesStartAt1");
-        if (lines_start_at_1 && cJSON_IsBool(lines_start_at_1)) {
+        if (lines_start_at_1 && cJSON_IsBool(lines_start_at_1))
+        {
             server->client_capabilities.linesStartAt1 = cJSON_IsTrue(lines_start_at_1);
-        } else {
+        }
+        else
+        {
             server->client_capabilities.linesStartAt1 = true; // Default to 1-based
         }
-        
+
         cJSON *columns_start_at_1 = cJSON_GetObjectItem(args, "columnsStartAt1");
-        if (columns_start_at_1 && cJSON_IsBool(columns_start_at_1)) {
+        if (columns_start_at_1 && cJSON_IsBool(columns_start_at_1))
+        {
             server->client_capabilities.columnsStartAt1 = cJSON_IsTrue(columns_start_at_1);
-        } else {
+        }
+        else
+        {
             server->client_capabilities.columnsStartAt1 = true; // Default to 1-based
         }
-        
+
         // Store supported client features
         cJSON *supports_variable_type = cJSON_GetObjectItem(args, "supportsVariableType");
-        if (supports_variable_type && cJSON_IsBool(supports_variable_type)) {
+        if (supports_variable_type && cJSON_IsBool(supports_variable_type))
+        {
             server->client_capabilities.supportsVariableType = cJSON_IsTrue(supports_variable_type);
         }
-        
+
         cJSON *supports_variable_paging = cJSON_GetObjectItem(args, "supportsVariablePaging");
-        if (supports_variable_paging && cJSON_IsBool(supports_variable_paging)) {
+        if (supports_variable_paging && cJSON_IsBool(supports_variable_paging))
+        {
             server->client_capabilities.supportsVariablePaging = cJSON_IsTrue(supports_variable_paging);
         }
-        
+
         cJSON *supports_run_in_terminal = cJSON_GetObjectItem(args, "supportsRunInTerminalRequest");
-        if (supports_run_in_terminal && cJSON_IsBool(supports_run_in_terminal)) {
+        if (supports_run_in_terminal && cJSON_IsBool(supports_run_in_terminal))
+        {
             server->client_capabilities.supportsRunInTerminalRequest = cJSON_IsTrue(supports_run_in_terminal);
         }
-        
+
         cJSON *supports_memory_references = cJSON_GetObjectItem(args, "supportsMemoryReferences");
-        if (supports_memory_references && cJSON_IsBool(supports_memory_references)) {
+        if (supports_memory_references && cJSON_IsBool(supports_memory_references))
+        {
             server->client_capabilities.supportsMemoryReferences = cJSON_IsTrue(supports_memory_references);
         }
-        
+
         cJSON *supports_progress_reporting = cJSON_GetObjectItem(args, "supportsProgressReporting");
-        if (supports_progress_reporting && cJSON_IsBool(supports_progress_reporting)) {
+        if (supports_progress_reporting && cJSON_IsBool(supports_progress_reporting))
+        {
             server->client_capabilities.supportsProgressReporting = cJSON_IsTrue(supports_progress_reporting);
         }
-        
+
         cJSON *supports_invalidated_event = cJSON_GetObjectItem(args, "supportsInvalidatedEvent");
-        if (supports_invalidated_event && cJSON_IsBool(supports_invalidated_event)) {
+        if (supports_invalidated_event && cJSON_IsBool(supports_invalidated_event))
+        {
             server->client_capabilities.supportsInvalidatedEvent = cJSON_IsTrue(supports_invalidated_event);
         }
-        
+
         cJSON *supports_memory_event = cJSON_GetObjectItem(args, "supportsMemoryEvent");
-        if (supports_memory_event && cJSON_IsBool(supports_memory_event)) {
+        if (supports_memory_event && cJSON_IsBool(supports_memory_event))
+        {
             server->client_capabilities.supportsMemoryEvent = cJSON_IsTrue(supports_memory_event);
         }
 
         cJSON *supports_ansi_styling = cJSON_GetObjectItem(args, "supportsANSIStyling");
-        if (supports_ansi_styling && cJSON_IsBool(supports_ansi_styling)) {
+        if (supports_ansi_styling && cJSON_IsBool(supports_ansi_styling))
+        {
             server->client_capabilities.supportsANSIStyling = cJSON_IsTrue(supports_ansi_styling);
         }
-        
+
         cJSON *supports_args_shell = cJSON_GetObjectItem(args, "supportsArgsCanBeInterpretedByShell");
-        if (supports_args_shell && cJSON_IsBool(supports_args_shell)) {
+        if (supports_args_shell && cJSON_IsBool(supports_args_shell))
+        {
             server->client_capabilities.supportsArgsCanBeInterpretedByShell = cJSON_IsTrue(supports_args_shell);
         }
-        
+
         cJSON *supports_start_debugging = cJSON_GetObjectItem(args, "supportsStartDebuggingRequest");
-        if (supports_start_debugging && cJSON_IsBool(supports_start_debugging)) {
+        if (supports_start_debugging && cJSON_IsBool(supports_start_debugging))
+        {
             server->client_capabilities.supportsStartDebuggingRequest = cJSON_IsTrue(supports_start_debugging);
         }
 
         // Log the client information
-        DAP_SERVER_DEBUG_LOG("Initialized with client: %s (%s)", 
-            server->client_capabilities.clientName ? server->client_capabilities.clientName : "unknown",
-            server->client_capabilities.clientID ? server->client_capabilities.clientID : "unknown");
+        DAP_SERVER_DEBUG_LOG("Initialized with client: %s (%s)",
+                             server->client_capabilities.clientName ? server->client_capabilities.clientName : "unknown",
+                             server->client_capabilities.clientID ? server->client_capabilities.clientID : "unknown");
     }
 
     // Create the response with our capabilities
@@ -404,8 +449,9 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Add supported capabilities to the response
-    for (int i = 0; i < DAP_CAP_COUNT; i++) {         
-        cJSON_AddBoolToObject(capabilities, server_capabilities[i].name, server_capabilities[i].supported);        
+    for (int i = 0; i < DAP_CAP_COUNT; i++)
+    {
+        cJSON_AddBoolToObject(capabilities, server_capabilities[i].name, server_capabilities[i].supported);
     }
 
     // Create and add exception filters
@@ -413,9 +459,11 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     if (exceptionFilters)
     {
         // Add all defined exception filters
-        for (int i = 0; i < DAP_EXC_FILTER_COUNT; i++) {
+        for (int i = 0; i < DAP_EXC_FILTER_COUNT; i++)
+        {
             cJSON *filter = cJSON_CreateObject();
-            if (filter) {
+            if (filter)
+            {
                 cJSON_AddStringToObject(filter, "filter", exception_filters[i].id);
                 cJSON_AddStringToObject(filter, "label", exception_filters[i].label);
                 cJSON_AddStringToObject(filter, "description", exception_filters[i].description);
@@ -428,19 +476,20 @@ int handle_initialize(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Set ANSI styling if client supports it
-    if (server->client_capabilities.supportsANSIStyling) {
+    if (server->client_capabilities.supportsANSIStyling)
+    {
         cJSON_AddBoolToObject(capabilities, "supportsANSIStyling", true);
     }
 
     set_response_success(response, capabilities);
     // cJSON_Delete(capabilities); -- No longer needed, set_response_success will free it
-    
+
     // Mark that we've received initialize
     server->is_initialized = true;
-    
+
     // Note: The 'initialized' event will be sent by dap_server_handle_request
     // immediately after sending this response, as per the DAP specification
-    
+
     return 0;
 }
 
@@ -545,7 +594,8 @@ int handle_execution_control(DAPServer *server, DAPCommandType command, cJSON *a
 
 int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    if (!args || !response) {
+    if (!args || !response)
+    {
         set_response_error(response, "Invalid arguments");
         return -1;
     }
@@ -553,248 +603,280 @@ int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response
     // Set command type
     server->current_command.type = DAP_CMD_SET_BREAKPOINTS;
     memset(&server->current_command.context.breakpoint, 0, sizeof(BreakpointCommandContext));
-    
+
     // Parse source
     cJSON *source = cJSON_GetObjectItem(args, "source");
-    if (!source) {
+    if (!source)
+    {
         set_response_error(response, "Missing source");
         return -1;
     }
-    
+
     // Get source path and name
     cJSON *path = cJSON_GetObjectItem(source, "path");
-    if (path && cJSON_IsString(path)) {
+    if (path && cJSON_IsString(path))
+    {
         server->current_command.context.breakpoint.source_path = strdup(path->valuestring);
-    } else {
+    }
+    else
+    {
         set_response_error(response, "Missing source path");
         return -1;
     }
-    
+
     cJSON *name = cJSON_GetObjectItem(source, "name");
-    if (name && cJSON_IsString(name)) {
+    if (name && cJSON_IsString(name))
+    {
         server->current_command.context.breakpoint.source_name = strdup(name->valuestring);
     }
-    
+
     // Check for sourceModified flag
     cJSON *source_modified = cJSON_GetObjectItem(args, "sourceModified");
-    if (source_modified && cJSON_IsBool(source_modified)) {
+    if (source_modified && cJSON_IsBool(source_modified))
+    {
         server->current_command.context.breakpoint.source_modified = cJSON_IsTrue(source_modified);
     }
-    
+
     // Parse breakpoints array
     cJSON *breakpoints = cJSON_GetObjectItem(args, "breakpoints");
     DAPBreakpoint *bp_array = NULL;
     int count = 0;
-    
-    if (breakpoints && cJSON_IsArray(breakpoints)) {
+
+    if (breakpoints && cJSON_IsArray(breakpoints))
+    {
         count = cJSON_GetArraySize(breakpoints);
-        if (count > 0) {
+        if (count > 0)
+        {
             // Allocate array of DAPBreakpoint objects
             bp_array = malloc(count * sizeof(DAPBreakpoint));
-            if (!bp_array) {
+            if (!bp_array)
+            {
                 cleanup_command_context(server);
                 set_response_error(response, "Memory allocation failed");
                 return -1;
             }
-            
+
             // Parse each breakpoint
-            for (int i = 0; i < count; i++) {
+            for (int i = 0; i < count; i++)
+            {
                 cJSON *bp = cJSON_GetArrayItem(breakpoints, i);
-                if (!bp) continue;
-                
+                if (!bp)
+                    continue;
+
                 memset(&bp_array[i], 0, sizeof(DAPBreakpoint));
-                
+
                 // Required: line
                 cJSON *line = cJSON_GetObjectItem(bp, "line");
-                if (line && cJSON_IsNumber(line)) {
+                if (line && cJSON_IsNumber(line))
+                {
                     bp_array[i].line = line->valueint;
                 }
-                
+
                 // Optional: column
                 cJSON *column = cJSON_GetObjectItem(bp, "column");
-                if (column && cJSON_IsNumber(column)) {
+                if (column && cJSON_IsNumber(column))
+                {
                     bp_array[i].column = column->valueint;
                 }
-                
+
                 // Optional: condition
                 cJSON *condition = cJSON_GetObjectItem(bp, "condition");
-                if (condition && cJSON_IsString(condition)) {
+                if (condition && cJSON_IsString(condition))
+                {
                     bp_array[i].condition = strdup(condition->valuestring);
                 }
-                
+
                 // Optional: hitCondition
                 cJSON *hit_condition = cJSON_GetObjectItem(bp, "hitCondition");
-                if (hit_condition && cJSON_IsString(hit_condition)) {
+                if (hit_condition && cJSON_IsString(hit_condition))
+                {
                     bp_array[i].hit_condition = strdup(hit_condition->valuestring);
                 }
-                
+
                 // Optional: logMessage
                 cJSON *log_message = cJSON_GetObjectItem(bp, "logMessage");
-                if (log_message && cJSON_IsString(log_message)) {
+                if (log_message && cJSON_IsString(log_message))
+                {
                     bp_array[i].log_message = strdup(log_message->valuestring);
                 }
-                
+
                 // Set default verified state
                 bp_array[i].verified = true;
-                
+
                 // Set source information for each breakpoint
-                if (server->current_command.context.breakpoint.source_path) {
+                if (server->current_command.context.breakpoint.source_path)
+                {
                     bp_array[i].source_path = strdup(server->current_command.context.breakpoint.source_path);
                 }
-                
-                if (server->current_command.context.breakpoint.source_name) {
+
+                if (server->current_command.context.breakpoint.source_name)
+                {
                     bp_array[i].source_name = strdup(server->current_command.context.breakpoint.source_name);
                 }
             }
-            
+
             // Store the breakpoints in the command context
             server->current_command.context.breakpoint.breakpoints = bp_array;
             server->current_command.context.breakpoint.breakpoint_count = count;
         }
-    } else {
+    }
+    else
+    {
         // DAP spec allows this - it means clear all breakpoints for this source
         server->current_command.context.breakpoint.breakpoints = NULL;
         server->current_command.context.breakpoint.breakpoint_count = 0;
     }
-    
+
     // Call implementation callback
     int result = 0;
     const DAPBreakpoint *result_breakpoints = server->current_command.context.breakpoint.breakpoints;
     int result_count = server->current_command.context.breakpoint.breakpoint_count;
-    
-    if (server->command_callbacks[DAP_CMD_SET_BREAKPOINTS]) {
-        DAP_SERVER_DEBUG_LOG("Calling implementation callback for setBreakpoints");
-        
-        // Call the implementation - it will read from the context but not free anything
-        result = server->command_callbacks[DAP_CMD_SET_BREAKPOINTS](server);
-        
-        // Note: The callback may change the breakpoint information for the response,
-        // but it does NOT take ownership of any memory allocated here
-    } else {
-        DAP_SERVER_DEBUG_LOG("No implementation callback for setBreakpoints");
-    }
-    
+
+    // Call the implementation - it will read from the context but not free anything
+
+    result = dap_server_execute_callback(server, DAP_CMD_SET_BREAKPOINTS);
+
     // Create response from context after callback
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         // Free the breakpoints we allocated
         free_breakpoints_array(bp_array, count);
-        
+
         cleanup_command_context(server);
         set_response_error(response, "Failed to create response body");
         return -1;
     }
-    
+
     // Create breakpoints array for response
     cJSON *response_breakpoints = cJSON_CreateArray();
-    if (!response_breakpoints) {
+    if (!response_breakpoints)
+    {
         cJSON_Delete(body);
-        
+
         // Free the breakpoints we allocated
         free_breakpoints_array(bp_array, count);
-        
+
         cleanup_command_context(server);
         set_response_error(response, "Failed to create breakpoints array");
         return -1;
     }
-    
+
     // Add each breakpoint to response (using the possibly updated values from the callback)
-    for (int i = 0; i < result_count; i++) {
+    for (int i = 0; i < result_count; i++)
+    {
         const DAPBreakpoint *bp = &result_breakpoints[i];
-        
+
         cJSON *response_bp = cJSON_CreateObject();
-        if (!response_bp) continue;
-        
+        if (!response_bp)
+            continue;
+
         // Required fields
         cJSON_AddNumberToObject(response_bp, "id", i + 1);
         cJSON_AddBoolToObject(response_bp, "verified", bp->verified);
         cJSON_AddNumberToObject(response_bp, "line", bp->line);
-        
+
         // Optional fields
-        if (bp->column > 0) {
+        if (bp->column > 0)
+        {
             cJSON_AddNumberToObject(response_bp, "column", bp->column);
         }
-        
-        if (bp->message) {
+
+        if (bp->message)
+        {
             cJSON_AddStringToObject(response_bp, "message", bp->message);
         }
-        
+
         // Add source information
-        if (bp->source_path) {
+        if (bp->source_path)
+        {
             cJSON *source_obj = cJSON_CreateObject();
-            if (source_obj) {
+            if (source_obj)
+            {
                 cJSON_AddStringToObject(source_obj, "path", bp->source_path);
-                
-                if (bp->source_name) {
+
+                if (bp->source_name)
+                {
                     cJSON_AddStringToObject(source_obj, "name", bp->source_name);
                 }
-                
+
                 cJSON_AddItemToObject(response_bp, "source", source_obj);
             }
         }
-        
+
         cJSON_AddItemToArray(response_breakpoints, response_bp);
     }
-    
+
     cJSON_AddItemToObject(body, "breakpoints", response_breakpoints);
     set_response_success(response, body);
-    
+
     // Always free the breakpoints array we allocated
-    if (bp_array) {
+    if (bp_array)
+    {
         free_breakpoints_array(bp_array, count);
         // Clear the pointer to avoid double-free in cleanup_command_context
-        if (server->current_command.context.breakpoint.breakpoints == bp_array) {
+        if (server->current_command.context.breakpoint.breakpoints == bp_array)
+        {
             server->current_command.context.breakpoint.breakpoints = NULL;
         }
     }
-    
+
     // Clean up command context (will free the source paths)
     cleanup_command_context(server);
-    
+
     return result;
 }
 
 /**
  * @brief Helper function to free a breakpoints array and all its contents
- * 
+ *
  * @param breakpoints Array of breakpoints to free
  * @param count Number of breakpoints in the array
  */
-void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count) {
-    if (!breakpoints || count <= 0) {
+void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count)
+{
+    if (!breakpoints || count <= 0)
+    {
         return;
     }
-    
-    for (int i = 0; i < count; i++) {
+
+    for (int i = 0; i < count; i++)
+    {
         // Free any condition strings
-        if (breakpoints[i].condition) {
-            free((void*)breakpoints[i].condition);
+        if (breakpoints[i].condition)
+        {
+            free((void *)breakpoints[i].condition);
         }
-        
-        if (breakpoints[i].hit_condition) {
-            free((void*)breakpoints[i].hit_condition);
+
+        if (breakpoints[i].hit_condition)
+        {
+            free((void *)breakpoints[i].hit_condition);
         }
-        
-        if (breakpoints[i].log_message) {
-            free((void*)breakpoints[i].log_message);
+
+        if (breakpoints[i].log_message)
+        {
+            free((void *)breakpoints[i].log_message);
         }
-        
-        if (breakpoints[i].message) {
-            free((void*)breakpoints[i].message);
+
+        if (breakpoints[i].message)
+        {
+            free((void *)breakpoints[i].message);
         }
-        
+
         // Free the source object and its members
-        if (breakpoints[i].source_path) {
-            free((void*)breakpoints[i].source_path);
+        if (breakpoints[i].source_path)
+        {
+            free((void *)breakpoints[i].source_path);
         }
-        
-        if (breakpoints[i].source_name) {
-            free((void*)breakpoints[i].source_name);
+
+        if (breakpoints[i].source_name)
+        {
+            free((void *)breakpoints[i].source_name);
         }
     }
-    
+
     // Free the breakpoints array
-    free((void*)breakpoints);
+    free((void *)breakpoints);
 }
 
 /**
@@ -823,10 +905,11 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing or invalid memoryReference");
         return -1;
     }
-    
+
     // Store memory reference in context
     server->current_command.context.disassemble.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.disassemble.memory_reference) {
+    if (!server->current_command.context.disassemble.memory_reference)
+    {
         set_response_error(response, "Failed to allocate memory for memoryReference");
         return -1;
     }
@@ -858,26 +941,17 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         server->current_command.context.disassemble.resolve_symbols = cJSON_IsTrue(resolve_symbols_json);
     }
 
-    // Call the implementation callback if registered
-    if (server->command_callbacks[DAP_CMD_DISASSEMBLE]) {
-        DAP_SERVER_DEBUG_LOG("Calling implementation callback for disassemble");
-        
-        int callback_result = server->command_callbacks[DAP_CMD_DISASSEMBLE](server);
-        if (callback_result < 0) {
-            DAP_SERVER_DEBUG_LOG("Disassemble implementation callback failed");
-            set_response_error(response, "Disassemble implementation callback failed");
-            return -1;
-        }
-        
-        // The callback should have prepared the disassembly data for the response
-        // We just need to set success=true and return
-        response->success = true;
-        return 0;
-    }
-    
-    DAP_SERVER_DEBUG_LOG("No implementation callback for disassemble, using default implementation");
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_DISASSEMBLE);
 
-    // Default implementation if no callback is registered
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("Disassemble implementation callback failed");
+        set_response_error(response, "Disassemble implementation callback failed");
+        return -1;
+    }
+
+    // TODO: DEBUG AND VALIDATE THIS
+
     // Convert memory reference to address
     char *endptr = NULL;
     uint32_t address = (uint32_t)strtoul(server->current_command.context.disassemble.memory_reference, &endptr, 0);
@@ -946,10 +1020,11 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
     for (size_t i = 0; i < (size_t)instruction_count; i++)
     {
         size_t idx = i;
-        if (instruction_offset > 0) {
+        if (instruction_offset > 0)
+        {
             idx += instruction_offset;
         }
-        
+
         if (idx >= total_instructions || !disassembly[idx])
         {
             break;
@@ -1004,6 +1079,11 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
+/// @brief Handle the DAP "continue" command
+/// @param server
+/// @param args
+/// @param response
+/// @return
 int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     (void)args; // Mark as unused
@@ -1019,6 +1099,35 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
+    // Parse thread ID and single_thread flag
+    int thread_id = 1; // Default to thread 1
+    bool single_thread = false;
+    if (args)
+    {
+        cJSON *thread_id_json = cJSON_GetObjectItem(args, "threadId");
+        if (thread_id_json && cJSON_IsNumber(thread_id_json))
+        {
+            thread_id = thread_id_json->valueint;
+        }
+
+        cJSON *single_thread_json = cJSON_GetObjectItem(args, "singleThread");
+        if (single_thread_json && cJSON_IsBool(single_thread_json))
+        {
+            single_thread = cJSON_IsTrue(single_thread_json);
+        }
+    }
+
+    server->current_command.context.continue_cmd.thread_id = thread_id;
+    server->current_command.context.continue_cmd.single_thread = single_thread;
+
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_CONTINUE);
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("Continue implementation callback failed");
+        set_response_error(response, "Continue implementation callback failed");
+        return -1;
+    }
+
     // Create success response
     cJSON *body = cJSON_CreateObject();
     if (!body)
@@ -1027,7 +1136,7 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    cJSON_AddBoolToObject(body, "allThreadsContinued", true);
+    cJSON_AddBoolToObject(body, "allThreadsContinued", server->current_command.context.continue_cmd.single_thread);
 
     set_response_success(response, body);
     // body is freed by set_response_success
@@ -1036,38 +1145,32 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
-
 int handleStepCommand(const char *command, DAPServer *server, cJSON *args, DAPResponse *response)
 {
     DAPCommandType cmd_type = DAP_CMD_INVALID;
-    DAPCommandCallback callback = NULL;
-    
-    
 
     // Determine which command type we're handling
-    if (strcmp(command, "next") == 0) {
+    if (strcmp(command, "next") == 0)
+    {
         cmd_type = DAP_CMD_NEXT;
-        callback = server->command_callbacks[DAP_CMD_NEXT];
-    } else if (strcmp(command, "stepIn") == 0) {
+    }
+    else if (strcmp(command, "stepIn") == 0)
+    {
         cmd_type = DAP_CMD_STEP_IN;
-        callback = server->command_callbacks[DAP_CMD_STEP_IN];
-    } else if (strcmp(command, "stepOut") == 0) {
+    }
+    else if (strcmp(command, "stepOut") == 0)
+    {
         cmd_type = DAP_CMD_STEP_OUT;
-        callback = server->command_callbacks[DAP_CMD_STEP_OUT];
     }
 
-    if (!callback) {
-        DAP_SERVER_DEBUG_LOG("No callback registered for %s", command);
-        set_response_error(response, "No callback registered");
-        return -1;
-    }
-
-    if (!server->is_running || !server->attached) {
+    if (!server->is_running || !server->attached)
+    {
         set_response_error(response, "Debugger not running or attached");
         return -1;
     }
 
-    if (!server->debugger_state.has_stopped) {
+    if (!server->debugger_state.has_stopped)
+    {
         set_response_error(response, "Debugger not stopped");
         return -1;
     }
@@ -1075,52 +1178,63 @@ int handleStepCommand(const char *command, DAPServer *server, cJSON *args, DAPRe
     // Parse arguments and populate command context
     server->current_command.type = cmd_type;
     memset(&server->current_command.context.step, 0, sizeof(StepCommandContext));
-    
+
     // Set defaults
-    server->current_command.context.step.thread_id = 1;  // Default to thread 1
+    server->current_command.context.step.thread_id = 1; // Default to thread 1
     server->current_command.context.step.single_thread = false;
-    server->current_command.context.step.granularity = DAP_STEP_GRANULARITY_STATEMENT;  // Default granularity
-    server->current_command.context.step.target_id = -1;  // Not used for step next
-    
+    server->current_command.context.step.granularity = DAP_STEP_GRANULARITY_STATEMENT; // Default granularity
+    server->current_command.context.step.target_id = -1;                               // Not used for step next
+
     // Extract thread_id
     cJSON *thread_id_json = cJSON_GetObjectItem(args, "threadId");
-    if (thread_id_json && cJSON_IsNumber(thread_id_json)) {
+    if (thread_id_json && cJSON_IsNumber(thread_id_json))
+    {
         server->current_command.context.step.thread_id = thread_id_json->valueint;
     }
 
     // Extract singleThread flag
     cJSON *single_thread_json = cJSON_GetObjectItem(args, "singleThread");
-    if (single_thread_json && cJSON_IsBool(single_thread_json)) {
+    if (single_thread_json && cJSON_IsBool(single_thread_json))
+    {
         server->current_command.context.step.single_thread = cJSON_IsTrue(single_thread_json);
     }
-    
+
     // Extract granularity if available and convert to enum
     cJSON *granularity_json = cJSON_GetObjectItem(args, "granularity");
-    if (granularity_json && cJSON_IsString(granularity_json)) {
-        const char* granularity_str = granularity_json->valuestring;
-        if (strcmp(granularity_str, "instruction") == 0) {
+    if (granularity_json && cJSON_IsString(granularity_json))
+    {
+        const char *granularity_str = granularity_json->valuestring;
+        if (strcmp(granularity_str, "instruction") == 0)
+        {
             server->current_command.context.step.granularity = DAP_STEP_GRANULARITY_INSTRUCTION;
-        } else if (strcmp(granularity_str, "line") == 0) {
+        }
+        else if (strcmp(granularity_str, "line") == 0)
+        {
             server->current_command.context.step.granularity = DAP_STEP_GRANULARITY_LINE;
-        } else {
+        }
+        else
+        {
             // Default to statement for any other value
             server->current_command.context.step.granularity = DAP_STEP_GRANULARITY_STATEMENT;
         }
     }
-    
+
     // Extract targetId for stepIn if provided
-    if (cmd_type == DAP_CMD_STEP_IN) {
+    if (cmd_type == DAP_CMD_STEP_IN)
+    {
         cJSON *target_id_json = cJSON_GetObjectItem(args, "targetId");
-        if (target_id_json && cJSON_IsNumber(target_id_json)) {
+        if (target_id_json && cJSON_IsNumber(target_id_json))
+        {
             server->current_command.context.step.target_id = target_id_json->valueint;
         }
     }
 
     // Call the implementation callback
     DAP_SERVER_DEBUG_LOG("Calling implementation callback for %s", command);
-    int callback_result = callback(server);
-    
-    if (callback_result < 0) {
+    int callback_result = dap_server_execute_callback(server, cmd_type);
+
+    if (callback_result < 0)
+    {
         DAP_SERVER_DEBUG_LOG("Callback failed");
         set_response_error(response, "Step implementation callback failed");
         return -1;
@@ -1128,19 +1242,20 @@ int handleStepCommand(const char *command, DAPServer *server, cJSON *args, DAPRe
 
     // Create response body
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         set_response_error(response, "Failed to create response body");
         return -1;
     }
 
     cJSON_AddBoolToObject(body, "allThreadsStopped", !server->current_command.context.step.single_thread);
-    
+
     // Set success response
     set_response_success(response, body);
 
     // Send the stopped event after successful step
     dap_server_send_stopped_event(server, "step", NULL);
-    
+
     return 0;
 }
 
@@ -1150,18 +1265,15 @@ int handle_next(DAPServer *server, cJSON *args, DAPResponse *response)
     return handleStepCommand("next", server, args, response);
 }
 
-
 int handle_step_in(DAPServer *server, cJSON *args, DAPResponse *response)
 {
 
     return handleStepCommand("stepIn", server, args, response);
-
 }
 
 int handle_step_out(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     return handleStepCommand("stepOut", server, args, response);
-
 }
 
 int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
@@ -1183,10 +1295,11 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing or invalid memoryReference");
         return -1;
     }
-    
+
     // Store memory reference in context
     server->current_command.context.read_memory.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.read_memory.memory_reference) {
+    if (!server->current_command.context.read_memory.memory_reference)
+    {
         set_response_error(response, "Failed to allocate memory for memoryReference");
         return -1;
     }
@@ -1209,31 +1322,21 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Validate parameters
-    if (server->current_command.context.read_memory.count <= 0 || 
+    if (server->current_command.context.read_memory.count <= 0 ||
         server->current_command.context.read_memory.count > 1024)
     {
         set_response_error(response, "Invalid count parameter (must be > 0 and <= 1024)");
         return -1;
     }
 
-    // Call the implementation callback if registered
-    if (server->command_callbacks[DAP_CMD_READ_MEMORY]) {
-        DAP_SERVER_DEBUG_LOG("Calling implementation callback for readMemory");
-        
-        int callback_result = server->command_callbacks[DAP_CMD_READ_MEMORY](server);
-        if (callback_result < 0) {
-            DAP_SERVER_DEBUG_LOG("readMemory implementation callback failed");
-            set_response_error(response, "readMemory implementation callback failed");
-            return -1;
-        }
-        
-        // The callback should have prepared the memory data for the response
-        // We just need to set success=true and return
-        response->success = true;
-        return 0;
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_READ_MEMORY);
+
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("readMemory implementation callback failed");
+        set_response_error(response, "readMemory implementation callback failed");
+        return -1;
     }
-    
-    DAP_SERVER_DEBUG_LOG("No implementation callback for readMemory, using default implementation");
 
     // Default implementation if no callback is registered
     // This will be a mock implementation that returns dummy data
@@ -1260,40 +1363,43 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     char address_str[32];
     snprintf(address_str, sizeof(address_str), "0x%08x", address);
     cJSON_AddStringToObject(body, "address", address_str);
-    
+
     // Create fake data - a repeating pattern based on the address
     size_t count = server->current_command.context.read_memory.count;
     uint8_t *data = malloc(count);
-    if (!data) {
+    if (!data)
+    {
         cJSON_Delete(body);
         set_response_error(response, "Failed to allocate memory for data");
         return -1;
     }
-    
+
     // Fill with a simple pattern
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++)
+    {
         data[i] = (uint8_t)((address + i) & 0xFF);
     }
-    
+
     // Encode as base64
     char *encoded = base64_encode(data, count);
     free(data);
-    
-    if (!encoded) {
+
+    if (!encoded)
+    {
         cJSON_Delete(body);
         set_response_error(response, "Failed to encode data as base64");
         return -1;
     }
-    
+
     cJSON_AddStringToObject(body, "data", encoded);
     free(encoded);
-    
+
     // Add unreadableBytes = 0 (all bytes were readable)
     cJSON_AddNumberToObject(body, "unreadableBytes", 0);
-    
+
     // Set success response
     set_response_success(response, body);
-    
+
     return 0;
 }
 
@@ -1316,10 +1422,11 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing or invalid memoryReference");
         return -1;
     }
-    
+
     // Store memory reference in context
     server->current_command.context.write_memory.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.write_memory.memory_reference) {
+    if (!server->current_command.context.write_memory.memory_reference)
+    {
         set_response_error(response, "Failed to allocate memory for memoryReference");
         return -1;
     }
@@ -1331,10 +1438,11 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing or invalid data");
         return -1;
     }
-    
+
     // Store data in context
     server->current_command.context.write_memory.data = strdup(data->valuestring);
-    if (!server->current_command.context.write_memory.data) {
+    if (!server->current_command.context.write_memory.data)
+    {
         set_response_error(response, "Failed to allocate memory for data");
         return -1;
     }
@@ -1356,47 +1464,63 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Call the implementation callback if registered
-    if (server->command_callbacks[DAP_CMD_WRITE_MEMORY]) {
-        DAP_SERVER_DEBUG_LOG("Calling implementation callback for writeMemory");
-        
-        int callback_result = server->command_callbacks[DAP_CMD_WRITE_MEMORY](server);
-        if (callback_result < 0) {
-            DAP_SERVER_DEBUG_LOG("writeMemory implementation callback failed");
-            set_response_error(response, "writeMemory implementation callback failed");
-            return -1;
-        }
-        
-        // The callback should have prepared the response
-        response->success = true;
-        return 0;
+
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_WRITE_MEMORY);
+
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("writeMemory implementation callback failed");
+        set_response_error(response, "writeMemory implementation callback failed");
+        return -1;
     }
-    
-    DAP_SERVER_DEBUG_LOG("No implementation callback for writeMemory");
-    set_response_error(response, "writeMemory not implemented");
-    return -1;
+
+    // generate a success response
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    cJSON_AddNumberToObject(body, "bytesWritten", server->current_command.context.write_memory.bytes_written);
+
+    // Set success response
+    set_response_success(response, body);
+
+    // body is freed by set_response_success
+    // Free the allocated memory for data
+    if (server->current_command.context.write_memory.data)
+    {
+        free(server->current_command.context.write_memory.data);
+        server->current_command.context.write_memory.data = NULL;
+    }
+
+    return 0;
 }
 
 // Create and send empty response
-#define SEND_EMPTY_SUCCESS_RESPONSE() do { \
-    cJSON *empty_body = cJSON_CreateObject(); \
-    if (!empty_body) { \
-        response->success = false; \
-        response->error_message = strdup("Failed to create response body"); \
-        return 0; \
-    } \
-    char *body_str = cJSON_PrintUnformatted(empty_body); \
-    cJSON_Delete(empty_body); \
-    if (!body_str) { \
-        response->success = false; \
-        response->error_message = strdup("Failed to format response body"); \
-        return 0; \
-    } \
-    response->success = true; \
-    response->data = body_str; \
-    return 0; \
-} while(0)
-
-
+#define SEND_EMPTY_SUCCESS_RESPONSE()                                           \
+    do                                                                          \
+    {                                                                           \
+        cJSON *empty_body = cJSON_CreateObject();                               \
+        if (!empty_body)                                                        \
+        {                                                                       \
+            response->success = false;                                          \
+            response->error_message = strdup("Failed to create response body"); \
+            return 0;                                                           \
+        }                                                                       \
+        char *body_str = cJSON_PrintUnformatted(empty_body);                    \
+        cJSON_Delete(empty_body);                                               \
+        if (!body_str)                                                          \
+        {                                                                       \
+            response->success = false;                                          \
+            response->error_message = strdup("Failed to format response body"); \
+            return 0;                                                           \
+        }                                                                       \
+        response->success = true;                                               \
+        response->data = body_str;                                              \
+        return 0;                                                               \
+    } while (0)
 
 int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
 {
@@ -1542,34 +1666,40 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing required parameters");
         return -1;
     }
-    
+
     // Mark that we're handling a launch command
     server->current_command.type = DAP_CMD_LAUNCH;
-    
+
     // Clear any previous state values that might be leftover
-    if (server->debugger_state.program_path) {
-        free((void*)server->debugger_state.program_path);
+    if (server->debugger_state.program_path)
+    {
+        free((void *)server->debugger_state.program_path);
         server->debugger_state.program_path = NULL;
     }
-    
-    if (server->debugger_state.source_path) {
-        free((void*)server->debugger_state.source_path);
+
+    if (server->debugger_state.source_path)
+    {
+        free((void *)server->debugger_state.source_path);
         server->debugger_state.source_path = NULL;
     }
-    
-    if (server->debugger_state.map_path) {
-        free((void*)server->debugger_state.map_path);
+
+    if (server->debugger_state.map_path)
+    {
+        free((void *)server->debugger_state.map_path);
         server->debugger_state.map_path = NULL;
     }
-    
-    if (server->debugger_state.working_directory) {
-        free((void*)server->debugger_state.working_directory);
+
+    if (server->debugger_state.working_directory)
+    {
+        free((void *)server->debugger_state.working_directory);
         server->debugger_state.working_directory = NULL;
     }
-    
+
     // Free any previous command line arguments
-    if (server->debugger_state.args) {
-        for (int i = 0; i < server->debugger_state.args_count; i++) {
+    if (server->debugger_state.args)
+    {
+        for (int i = 0; i < server->debugger_state.args_count; i++)
+        {
             free(server->debugger_state.args[i]);
         }
         free(server->debugger_state.args);
@@ -1584,113 +1714,137 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "Missing or invalid program path");
         return -1;
     }
-    
+
     // Required field - program path
-    const char* value_str = program_json->valuestring;
-    if (!value_str) {
+    const char *value_str = program_json->valuestring;
+    if (!value_str)
+    {
         set_response_error(response, "Program path is null");
         return -1;
     }
-    
+
     char *program_path = strdup(value_str);
-    if (!program_path) {
+    if (!program_path)
+    {
         set_response_error(response, "Failed to allocate memory for program path");
         return -1;
     }
     server->debugger_state.program_path = program_path;
     DAP_SERVER_DEBUG_LOG("Launch program path: %s", program_path);
-    
+
     // Optional field - source file (default code file to display)
     cJSON *source_file_json = cJSON_GetObjectItem(args, "sourceFile");
-    if (source_file_json && cJSON_IsString(source_file_json) && source_file_json->valuestring) {
-        const char* source_str = source_file_json->valuestring;
+    if (source_file_json && cJSON_IsString(source_file_json) && source_file_json->valuestring)
+    {
+        const char *source_str = source_file_json->valuestring;
         char *source_path = strdup(source_str);
-        if (!source_path) {
+        if (!source_path)
+        {
             set_response_error(response, "Failed to allocate memory for source path");
             goto cleanup;
         }
         server->debugger_state.source_path = source_path;
         DAP_SERVER_DEBUG_LOG("Source file: %s", source_path);
-    } else {
+    }
+    else
+    {
         // Make sure the source_path field is NULL to avoid dangling pointers
         server->debugger_state.source_path = NULL;
         DAP_SERVER_DEBUG_LOG("Source file: (not specified)");
     }
-    
+
     // Optional field - map file (for address to source mapping)
     cJSON *map_file_json = cJSON_GetObjectItem(args, "mapFile");
-    if (map_file_json && cJSON_IsString(map_file_json) && map_file_json->valuestring) {
-        const char* map_str = map_file_json->valuestring;
+    if (map_file_json && cJSON_IsString(map_file_json) && map_file_json->valuestring)
+    {
+        const char *map_str = map_file_json->valuestring;
         char *map_path = strdup(map_str);
-        if (!map_path) {
+        if (!map_path)
+        {
             set_response_error(response, "Failed to allocate memory for map file path");
             goto cleanup;
         }
         server->debugger_state.map_path = map_path;
         DAP_SERVER_DEBUG_LOG("Map file: %s", map_path);
-    } else {
+    }
+    else
+    {
         // Make sure the map_path field is NULL to avoid dangling pointers
         server->debugger_state.map_path = NULL;
         DAP_SERVER_DEBUG_LOG("Map file: (not specified)");
     }
-    
+
     // Optional field - working directory
     cJSON *cwd_json = cJSON_GetObjectItem(args, "cwd");
-    if (cwd_json && cJSON_IsString(cwd_json) && cwd_json->valuestring) {
-        const char* cwd_str = cwd_json->valuestring;
+    if (cwd_json && cJSON_IsString(cwd_json) && cwd_json->valuestring)
+    {
+        const char *cwd_str = cwd_json->valuestring;
         char *working_directory = strdup(cwd_str);
-        if (!working_directory) {
+        if (!working_directory)
+        {
             set_response_error(response, "Failed to allocate memory for working directory");
             goto cleanup;
         }
         server->debugger_state.working_directory = working_directory;
         DAP_SERVER_DEBUG_LOG("Working directory: %s", working_directory);
-        
+
         // Change directory if specified (this could be moved to the implementation callback)
-        if (chdir(cwd_str) != 0) {
+        if (chdir(cwd_str) != 0)
+        {
             DAP_SERVER_DEBUG_LOG("Failed to change working directory: %s", strerror(errno));
             // Continue despite failure - the implementation can handle this
         }
-    } else {
+    }
+    else
+    {
         // Make sure the working_directory field is NULL to avoid dangling pointers
         server->current_command.context.launch.working_directory = NULL;
         DAP_SERVER_DEBUG_LOG("Working directory: (not specified)");
     }
-    
+
     // Optional field - noDebug flag
     cJSON *no_debug_json = cJSON_GetObjectItem(args, "noDebug");
-    if (no_debug_json && cJSON_IsBool(no_debug_json)) {
+    if (no_debug_json && cJSON_IsBool(no_debug_json))
+    {
         server->debugger_state.no_debug = cJSON_IsTrue(no_debug_json);
         DAP_SERVER_DEBUG_LOG("noDebug: %s", server->debugger_state.no_debug ? "true" : "false");
     }
-    
+
     // Optional field - stopOnEntry flag
     cJSON *stop_entry_json = cJSON_GetObjectItem(args, "stopOnEntry");
-    if (stop_entry_json && cJSON_IsBool(stop_entry_json)) {
+    if (stop_entry_json && cJSON_IsBool(stop_entry_json))
+    {
         server->debugger_state.stop_at_entry = cJSON_IsTrue(stop_entry_json);
         DAP_SERVER_DEBUG_LOG("stopOnEntry: %s", server->debugger_state.stop_at_entry ? "true" : "false");
     }
-    
+
     // Optional field - args (command line arguments)
     cJSON *args_json = cJSON_GetObjectItem(args, "args");
-    if (args_json && cJSON_IsArray(args_json)) {
+    if (args_json && cJSON_IsArray(args_json))
+    {
         int args_count = cJSON_GetArraySize(args_json);
-        if (args_count > 0) {
+        if (args_count > 0)
+        {
             // Allocate array of char* pointers
-            char **cmd_args = calloc(args_count + 1, sizeof(char*)); // +1 for NULL terminator
-            if (!cmd_args) {
+            char **cmd_args = calloc(args_count + 1, sizeof(char *)); // +1 for NULL terminator
+            if (!cmd_args)
+            {
                 set_response_error(response, "Failed to allocate memory for command line arguments");
                 goto cleanup;
             }
-            
+
             // Copy each argument
-            for (int i = 0; i < args_count; i++) {
+            for (int i = 0; i < args_count; i++)
+            {
                 cJSON *arg = cJSON_GetArrayItem(args_json, i);
-                if (arg && cJSON_IsString(arg) && arg->valuestring) {
+                if (arg && cJSON_IsString(arg) && arg->valuestring)
+                {
                     cmd_args[i] = strdup(arg->valuestring);
-                    if (!cmd_args[i]) {
+                    if (!cmd_args[i])
+                    {
                         // Free previously allocated args
-                        for (int j = 0; j < i; j++) {
+                        for (int j = 0; j < i; j++)
+                        {
                             free(cmd_args[j]);
                         }
                         free(cmd_args);
@@ -1699,56 +1853,57 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
                     }
                 }
             }
-            
+
             // Store in debugger state
             server->debugger_state.args = cmd_args;
             server->debugger_state.args_count = args_count;
             DAP_SERVER_DEBUG_LOG("Command line arguments: %d provided", args_count);
         }
     }
-    
+
     // Call the implementation callback if registered
-    bool callback_success = true;
-    if (server->command_callbacks[DAP_CMD_LAUNCH]) {
-        int callback_result = server->command_callbacks[DAP_CMD_LAUNCH](server);
-        if (callback_result != 0) {
-            callback_success = false;
-            DAP_SERVER_DEBUG_LOG("Launch callback returned error: %d", callback_result);
-        }
-    } else {
-        // Default implementation if no callback is registered
-        DAP_SERVER_DEBUG_LOG("No launch callback registered, using default implementation");
-        
-        // Set debugger state
-        server->is_running = true;
-        server->attached = true;
-        server->debugger_state.has_stopped = true;
-        server->debugger_state.current_thread_id = 1; // make sure we have a thread id
-
- 
-
-        // Send default events if no callback is registered
-        DAP_SERVER_DEBUG_LOG("Sending stopped event after launch response");    
-        // Stopped at entry point (program start).    
-        dap_server_send_stopped_event(server, "entry", NULL);
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_LAUNCH);
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("Launch callback returned error: %d", callback_result);
+        return -1;
     }
 
+    // TODO: Evaluate all fields for the response and if STOP event should be sent (as its probably handled elsewhere)
+
+    // Set debugger state
+    server->is_running = true;
+    server->attached = true;
+    server->debugger_state.has_stopped = true;
+    server->debugger_state.current_thread_id = 1; // make sure we have a thread id
+
+    // Send default events if no callback is registered
+    DAP_SERVER_DEBUG_LOG("Sending stopped event after launch response");
+    // Stopped at entry point (program start).
+    dap_server_send_stopped_event(server, "entry", NULL);
+
     // Per DAP spec and Microsoft's implementation, a launch response should be minimal with no body
-    if (callback_success) {
+    if (callback_result >= 0)
+    {
         set_response_success(response, NULL);
-        if (server->debugger_state.program_path) {
-            DAP_SERVER_DEBUG_LOG("Launch response prepared for program: %s", 
-                              server->debugger_state.program_path);
-        } else {
+        if (server->debugger_state.program_path)
+        {
+            DAP_SERVER_DEBUG_LOG("Launch response prepared for program: %s",
+                                 server->debugger_state.program_path);
+        }
+        else
+        {
             DAP_SERVER_DEBUG_LOG("Launch response prepared (no program path)");
         }
-    } else {
+    }
+    else
+    {
         set_response_error(response, "Launch command failed");
     }
 
-    // Note: We don't free the context resources here because they will be 
+    // Note: We don't free the context resources here because they will be
     // freed by cleanup_command_context after this function returns
-    
+
     return 0;
 
 cleanup:
@@ -1773,23 +1928,27 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Create a proper JSON object instead of using strdup
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         response->success = false;
         response->error_message = strdup("Failed to create response body");
         return 0;
     }
-    
+
     set_response_success(response, body);
     // body is freed by set_response_success
     return 0;
 }
 
-void cleanup_breakpoints(DAPServer* server) {
+void cleanup_breakpoints(DAPServer *server)
+{
     // TODO: Implement cleanup_breakpoints
 }
 
-int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
-    if (!server || !response) {
+int handle_disconnect(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !response)
+    {
         set_response_error(response, "Invalid server or response");
         return -1;
     }
@@ -1797,85 +1956,88 @@ int handle_disconnect(DAPServer* server, cJSON* args, DAPResponse* response) {
     // Initialize the command context for disconnect
     server->current_command.type = DAP_CMD_DISCONNECT;
     memset(&server->current_command.context.disconnect, 0, sizeof(DisconnectCommandContext));
-    
+
     // Parse arguments if present
-    if (args) {
+    if (args)
+    {
         // Check if terminateDebuggee option is set
         cJSON *terminate_json = cJSON_GetObjectItem(args, "terminateDebuggee");
-        if (terminate_json && cJSON_IsBool(terminate_json)) {
+        if (terminate_json && cJSON_IsBool(terminate_json))
+        {
             server->current_command.context.disconnect.terminate_debuggee = cJSON_IsTrue(terminate_json);
-            DAP_SERVER_DEBUG_LOG("Disconnect with terminateDebuggee: %s", 
-                               server->current_command.context.disconnect.terminate_debuggee ? "true" : "false");
+            DAP_SERVER_DEBUG_LOG("Disconnect with terminateDebuggee: %s",
+                                 server->current_command.context.disconnect.terminate_debuggee ? "true" : "false");
         }
-        
+
         // Check if suspendDebuggee option is set (available in newer DAP versions)
         cJSON *suspend_json = cJSON_GetObjectItem(args, "suspendDebuggee");
-        if (suspend_json && cJSON_IsBool(suspend_json)) {
+        if (suspend_json && cJSON_IsBool(suspend_json))
+        {
             server->current_command.context.disconnect.suspend_debuggee = cJSON_IsTrue(suspend_json);
-            DAP_SERVER_DEBUG_LOG("Disconnect with suspendDebuggee: %s", 
-                               server->current_command.context.disconnect.suspend_debuggee ? "true" : "false");
+            DAP_SERVER_DEBUG_LOG("Disconnect with suspendDebuggee: %s",
+                                 server->current_command.context.disconnect.suspend_debuggee ? "true" : "false");
         }
-        
+
         // Check if restart option is set
         cJSON *restart_json = cJSON_GetObjectItem(args, "restart");
-        if (restart_json && cJSON_IsBool(restart_json)) {
+        if (restart_json && cJSON_IsBool(restart_json))
+        {
             server->current_command.context.disconnect.restart = cJSON_IsTrue(restart_json);
-            DAP_SERVER_DEBUG_LOG("Disconnect with restart: %s", 
-                               server->current_command.context.disconnect.restart ? "true" : "false");
+            DAP_SERVER_DEBUG_LOG("Disconnect with restart: %s",
+                                 server->current_command.context.disconnect.restart ? "true" : "false");
         }
     }
-    
+
     // Call the implementation callback if registered
-    bool callback_success = true;
-    if (server->command_callbacks[DAP_CMD_DISCONNECT]) {
-        DAP_SERVER_DEBUG_LOG("Calling disconnect implementation callback");
-        int callback_result = server->command_callbacks[DAP_CMD_DISCONNECT](server);
-        if (callback_result != 0) {
-            callback_success = false;
-            DAP_SERVER_DEBUG_LOG("Disconnect implementation callback failed with code %d", callback_result);
-        }
-    } else {
-        DAP_SERVER_DEBUG_LOG("No disconnect implementation callback registered - using default behavior");
-        // Default behavior: clean up breakpoints
-        cleanup_breakpoints(server);
+
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_DISCONNECT);
+    if (callback_result < 0)
+    {
+        DAP_SERVER_DEBUG_LOG("Disconnect implementation callback failed with code %d", callback_result);
     }
+
+    cleanup_breakpoints(server);
 
     // Reset server state
     server->attached = false;
-    
+
     // Create response body
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         set_response_error(response, "Failed to create response body");
         return -1;
     }
-    
+
     // Set response according to callback result
-    if (callback_success) {
+    if (callback_result >= 0)
+    {
         set_response_success(response, body);
-    } else {
+    }
+    else
+    {
         cJSON_Delete(body); // Must delete body as we're not passing it to set_response_error
         set_response_error(response, "Disconnect command failed");
     }
-    
+
     // Note: Context resources will be cleaned up by cleanup_command_context
-    
+
     return 0;
 }
 
 /**
  * @brief Handles the DAP 'stackTrace' request
- * 
+ *
  * The stackTrace request returns a list of stack frames for a given thread.
  * This implementation supports:
  *  - A single thread model (thread ID 1)
  *  - Source file mapping
  *  - Start frame offset and frame count limits
  *  - Custom format options
- * 
+ *
  * This handler delegates the actual stack trace generation to a registered callback.
  * If no callback is registered, the command fails with an error.
- * 
+ *
  * @param server DAP server instance
  * @param args Command arguments (threadId, startFrame, levels, format)
  * @param response Response to fill with stack frames
@@ -1902,12 +2064,12 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     // Parse arguments
     cJSON *thread_id_json = cJSON_GetObjectItem(args, "threadId");
     int thread_id = 1; // Default to thread 1
-    
+
     if (thread_id_json && cJSON_IsNumber(thread_id_json))
     {
         thread_id = thread_id_json->valueint;
     }
-    
+
     // Validate thread ID - we only support thread 1 in this implementation
     if (thread_id != 1)
     {
@@ -1936,54 +2098,61 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Parse format options into our StackTraceFormat structure
-    StackTraceFormat* format = &server->current_command.context.stack_trace.format;
-    
+    StackTraceFormat *format = &server->current_command.context.stack_trace.format;
+
     // Initialize with defaults (all false)
     memset(format, 0, sizeof(StackTraceFormat));
-    
+
     // Format is optional
     cJSON *format_json = cJSON_GetObjectItem(args, "format");
     if (format_json && cJSON_IsObject(format_json))
     {
         // Parse individual format options
         cJSON *parameters = cJSON_GetObjectItem(format_json, "parameters");
-        if (parameters && cJSON_IsBool(parameters)) {
+        if (parameters && cJSON_IsBool(parameters))
+        {
             format->parameters = cJSON_IsTrue(parameters);
         }
-        
+
         cJSON *parameter_types = cJSON_GetObjectItem(format_json, "parameterTypes");
-        if (parameter_types && cJSON_IsBool(parameter_types)) {
+        if (parameter_types && cJSON_IsBool(parameter_types))
+        {
             format->parameter_types = cJSON_IsTrue(parameter_types);
         }
-        
+
         cJSON *parameter_names = cJSON_GetObjectItem(format_json, "parameterNames");
-        if (parameter_names && cJSON_IsBool(parameter_names)) {
+        if (parameter_names && cJSON_IsBool(parameter_names))
+        {
             format->parameter_names = cJSON_IsTrue(parameter_names);
         }
-        
+
         cJSON *parameter_values = cJSON_GetObjectItem(format_json, "parameterValues");
-        if (parameter_values && cJSON_IsBool(parameter_values)) {
+        if (parameter_values && cJSON_IsBool(parameter_values))
+        {
             format->parameter_values = cJSON_IsTrue(parameter_values);
         }
-        
+
         cJSON *line = cJSON_GetObjectItem(format_json, "line");
-        if (line && cJSON_IsBool(line)) {
+        if (line && cJSON_IsBool(line))
+        {
             format->line = cJSON_IsTrue(line);
         }
-        
+
         cJSON *module = cJSON_GetObjectItem(format_json, "module");
-        if (module && cJSON_IsBool(module)) {
+        if (module && cJSON_IsBool(module))
+        {
             format->module = cJSON_IsTrue(module);
         }
-        
+
         cJSON *include_all = cJSON_GetObjectItem(format_json, "includeAll");
-        if (include_all && cJSON_IsBool(include_all)) {
+        if (include_all && cJSON_IsBool(include_all))
+        {
             format->include_all = cJSON_IsTrue(include_all);
         }
     }
 
     // Validate start_frame and levels
-    if (server->current_command.context.stack_trace.start_frame < 0 || 
+    if (server->current_command.context.stack_trace.start_frame < 0 ||
         server->current_command.context.stack_trace.levels < 1)
     {
         set_response_error(response, "Invalid startFrame or levels parameter");
@@ -1991,22 +2160,13 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Call implementation callback if registered
-    if (server->command_callbacks[DAP_CMD_STACK_TRACE])
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_STACK_TRACE);
+
+    if (callback_result < 0)
     {
-        DAP_SERVER_DEBUG_LOG("Calling implementation callback for stackTrace");
-        int callback_result = server->command_callbacks[DAP_CMD_STACK_TRACE](server);
-        
-        if (callback_result < 0)
-        {
-            DAP_SERVER_DEBUG_LOG("StackTrace implementation callback failed");
-            set_response_error(response, "StackTrace implementation callback failed");
-            return -1;
-        }
-    }
-    else
-    {
-        // No callback registered - provide a default implementation
-        DAP_SERVER_DEBUG_LOG("No stackTrace implementation callback registered, using default");
+        DAP_SERVER_DEBUG_LOG("StackTrace implementation callback failed");
+        set_response_error(response, "StackTrace implementation callback failed");
+        return -1;
     }
 
     // Create response body
@@ -2038,50 +2198,60 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Required properties according to the DAP spec
     cJSON_AddNumberToObject(frame, "id", server->current_command.context.stack_trace.start_frame);
-    
+
     // Use the appropriate name for the frame
     char frame_name[64];
-    if (server->debugger_state.program_counter > 0) {
+    if (server->debugger_state.program_counter > 0)
+    {
         snprintf(frame_name, sizeof(frame_name), "PC=0x%04X", server->debugger_state.program_counter);
-    } else {
+    }
+    else
+    {
         strcpy(frame_name, "main");
     }
     cJSON_AddStringToObject(frame, "name", frame_name);
-    
+
     // Add line and column information
     int line = server->debugger_state.source_line > 0 ? server->debugger_state.source_line : 1;
     int column = server->debugger_state.source_column > 0 ? server->debugger_state.source_column : 1;
     cJSON_AddNumberToObject(frame, "line", line);
     cJSON_AddNumberToObject(frame, "column", column);
-    
+
     // Add source information if available
-    if (server->debugger_state.source_path || server->debugger_state.source_name) {
+    if (server->debugger_state.source_path || server->debugger_state.source_name)
+    {
         cJSON *source = cJSON_CreateObject();
-        if (source) {
-            if (server->debugger_state.source_path) {
+        if (source)
+        {
+            if (server->debugger_state.source_path)
+            {
                 cJSON_AddStringToObject(source, "path", server->debugger_state.source_path);
             }
-            
-            if (server->debugger_state.source_name) {
+
+            if (server->debugger_state.source_name)
+            {
                 cJSON_AddStringToObject(source, "name", server->debugger_state.source_name);
-            } else if (server->debugger_state.source_path) {
+            }
+            else if (server->debugger_state.source_path)
+            {
                 // Extract filename from path if name not provided
                 const char *name = strrchr(server->debugger_state.source_path, '/');
-                if (name) {
+                if (name)
+                {
                     cJSON_AddStringToObject(source, "name", name + 1);
                 }
             }
-            
+
             // Add source object to frame
             cJSON_AddItemToObject(frame, "source", source);
         }
     }
-    
+
     // Add presentation hint if using a format
     StackTraceFormat *format_opts = &server->current_command.context.stack_trace.format;
-    if (format_opts->parameters || format_opts->parameter_types || 
-        format_opts->parameter_names || format_opts->parameter_values || 
-        format_opts->line || format_opts->module || format_opts->include_all) 
+    if (format_opts->parameters || format_opts->parameter_types ||
+        format_opts->parameter_names || format_opts->parameter_values ||
+        format_opts->line || format_opts->module || format_opts->include_all)
     {
         cJSON_AddStringToObject(frame, "presentationHint", "normal");
     }
@@ -2101,6 +2271,11 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
+/// @brief Handle the DAP 'scopes' request
+/// @param server
+/// @param args
+/// @param response
+/// @return
 int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     if (!server || !args || !response)
@@ -2120,92 +2295,25 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
     server->current_command.type = DAP_CMD_SCOPES;
     server->current_command.request_seq = response->request_seq;
     server->current_command.context.scopes.frame_id = frameId->valueint;
-    
+
     // Initialize the scopes fields
     server->current_command.context.scopes.scopes = NULL;
     server->current_command.context.scopes.scope_count = 0;
 
-    // Check if there's a registered callback for this command
-    if (server->command_callbacks[DAP_CMD_SCOPES])
+    int result = dap_server_execute_callback(server, DAP_CMD_SCOPES);
+    if (result == 0)
     {
-        int result = server->command_callbacks[DAP_CMD_SCOPES](server);
-        if (result == 0)
+        // Callback succeeded - check if it populated the scopes
+        if (server->current_command.context.scopes.scopes != NULL &&
+            server->current_command.context.scopes.scope_count > 0)
         {
-            // Callback succeeded - check if it populated the scopes
-            if (server->current_command.context.scopes.scopes != NULL && 
-                server->current_command.context.scopes.scope_count > 0)
+            // The callback populated the scopes, create a response from them
+            cJSON *body = cJSON_CreateObject();
+            if (!body)
             {
-                // The callback populated the scopes, create a response from them
-                cJSON *body = cJSON_CreateObject();
-                if (!body)
-                {
-                    // Clean up allocated scopes
-                    DAPScope* scopes = server->current_command.context.scopes.scopes;
-                    int scope_count = server->current_command.context.scopes.scope_count;
-                    for (int i = 0; i < scope_count; i++)
-                    {
-                        free(scopes[i].name);
-                        if (scopes[i].source_path)
-                            free(scopes[i].source_path);
-                    }
-                    free(scopes);
-                    
-                    set_response_error(response, "Failed to create response body");
-                    return -1;
-                }
-                
-                // Create scopes array
-                cJSON *scopes_array = cJSON_CreateArray();
-                if (!scopes_array)
-                {
-                    cJSON_Delete(body);
-                    
-                    // Clean up allocated scopes
-                    DAPScope* scopes = server->current_command.context.scopes.scopes;
-                    int scope_count = server->current_command.context.scopes.scope_count;
-                    for (int i = 0; i < scope_count; i++)
-                    {
-                        free(scopes[i].name);
-                        if (scopes[i].source_path)
-                            free(scopes[i].source_path);
-                    }
-                    free(scopes);
-                    
-                    set_response_error(response, "Failed to create scopes array");
-                    return -1;
-                }
-                
-                // Add each scope to the array
-                DAPScope* scopes = server->current_command.context.scopes.scopes;
-                int scope_count = server->current_command.context.scopes.scope_count;
-                
-                for (int i = 0; i < scope_count; i++)
-                {
-                    cJSON *scope_obj = cJSON_CreateObject();
-                    if (!scope_obj) continue;
-                    
-                    cJSON_AddStringToObject(scope_obj, "name", scopes[i].name);
-                    cJSON_AddNumberToObject(scope_obj, "variablesReference", scopes[i].variables_reference);
-                    cJSON_AddNumberToObject(scope_obj, "namedVariables", scopes[i].named_variables);
-                    cJSON_AddNumberToObject(scope_obj, "indexedVariables", scopes[i].indexed_variables);
-                    cJSON_AddBoolToObject(scope_obj, "expensive", scopes[i].expensive);
-                    
-                    // Add presentation hints based on scope name
-                    if (scopes[i].name != NULL) {
-                        if (strcmp(scopes[i].name, "Locals") == 0) {
-                            cJSON_AddStringToObject(scope_obj, "presentationHint", "locals");
-                        } else if (strcmp(scopes[i].name, "CPU Registers") == 0) {
-                            cJSON_AddStringToObject(scope_obj, "presentationHint", "registers");
-                        }
-                    }
-                    
-                    cJSON_AddItemToArray(scopes_array, scope_obj);
-                }
-                
-                cJSON_AddItemToObject(body, "scopes", scopes_array);
-                set_response_success(response, body);
-                
                 // Clean up allocated scopes
+                DAPScope *scopes = server->current_command.context.scopes.scopes;
+                int scope_count = server->current_command.context.scopes.scope_count;
                 for (int i = 0; i < scope_count; i++)
                 {
                     free(scopes[i].name);
@@ -2213,37 +2321,89 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
                         free(scopes[i].source_path);
                 }
                 free(scopes);
-                
-                // Clear the context
-                server->current_command.context.scopes.scopes = NULL;
-                server->current_command.context.scopes.scope_count = 0;
-                
-                return 0;
+
+                set_response_error(response, "Failed to create response body");
+                return -1;
             }
+
+            // Create scopes array
+            cJSON *scopes_array = cJSON_CreateArray();
+            if (!scopes_array)
+            {
+                cJSON_Delete(body);
+
+                // Clean up allocated scopes
+                DAPScope *scopes = server->current_command.context.scopes.scopes;
+                int scope_count = server->current_command.context.scopes.scope_count;
+                for (int i = 0; i < scope_count; i++)
+                {
+                    free(scopes[i].name);
+                    if (scopes[i].source_path)
+                        free(scopes[i].source_path);
+                }
+                free(scopes);
+
+                set_response_error(response, "Failed to create scopes array");
+                return -1;
+            }
+
+            // Add each scope to the array
+            DAPScope *scopes = server->current_command.context.scopes.scopes;
+            int scope_count = server->current_command.context.scopes.scope_count;
+
+            for (int i = 0; i < scope_count; i++)
+            {
+                cJSON *scope_obj = cJSON_CreateObject();
+                if (!scope_obj)
+                    continue;
+
+                cJSON_AddStringToObject(scope_obj, "name", scopes[i].name);
+                cJSON_AddNumberToObject(scope_obj, "variablesReference", scopes[i].variables_reference);
+                cJSON_AddNumberToObject(scope_obj, "namedVariables", scopes[i].named_variables);
+                cJSON_AddNumberToObject(scope_obj, "indexedVariables", scopes[i].indexed_variables);
+                cJSON_AddBoolToObject(scope_obj, "expensive", scopes[i].expensive);
+
+                // Add presentation hints based on scope name
+                if (scopes[i].name != NULL)
+                {
+                    if (strcmp(scopes[i].name, "Locals") == 0)
+                    {
+                        cJSON_AddStringToObject(scope_obj, "presentationHint", "locals");
+                    }
+                    else if (strcmp(scopes[i].name, "CPU Registers") == 0)
+                    {
+                        cJSON_AddStringToObject(scope_obj, "presentationHint", "registers");
+                    }
+                }
+
+                cJSON_AddItemToArray(scopes_array, scope_obj);
+            }
+
+            cJSON_AddItemToObject(body, "scopes", scopes_array);
+            set_response_success(response, body);
+
+            // Clean up allocated scopes
+            for (int i = 0; i < scope_count; i++)
+            {
+                free(scopes[i].name);
+                if (scopes[i].source_path)
+                    free(scopes[i].source_path);
+            }
+            free(scopes);
+
+            // Clear the context
+            server->current_command.context.scopes.scopes = NULL;
+            server->current_command.context.scopes.scope_count = 0;
+
+            return 0;
         }
-        // If the callback returns non-zero or didn't populate scopes, fall back to default implementation
     }
-
-    // Create minimal empty response with no scopes if no callback is registered
-    // or if the callback failed
-    cJSON *body = cJSON_CreateObject();
-    if (!body)
+    else
     {
-        set_response_error(response, "Failed to create response body");
+        // Callback failed - set error response
+        set_response_error(response, "Scopes callback failed");
         return -1;
     }
-
-    // Add empty scopes array
-    cJSON *scopes = cJSON_CreateArray();
-    if (!scopes)
-    {
-        cJSON_Delete(body);
-        set_response_error(response, "Failed to create scopes array");
-        return -1;
-    }
-
-    cJSON_AddItemToObject(body, "scopes", scopes);
-    set_response_success(response, body);
     return 0;
 }
 
@@ -2268,7 +2428,7 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
     // Initialize the command context for variables
     server->current_command.type = DAP_CMD_VARIABLES;
     server->current_command.context.variables.variables_reference = ref;
-    
+
     // Parse optional filter field
     cJSON *filter_json = cJSON_GetObjectItem(args, "filter");
     if (filter_json && cJSON_IsString(filter_json))
@@ -2283,20 +2443,20 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
             server->current_command.context.variables.filter = 2; // named
         }
     }
-    
+
     // Parse optional start and count for paging
     cJSON *start_json = cJSON_GetObjectItem(args, "start");
     if (start_json && cJSON_IsNumber(start_json))
     {
         server->current_command.context.variables.start = start_json->valueint;
     }
-    
+
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
     if (count_json && cJSON_IsNumber(count_json))
     {
         server->current_command.context.variables.count = count_json->valueint;
     }
-    
+
     // Parse optional format field
     cJSON *format_json = cJSON_GetObjectItem(args, "format");
     if (format_json && cJSON_IsObject(format_json))
@@ -2305,245 +2465,252 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
         server->current_command.context.variables.format = cJSON_PrintUnformatted(format_json);
     }
 
-
-
-
-    // Call implementation callback if registered
-    if (server->command_callbacks[DAP_CMD_VARIABLES])
+    int result = dap_server_execute_callback(server, DAP_CMD_VARIABLES);
+    if (result != 0)
     {
-        int result = server->command_callbacks[DAP_CMD_VARIABLES](server);
-        if (result != 0)
+        // Free format string if allocated
+        if (server->current_command.context.variables.format)
         {
-            // Free format string if allocated
-            if (server->current_command.context.variables.format)
-            {
-                free((void*)server->current_command.context.variables.format);
-                server->current_command.context.variables.format = NULL;
-            }
-            
-            set_response_error(response, "Variables callback failed");
-            return -1;
+            free((void *)server->current_command.context.variables.format);
+            server->current_command.context.variables.format = NULL;
         }
-        
-        // TODO: Create json response "variables" from the callback
 
-        // Create JSON response from the variables array filled by the callback
-        cJSON *body = cJSON_CreateObject();
-        if (!body) {
-            set_response_error(response, "Failed to create response body");
-            return -1;
-        }
-        
-        // Create variables array
-        cJSON *variables_array = cJSON_CreateArray();
-        if (!variables_array) {
-            cJSON_Delete(body);
-            set_response_error(response, "Failed to create variables array");
-            return -1;
-        }
-        
-        // Properly handle the variable array from the callback
-        DAPVariable* variable_array = server->current_command.context.variables.variable_array;
-        int variable_count = server->current_command.context.variables.count;
-        
-        // Add each variable to the JSON response
-        if (variable_array != NULL && variable_count > 0) {
-            for (int i = 0; i < variable_count; i++) {
-                // Safely access each variable
-                DAPVariable* var = &variable_array[i];
-                if (var == NULL) continue;
-                
-                cJSON *variable = cJSON_CreateObject();
-                if (!variable) continue;
-                
-                // Add required fields
-                if (var->name) {
-                    cJSON_AddStringToObject(variable, "name", var->name);
-                }
-                if (var->value) {
-                    cJSON_AddStringToObject(variable, "value", var->value);
-                }
-                if (var->type) {
-                    cJSON_AddStringToObject(variable, "type", var->type);
-                }
-                
-                // Add variablesReference (can be 0 for leaf nodes)
-                cJSON_AddNumberToObject(variable, "variablesReference", var->variables_reference);
-                
-                // Add optional fields if present
-                if (var->named_variables > 0) {
-                    cJSON_AddNumberToObject(variable, "namedVariables", var->named_variables);
-                }
-                if (var->indexed_variables > 0) {
-                    cJSON_AddNumberToObject(variable, "indexedVariables", var->indexed_variables);
-                }
-                if (var->memory_reference) {
-                    cJSON_AddStringToObject(variable, "memoryReference", var->memory_reference);
-                }
-                if (var->evaluate_name) {
-                    cJSON_AddStringToObject(variable, "evaluateName", var->evaluate_name);
-                }
-                
-                // Add presentationHint if available
-                if (var && (var->presentation_hint.has_kind || 
-                    var->presentation_hint.has_visibility || 
-                    var->presentation_hint.attributes != DAP_VARIABLE_ATTR_NONE)) {
-                    
-                    cJSON *hint = cJSON_CreateObject();
-                    if (hint) {
-                        // Add kind if present
-                        if (var->presentation_hint.has_kind) {
-                            const char *kind_str = NULL;
-                            switch (var->presentation_hint.kind) {
-                                case DAP_VARIABLE_KIND_PROPERTY: kind_str = "property"; break;
-                                case DAP_VARIABLE_KIND_METHOD: kind_str = "method"; break;
-                                case DAP_VARIABLE_KIND_CLASS: kind_str = "class"; break;
-                                case DAP_VARIABLE_KIND_DATA: kind_str = "data"; break;
-                                case DAP_VARIABLE_KIND_EVENT: kind_str = "event"; break;
-                                case DAP_VARIABLE_KIND_BASE_CLASS: kind_str = "baseClass"; break;
-                                case DAP_VARIABLE_KIND_INNER_CLASS: kind_str = "innerClass"; break;
-                                case DAP_VARIABLE_KIND_INTERFACE: kind_str = "interface"; break;
-                                case DAP_VARIABLE_KIND_MOST_DERIVED: kind_str = "mostDerived"; break;
-                                case DAP_VARIABLE_KIND_VIRTUAL: kind_str = "virtual"; break;
-                                case DAP_VARIABLE_KIND_DATABREAKPOINT: kind_str = "dataBreakpoint"; break;
-                                default: break;
-                            }
-                            if (kind_str) {
-                                cJSON_AddStringToObject(hint, "kind", kind_str);
-                            }
-                        }
-                        
-                        // Add visibility if present
-                        if (var->presentation_hint.has_visibility) {
-                            const char *visibility_str = NULL;
-                            switch (var->presentation_hint.visibility) {
-                                case DAP_VARIABLE_VISIBILITY_PUBLIC: visibility_str = "public"; break;
-                                case DAP_VARIABLE_VISIBILITY_PRIVATE: visibility_str = "private"; break;
-                                case DAP_VARIABLE_VISIBILITY_PROTECTED: visibility_str = "protected"; break;
-                                case DAP_VARIABLE_VISIBILITY_INTERNAL: visibility_str = "internal"; break;
-                                default: break;
-                            }
-                            if (visibility_str) {
-                                cJSON_AddStringToObject(hint, "visibility", visibility_str);
-                            }
-                        }
-                        
-                        // Add attributes if present
-                        if (var->presentation_hint.attributes != 0) {
-                            cJSON *attributes = cJSON_CreateArray();
-                            if (attributes) {
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_STATIC) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CONSTANT) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("constant"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_READONLY) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_RAWSTRING) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("rawString"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASOBJECTID) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasObjectId"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CANHAVEOBJECTID) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("canHaveObjectId"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASSIDEEFFECTS) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasSideEffects"));
-                                }
-                                if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASDATABREAKPOINT) {
-                                    cJSON_AddItemToArray(attributes, cJSON_CreateString("hasDataBreakpoint"));
-                                }
-                                
-                                cJSON_AddItemToObject(hint, "attributes", attributes);
-                            }
-                        }
-                        
-                        // Add the presentation hint to the variable
-                        cJSON_AddItemToObject(variable, "presentationHint", hint);
-                    }
-                }
-                
-                // Add this variable to the array
-                cJSON_AddItemToArray(variables_array, variable);
+        set_response_error(response, "Variables callback failed");
+        return -1;
+    }
+
+    // Create JSON response from the variables array filled by the callback
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    // Create variables array
+    cJSON *variables_array = cJSON_CreateArray();
+    if (!variables_array)
+    {
+        cJSON_Delete(body);
+        set_response_error(response, "Failed to create variables array");
+        return -1;
+    }
+
+    // Properly handle the variable array from the callback
+    DAPVariable *variable_array = server->current_command.context.variables.variable_array;
+    int variable_count = server->current_command.context.variables.count;
+
+    // Add each variable to the JSON response
+    if (variable_array != NULL && variable_count > 0)
+    {
+        for (int i = 0; i < variable_count; i++)
+        {
+            // Safely access each variable
+            DAPVariable *var = &variable_array[i];
+            if (var == NULL)
+                continue;
+
+            cJSON *variable = cJSON_CreateObject();
+            if (!variable)
+                continue;
+
+            // Add required fields
+            if (var->name)
+            {
+                cJSON_AddStringToObject(variable, "name", var->name);
             }
+            if (var->value)
+            {
+                cJSON_AddStringToObject(variable, "value", var->value);
+            }
+            if (var->type)
+            {
+                cJSON_AddStringToObject(variable, "type", var->type);
+            }
+
+            // Add variablesReference (can be 0 for leaf nodes)
+            cJSON_AddNumberToObject(variable, "variablesReference", var->variables_reference);
+
+            // Add optional fields if present
+            if (var->named_variables > 0)
+            {
+                cJSON_AddNumberToObject(variable, "namedVariables", var->named_variables);
+            }
+            if (var->indexed_variables > 0)
+            {
+                cJSON_AddNumberToObject(variable, "indexedVariables", var->indexed_variables);
+            }
+            if (var->memory_reference)
+            {
+                cJSON_AddStringToObject(variable, "memoryReference", var->memory_reference);
+            }
+            if (var->evaluate_name)
+            {
+                cJSON_AddStringToObject(variable, "evaluateName", var->evaluate_name);
+            }
+
+            // Add presentationHint if available
+            if (var && (var->presentation_hint.has_kind ||
+                        var->presentation_hint.has_visibility ||
+                        var->presentation_hint.attributes != DAP_VARIABLE_ATTR_NONE))
+            {
+
+                cJSON *hint = cJSON_CreateObject();
+                if (hint)
+                {
+                    // Add kind if present
+                    if (var->presentation_hint.has_kind)
+                    {
+                        const char *kind_str = NULL;
+                        switch (var->presentation_hint.kind)
+                        {
+                        case DAP_VARIABLE_KIND_PROPERTY:
+                            kind_str = "property";
+                            break;
+                        case DAP_VARIABLE_KIND_METHOD:
+                            kind_str = "method";
+                            break;
+                        case DAP_VARIABLE_KIND_CLASS:
+                            kind_str = "class";
+                            break;
+                        case DAP_VARIABLE_KIND_DATA:
+                            kind_str = "data";
+                            break;
+                        case DAP_VARIABLE_KIND_EVENT:
+                            kind_str = "event";
+                            break;
+                        case DAP_VARIABLE_KIND_BASE_CLASS:
+                            kind_str = "baseClass";
+                            break;
+                        case DAP_VARIABLE_KIND_INNER_CLASS:
+                            kind_str = "innerClass";
+                            break;
+                        case DAP_VARIABLE_KIND_INTERFACE:
+                            kind_str = "interface";
+                            break;
+                        case DAP_VARIABLE_KIND_MOST_DERIVED:
+                            kind_str = "mostDerived";
+                            break;
+                        case DAP_VARIABLE_KIND_VIRTUAL:
+                            kind_str = "virtual";
+                            break;
+                        case DAP_VARIABLE_KIND_DATABREAKPOINT:
+                            kind_str = "dataBreakpoint";
+                            break;
+                        default:
+                            break;
+                        }
+                        if (kind_str)
+                        {
+                            cJSON_AddStringToObject(hint, "kind", kind_str);
+                        }
+                    }
+
+                    // Add visibility if present
+                    if (var->presentation_hint.has_visibility)
+                    {
+                        const char *visibility_str = NULL;
+                        switch (var->presentation_hint.visibility)
+                        {
+                        case DAP_VARIABLE_VISIBILITY_PUBLIC:
+                            visibility_str = "public";
+                            break;
+                        case DAP_VARIABLE_VISIBILITY_PRIVATE:
+                            visibility_str = "private";
+                            break;
+                        case DAP_VARIABLE_VISIBILITY_PROTECTED:
+                            visibility_str = "protected";
+                            break;
+                        case DAP_VARIABLE_VISIBILITY_INTERNAL:
+                            visibility_str = "internal";
+                            break;
+                        default:
+                            break;
+                        }
+                        if (visibility_str)
+                        {
+                            cJSON_AddStringToObject(hint, "visibility", visibility_str);
+                        }
+                    }
+
+                    // Add attributes if present
+                    if (var->presentation_hint.attributes != 0)
+                    {
+                        cJSON *attributes = cJSON_CreateArray();
+                        if (attributes)
+                        {
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_STATIC)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CONSTANT)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("constant"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_READONLY)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_RAWSTRING)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("rawString"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASOBJECTID)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasObjectId"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CANHAVEOBJECTID)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("canHaveObjectId"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASSIDEEFFECTS)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasSideEffects"));
+                            }
+                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASDATABREAKPOINT)
+                            {
+                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasDataBreakpoint"));
+                            }
+
+                            cJSON_AddItemToObject(hint, "attributes", attributes);
+                        }
+                    }
+
+                    // Add the presentation hint to the variable
+                    cJSON_AddItemToObject(variable, "presentationHint", hint);
+                }
+            }
+
+            // Add this variable to the array
+            cJSON_AddItemToArray(variables_array, variable);
         }
-        
+
         // Add the variables array to the response body
         cJSON_AddItemToObject(body, "variables", variables_array);
-        
+
         // Set the successful response
         set_response_success(response, body);
-        
+
         // Clean up any allocated format string
         if (server->current_command.context.variables.format)
         {
-            free((void*)server->current_command.context.variables.format);
+            free((void *)server->current_command.context.variables.format);
             server->current_command.context.variables.format = NULL;
         }
-        
+
         // Free the variable array if it exists
         // Note: Since we've already constructed the JSON response with the data,
         // we can now free the original variable array to prevent memory leaks
-        if (variable_array != NULL) {
+        if (variable_array != NULL)
+        {
             free_variable_array(variable_array, variable_count);
             server->current_command.context.variables.variable_array = NULL;
             server->current_command.context.variables.count = 0;
-        }
-        
-        return 0;
+        }     
     }
-    else 
-    {
-        // No callback registered - create default empty response
-        cJSON *body = cJSON_CreateObject();
-        if (!body)
-        {
-            // Clean up format string if allocated
-            if (server->current_command.context.variables.format)
-            {
-                free((void*)server->current_command.context.variables.format);
-                server->current_command.context.variables.format = NULL;
-            }
-            
-            set_response_error(response, "Failed to create response body");
-            return -1;
-        }
-        
-        // Create empty variables array
-        cJSON *variables = cJSON_CreateArray();
-        if (!variables)
-        {
-            cJSON_Delete(body);
-            
-            // Clean up format string if allocated
-            if (server->current_command.context.variables.format)
-            {
-                free((void*)server->current_command.context.variables.format);
-                server->current_command.context.variables.format = NULL;
-            }
-            
-            set_response_error(response, "Failed to create variables array");
-            return -1;
-        }
-        
-        // Add empty variables array to body
-        cJSON_AddItemToObject(body, "variables", variables);
-        
-        // Set success response with empty variables
-        set_response_success(response, body);
-        
-        // Clean up format string if allocated
-        if (server->current_command.context.variables.format)
-        {
-            free((void*)server->current_command.context.variables.format);
-            server->current_command.context.variables.format = NULL;
-        }
-        
-        return 0;
-    }
+   
+    return 0;
+
 }
 
 static void set_response_success(DAPResponse *response, cJSON *body)
@@ -2579,46 +2746,53 @@ static void set_response_error(DAPResponse *response, const char *error_message)
     }
 }
 
-int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response) {
+int handle_terminate(DAPServer *server, cJSON *args, DAPResponse *response)
+{
     (void)args; // Unused parameter
-    
-    if (!server || !response) {
+
+    if (!server || !response)
+    {
         set_response_error(response, "Invalid server or response");
         return -1;
     }
 
     DAP_SERVER_DEBUG_LOG("Terminating debuggee");
-    
+
     // Create response body
-    cJSON* body = cJSON_CreateObject();
-    if (!body) {
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
         set_response_error(response, "Failed to create response body");
         return -1;
     }
-    
+
     // If a terminate callback is registered, call it
-    if (server->command_callbacks[DAP_CMD_TERMINATE]) {
-        int result = server->command_callbacks[DAP_CMD_TERMINATE](server);
-        if (result != 0) {
-            cJSON_Delete(body);
-            set_response_error(response, "Terminate command callback failed");
-            return -1;
-        }
+    int result = dap_server_execute_callback(server,DAP_CMD_TERMINATE);
+            
+    if (result != 0)
+    {
+        cJSON_Delete(body);
+        set_response_error(response, "Terminate command callback failed");
+        return -1;
     }
-    
+
+
     // Send terminated event
-    cJSON* event_body = cJSON_CreateObject();
-    if (event_body) {
+    cJSON *event_body = cJSON_CreateObject();
+    if (event_body)
+    {
         // The terminated event can optionally include a 'restart' attribute
         dap_server_send_event(server, "terminated", event_body);
     }
-    
+
     set_response_success(response, body);
     return 0;
 }
 
-int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
-    if (!server || !response) {
+int handle_restart(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !response)
+    {
         set_response_error(response, "Invalid server or response");
         return -1;
     }
@@ -2626,60 +2800,67 @@ int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response) {
     // Initialize the command context for restart
     server->current_command.type = DAP_CMD_RESTART;
     memset(&server->current_command.context.restart, 0, sizeof(RestartCommandContext));
-    
+
     // Parse arguments if present
-    if (args) {
+    if (args)
+    {
         // Check if noDebug option is set
         cJSON *no_debug_json = cJSON_GetObjectItem(args, "noDebug");
-        if (no_debug_json && cJSON_IsBool(no_debug_json) && cJSON_IsTrue(no_debug_json)) {
+        if (no_debug_json && cJSON_IsBool(no_debug_json) && cJSON_IsTrue(no_debug_json))
+        {
             server->current_command.context.restart.no_debug = true;
             DAP_SERVER_DEBUG_LOG("Restart with noDebug option");
         }
-        
+
         // Parse the arguments field which can contain launch or attach arguments
         cJSON *arguments_json = cJSON_GetObjectItem(args, "arguments");
-        if (arguments_json && cJSON_IsObject(arguments_json)) {
+        if (arguments_json && cJSON_IsObject(arguments_json))
+        {
             // Store the arguments in the restart context
             server->current_command.context.restart.restart_args = cJSON_Duplicate(arguments_json, 1);
-            if (!server->current_command.context.restart.restart_args) {
+            if (!server->current_command.context.restart.restart_args)
+            {
                 DAP_SERVER_DEBUG_LOG("Failed to duplicate restart arguments");
             }
         }
     }
-    
+
     // Call the implementation callback if registered
     bool callback_success = true;
-    if (server->command_callbacks[DAP_CMD_RESTART]) {
-        DAP_SERVER_DEBUG_LOG("Calling restart implementation callback");
-        int callback_result = server->command_callbacks[DAP_CMD_RESTART](server);
-        if (callback_result != 0) {
-            callback_success = false;
-            DAP_SERVER_DEBUG_LOG("Restart implementation callback failed with code %d", callback_result);
-        }
-    } else {
-        DAP_SERVER_DEBUG_LOG("No restart implementation callback registered");
-        // If no callback is registered, we still return success
-        // but don't perform any actual restart logic
+    
+    
+    
+    int callback_result =  dap_server_execute_callback(server, DAP_CMD_RESTART);
+    
+    if (callback_result != 0)
+    {
+        callback_success = false;
+        DAP_SERVER_DEBUG_LOG("Restart implementation callback failed with code %d", callback_result);
     }
+    
 
     // Create response body
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         set_response_error(response, "Failed to create response body");
         return -1;
     }
-    
+
     // Set response according to callback result
-    if (callback_success) {
+    if (callback_success)
+    {
         set_response_success(response, body);
         DAP_SERVER_DEBUG_LOG("Restart command succeeded");
-    } else {
+    }
+    else
+    {
         cJSON_Delete(body); // Must delete body as we're not passing it to set_response_error
         set_response_error(response, "Restart command failed");
     }
-    
+
     // Note: Context resources will be cleaned up by cleanup_command_context
-    
+
     return 0;
 }
 
@@ -2690,85 +2871,100 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
         set_response_error(response, "Invalid arguments");
         return -1;
     }
-    
+
     DAP_SERVER_DEBUG_LOG("Handling setExceptionBreakpoints request");
-    
+
     // Initialize the command context
     server->current_command.type = DAP_CMD_SET_EXCEPTION_BREAKPOINTS;
     memset(&server->current_command.context.exception, 0, sizeof(ExceptionBreakpointCommandContext));
-    
+
     // "filters" (required) - Array of exception filter IDs to activate
     cJSON *filters = cJSON_GetObjectItem(args, "filters");
-    if (!filters || !cJSON_IsArray(filters)) {
+    if (!filters || !cJSON_IsArray(filters))
+    {
         // Return success with empty breakpoints array instead of an error
         cJSON *body = cJSON_CreateObject();
-        if (!body) {
+        if (!body)
+        {
             set_response_error(response, "Failed to create response body");
             return 0;
         }
-        
+
         // According to DAP spec, the response must include a "breakpoints" array
         cJSON *breakpoints = cJSON_CreateArray();
-        if (!breakpoints) {
+        if (!breakpoints)
+        {
             cJSON_Delete(body);
             set_response_error(response, "Failed to create breakpoints array");
             return 0;
         }
-        
+
         cJSON_AddItemToObject(body, "breakpoints", breakpoints);
         set_response_success(response, body);
         return 0;
     }
-    
+
     // Get the number of filters
     int filter_count = cJSON_GetArraySize(filters);
-    
+
     // Allocate arrays for filter IDs and conditions
     const char **filter_ids = NULL;
     const char **filter_conditions = NULL;
-    
-    if (filter_count > 0) {
-        filter_ids = calloc(filter_count, sizeof(const char*));
-        if (!filter_ids) {
+
+    if (filter_count > 0)
+    {
+        filter_ids = calloc(filter_count, sizeof(const char *));
+        if (!filter_ids)
+        {
             set_response_error(response, "Failed to allocate memory for filter IDs");
             return 0;
         }
-        
+
         // "filterOptions" (optional) - Additional configuration for exception filters
         cJSON *filter_options = cJSON_GetObjectItem(args, "filterOptions");
-        
+
         // We'll also track conditions if filterOptions is provided
-        if (filter_options && cJSON_IsArray(filter_options)) {
-            filter_conditions = calloc(filter_count, sizeof(const char*));
-            if (!filter_conditions) {
-                free((void*)filter_ids);
+        if (filter_options && cJSON_IsArray(filter_options))
+        {
+            filter_conditions = calloc(filter_count, sizeof(const char *));
+            if (!filter_conditions)
+            {
+                free((void *)filter_ids);
                 set_response_error(response, "Failed to allocate memory for filter conditions");
                 return 0;
             }
         }
-        
+
         // Extract each filter ID and any matching conditions from filterOptions
-        for (int i = 0; i < filter_count; i++) {
+        for (int i = 0; i < filter_count; i++)
+        {
             cJSON *filter = cJSON_GetArrayItem(filters, i);
-            if (filter && cJSON_IsString(filter)) {
+            if (filter && cJSON_IsString(filter))
+            {
                 filter_ids[i] = strdup(filter->valuestring);
-                
+
                 // Look for matching filter condition if filter_options is provided
-                if (filter_conditions && filter_options && cJSON_IsArray(filter_options)) {
+                if (filter_conditions && filter_options && cJSON_IsArray(filter_options))
+                {
                     int option_count = cJSON_GetArraySize(filter_options);
-                    for (int j = 0; j < option_count; j++) {
+                    for (int j = 0; j < option_count; j++)
+                    {
                         cJSON *option = cJSON_GetArrayItem(filter_options, j);
-                        if (!option || !cJSON_IsObject(option)) continue;
-                        
+                        if (!option || !cJSON_IsObject(option))
+                            continue;
+
                         // "filterId" - Matches ID from filters array
                         cJSON *filter_id = cJSON_GetObjectItem(option, "filterId");
-                        if (!filter_id || !cJSON_IsString(filter_id)) continue;
-                        
-                        if (strcmp(filter_id->valuestring, filter->valuestring) == 0) {
+                        if (!filter_id || !cJSON_IsString(filter_id))
+                            continue;
+
+                        if (strcmp(filter_id->valuestring, filter->valuestring) == 0)
+                        {
                             // Found matching filter option
                             // "condition" - Expression for conditional exception breakpoints
                             cJSON *condition = cJSON_GetObjectItem(option, "condition");
-                            if (condition && cJSON_IsString(condition)) {
+                            if (condition && cJSON_IsString(condition))
+                            {
                                 filter_conditions[i] = strdup(condition->valuestring);
                             }
                             break;
@@ -2778,42 +2974,49 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
             }
         }
     }
-    
+
     // Store pointers in the context
     server->current_command.context.exception.filters = filter_ids;
     server->current_command.context.exception.filter_count = filter_count;
     server->current_command.context.exception.conditions = filter_conditions;
     server->current_command.context.exception.condition_count = filter_conditions ? filter_count : 0;
+     
+     int callback_result =  dap_server_execute_callback(server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS);
     
-    // Call the callback if it's registered
-    if (server->command_callbacks[DAP_CMD_SET_EXCEPTION_BREAKPOINTS]) {
-        // Call the implementation callback
-        server->command_callbacks[DAP_CMD_SET_EXCEPTION_BREAKPOINTS](server);
-    }
-    
+     if (callback_result != 0)
+     {
+        set_response_error(response, "Callback failed for Set Exception Breakpoints");
+        DAP_SERVER_DEBUG_LOG("Set Exception Breakpoing implementation callback failed with code %d", callback_result);
+        return -1;
+     }
+
     // Create response with breakpoints array matching filter count
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         // Free allocated memory
         free_filter_arrays(filter_ids, filter_conditions, filter_count);
         set_response_error(response, "Failed to create response body");
         return 0;
     }
-    
+
     // "breakpoints" array - contains status info for each exception breakpoint filter
     cJSON *breakpoints = cJSON_CreateArray();
-    if (!breakpoints) {
+    if (!breakpoints)
+    {
         cJSON_Delete(body);
         // Free allocated memory
         free_filter_arrays(filter_ids, filter_conditions, filter_count);
         set_response_error(response, "Failed to create breakpoints array");
         return 0;
     }
-    
+
     // Add one breakpoint object for each filter
-    for (int i = 0; i < filter_count; i++) {
+    for (int i = 0; i < filter_count; i++)
+    {
         cJSON *breakpoint = cJSON_CreateObject();
-        if (!breakpoint) {
+        if (!breakpoint)
+        {
             cJSON_Delete(body);
             cJSON_Delete(breakpoints);
             // Free allocated memory
@@ -2821,59 +3024,65 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
             set_response_error(response, "Failed to create breakpoint object");
             return 0;
         }
-        
+
         // "verified" (required) - Whether the breakpoint is valid and could be set
         cJSON_AddBoolToObject(breakpoint, "verified", true);
-        
+
         // "id" (optional) - Unique identifier for this breakpoint
         // Use base ID of 1000 to differentiate from regular breakpoints
         cJSON_AddNumberToObject(breakpoint, "id", 1000 + i);
-        
+
         // "message" (optional) - Error or information message about the breakpoint
-        if (filter_ids[i]) {
+        if (filter_ids[i])
+        {
             char message[128];
             snprintf(message, sizeof(message), "Exception breakpoint: %s", filter_ids[i]);
             cJSON_AddStringToObject(breakpoint, "message", message);
         }
-        
+
         // Add the breakpoint to the array
         cJSON_AddItemToArray(breakpoints, breakpoint);
     }
-    
+
     cJSON_AddItemToObject(body, "breakpoints", breakpoints);
     set_response_success(response, body);
-    
+
     // Free allocated memory - the callback should not have freed any of this
     free_filter_arrays(filter_ids, filter_conditions, filter_count);
-    
+
     return 0;
 }
 
 /**
  * @brief Helper function to free filter arrays and their contents
- * 
+ *
  * @param filter_ids Array of filter ID strings
  * @param filter_conditions Array of filter condition strings
  * @param count Number of filters
  */
-void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count) {
-    if (!filter_ids || count <= 0) {
+void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count)
+{
+    if (!filter_ids || count <= 0)
+    {
         return;
     }
-    
+
     // Free each filter ID and condition string
-    for (int i = 0; i < count; i++) {
-        if (filter_ids[i]) {
-            free((void*)filter_ids[i]);
+    for (int i = 0; i < count; i++)
+    {
+        if (filter_ids[i])
+        {
+            free((void *)filter_ids[i]);
         }
-        if (filter_conditions[i]) {
-            free((void*)filter_conditions[i]);
+        if (filter_conditions[i])
+        {
+            free((void *)filter_conditions[i]);
         }
     }
-    
+
     // Free the arrays themselves
-    free((void*)filter_ids);
-    free((void*)filter_conditions);
+    free((void *)filter_ids);
+    free((void *)filter_conditions);
 }
 
 int handle_source(DAPServer *server, cJSON *args, DAPResponse *response)
@@ -3081,16 +3290,16 @@ int handle_threads(DAPServer *server, cJSON *args, DAPResponse *response)
 
 /**
  * @brief Handle the setVariable command
- * 
+ *
  * This function implements the DAP setVariable command which allows clients to modify
  * the value of a variable in the debugger. The command requires:
  * - variablesReference: The reference of the variable container
  * - name: The name of the variable to modify
  * - value: The new value to set
- * 
+ *
  * Optional parameters:
  * - format: Specifies how the value should be formatted
- * 
+ *
  * The response includes:
  * - value: The new value of the variable
  * - type: The type of the variable (if available)
@@ -3098,7 +3307,7 @@ int handle_threads(DAPServer *server, cJSON *args, DAPResponse *response)
  * - namedVariables: Number of named child variables
  * - indexedVariables: Number of indexed child variables
  * - memoryReference: Memory reference for the variable (if applicable)
- * 
+ *
  * @param server The DAP server instance
  * @param args The command arguments as a JSON object
  * @param response The response structure to fill
@@ -3106,7 +3315,8 @@ int handle_threads(DAPServer *server, cJSON *args, DAPResponse *response)
  */
 int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    if (!server || !args || !response) {
+    if (!server || !args || !response)
+    {
         return -1;
     }
 
@@ -3116,7 +3326,8 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON *value = cJSON_GetObjectItem(args, "value");
 
     // Validate required arguments
-    if (!variablesReference || !name || !value) {
+    if (!variablesReference || !name || !value)
+    {
         set_response_error(response, "Missing required arguments");
         return -1;
     }
@@ -3129,23 +3340,24 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Parse optional format argument
     cJSON *format = cJSON_GetObjectItem(args, "format");
-    if (format) {
+    if (format)
+    {
         server->current_command.context.set_variable.format = strdup(format->valuestring);
     }
 
-    // Check if there's a registered callback for this command
-    if (server->command_callbacks[DAP_CMD_SET_VARIABLE]) {
-        int result = server->command_callbacks[DAP_CMD_SET_VARIABLE](server);
-        if (result == 0) {
-            // Callback handled the command - response will be sent by the callback
-            return 0;
-        }
-        // If the callback returns non-zero, fall back to default implementation
+    // Call the implementation callback 
+    int result =  dap_server_execute_callback(server, DAP_CMD_SET_VARIABLE);        
+    if (result != 0)
+    {    
+        // Callback failed - set error response
+        set_response_error(response, "Callback failed for setVariable");
+        return -1;
     }
 
     // Create response body
     cJSON *body = cJSON_CreateObject();
-    if (!body) {
+    if (!body)
+    {
         cleanup_command_context(server);
         set_response_error(response, "Failed to create response body");
         return -1;
@@ -3155,7 +3367,8 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON_AddStringToObject(body, "value", value->valuestring);
 
     // Add optional fields if available
-    if (format) {
+    if (format)
+    {
         cJSON_AddStringToObject(body, "type", "string"); // Example type
         cJSON_AddNumberToObject(body, "variablesReference", 0);
         cJSON_AddNumberToObject(body, "namedVariables", 0);
@@ -3170,11 +3383,11 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
 
 /**
  * @brief Mock debugger implementation of the stackTrace command
- * 
+ *
  * This callback provides stack frame information for the mock debugger.
  * It reads the command context from the server and updates the debugger state
  * with source information that will be used to build the stack frame response.
- * 
+ *
  * @param server The DAP server instance containing the command context
  * @return int 0 on success, non-zero on failure
  */
@@ -3184,48 +3397,53 @@ int mock_handle_stack_trace(DAPServer *server)
     {
         return -1;
     }
-    
+
     // Log stack trace request to debugger console
     char log_message[256];
-    snprintf(log_message, sizeof(log_message), 
-             "StackTrace request for thread %d (start=%d, count=%d)", 
-             server->debugger_state.current_thread_id, 
-             server->current_command.context.stack_trace.start_frame, 
+    snprintf(log_message, sizeof(log_message),
+             "StackTrace request for thread %d (start=%d, count=%d)",
+             server->debugger_state.current_thread_id,
+             server->current_command.context.stack_trace.start_frame,
              server->current_command.context.stack_trace.levels);
     dap_server_send_output(server, log_message);
-    
+
     // For the mock implementation, we'll use a default source file if none is set
-    if (!server->debugger_state.source_path && !server->debugger_state.source_name) {
+    if (!server->debugger_state.source_path && !server->debugger_state.source_name)
+    {
         // Example source information for the mock debugger
-        if (!server->debugger_state.source_path) {
+        if (!server->debugger_state.source_path)
+        {
             server->debugger_state.source_path = strdup("/home/ronny/repos/ndasm/asm/intr.s");
         }
-        
-        if (!server->debugger_state.source_name) {
+
+        if (!server->debugger_state.source_name)
+        {
             server->debugger_state.source_name = strdup("intr.s");
         }
-        
+
         snprintf(log_message, sizeof(log_message), "Using source: %s", server->debugger_state.source_path);
         dap_server_send_output(server, log_message);
     }
-    
+
     // Set default line/column if not set
-    if (server->debugger_state.source_line <= 0) {
+    if (server->debugger_state.source_line <= 0)
+    {
         server->debugger_state.source_line = 1;
     }
-    
-    if (server->debugger_state.source_column <= 0) {
+
+    if (server->debugger_state.source_column <= 0)
+    {
         server->debugger_state.source_column = 1;
     }
-    
+
     // The handle_stack_trace function will build a response based on the debugger state
-    
+
     return 0;
 }
 
 /**
  * @brief Create a presentationHint object for a variable
- * 
+ *
  * This function creates a properly formatted presentationHint object as specified in the DAP spec.
  * The attributes array can contain any of the following values:
  * - "static" - Variable is static
@@ -3237,42 +3455,50 @@ int mock_handle_stack_trace(DAPServer *server)
  * - "hasSideEffects" - Evaluating causes side effects
  * - "hasDataBreakpoint" - Value is eligible for data breakpoint
  * - "hasChildren" - Variable has children
- * 
+ *
  * @param kind The kind of variable (property, method, class, etc.)
  * @param attributes Array of string attributes (can be NULL)
  * @param num_attributes Number of attributes in the array
  * @param visibility Visibility string (public, private, protected, etc.)
  * @return cJSON* The created presentationHint object, or NULL on failure
  */
-static cJSON* create_presentation_hint(const char* kind, const char** attributes, int num_attributes, const char* visibility) {
-    cJSON* hint = cJSON_CreateObject();
-    if (!hint) {
+static cJSON *create_presentation_hint(const char *kind, const char **attributes, int num_attributes, const char *visibility)
+{
+    cJSON *hint = cJSON_CreateObject();
+    if (!hint)
+    {
         return NULL;
     }
-    
+
     // Add kind if provided
-    if (kind) {
+    if (kind)
+    {
         cJSON_AddStringToObject(hint, "kind", kind);
     }
-    
+
     // Add attributes array if provided
-    if (attributes && num_attributes > 0) {
-        cJSON* attrs_array = cJSON_CreateArray();
-        if (attrs_array) {
-            for (int i = 0; i < num_attributes; i++) {
-                if (attributes[i]) {
+    if (attributes && num_attributes > 0)
+    {
+        cJSON *attrs_array = cJSON_CreateArray();
+        if (attrs_array)
+        {
+            for (int i = 0; i < num_attributes; i++)
+            {
+                if (attributes[i])
+                {
                     cJSON_AddItemToArray(attrs_array, cJSON_CreateString(attributes[i]));
                 }
             }
             cJSON_AddItemToObject(hint, "attributes", attrs_array);
         }
     }
-    
+
     // Add visibility if provided
-    if (visibility) {
+    if (visibility)
+    {
         cJSON_AddStringToObject(hint, "visibility", visibility);
     }
-    
+
     return hint;
 }
 
@@ -3281,31 +3507,38 @@ static cJSON* create_presentation_hint(const char* kind, const char** attributes
  * @param variables Array of variables to free
  * @param count Number of variables in the array
  */
-void free_variable_array(DAPVariable *variables, int count) {
-    if (!variables || count <= 0) {
+void free_variable_array(DAPVariable *variables, int count)
+{
+    if (!variables || count <= 0)
+    {
         return;
     }
-    
-    for (int i = 0; i < count; i++) {
+
+    for (int i = 0; i < count; i++)
+    {
         // Free all dynamically allocated fields in each variable
-        if (variables[i].name) {
+        if (variables[i].name)
+        {
             free(variables[i].name);
         }
-        if (variables[i].value) {
+        if (variables[i].value)
+        {
             free(variables[i].value);
         }
-        if (variables[i].type) {
+        if (variables[i].type)
+        {
             free(variables[i].type);
         }
-        if (variables[i].evaluate_name) {
+        if (variables[i].evaluate_name)
+        {
             free(variables[i].evaluate_name);
         }
-        if (variables[i].memory_reference) {
+        if (variables[i].memory_reference)
+        {
             free(variables[i].memory_reference);
         }
     }
-    
+
     // Free the array itself
     free(variables);
 }
-

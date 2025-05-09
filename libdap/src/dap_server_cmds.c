@@ -188,9 +188,9 @@ static int dap_server_execute_callback(DAPServer *server, DAPCommandType cmd)
 
     if (callback)
     {
-        pre(server);                   // Wait for the debugger to be ready
+        if (pre) pre(server);          // Wait for the debugger to be ready
         int result = callback(server); // DO the command
-        post(server);                  // Release the debugger
+        if (post) post(server);        // Release the debugger
         return result;
     }
     else
@@ -906,11 +906,12 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Store memory reference in context
-    server->current_command.context.disassemble.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.disassemble.memory_reference)
+    // Convert memory reference from string to uint32_t
+    char *endptr = NULL;
+    server->current_command.context.disassemble.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
+    if (endptr == memory_reference->valuestring || *endptr != '\0')
     {
-        set_response_error(response, "Failed to allocate memory for memoryReference");
+        set_response_error(response, "Invalid memory reference format");
         return -1;
     }
 
@@ -918,7 +919,7 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
     if (offset_json && cJSON_IsNumber(offset_json))
     {
-        server->current_command.context.disassemble.offset = (uint64_t)offset_json->valuedouble;
+        server->current_command.context.disassemble.offset = (uint32_t)offset_json->valuedouble;
     }
 
     cJSON *instruction_offset_json = cJSON_GetObjectItem(args, "instructionOffset");
@@ -950,16 +951,8 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // TODO: DEBUG AND VALIDATE THIS
-
-    // Convert memory reference to address
-    char *endptr = NULL;
-    uint32_t address = (uint32_t)strtoul(server->current_command.context.disassemble.memory_reference, &endptr, 0);
-    if (endptr == server->current_command.context.disassemble.memory_reference || *endptr != '\0')
-    {
-        set_response_error(response, "Invalid memory reference format");
-        return -1;
-    }
+    // Get the memory reference value directly (it's already a uint32_t)
+    uint32_t address = server->current_command.context.disassemble.memory_reference;
 
     // Apply offset to address
     address += (uint32_t)server->current_command.context.disassemble.offset;
@@ -1296,15 +1289,15 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Store memory reference in context
-    server->current_command.context.read_memory.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.read_memory.memory_reference)
+    // Convert memory reference from string to uint32_t
+    char *endptr = NULL;
+    server->current_command.context.read_memory.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
+    if (endptr == memory_reference->valuestring || *endptr != '\0')
     {
-        set_response_error(response, "Failed to allocate memory for memoryReference");
+        set_response_error(response, "Invalid memory reference format");
         return -1;
     }
 
-    // Parse count parameter (required)
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
     if (!count_json || !cJSON_IsNumber(count_json))
     {
@@ -1318,7 +1311,7 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
     if (offset_json && cJSON_IsNumber(offset_json))
     {
-        server->current_command.context.read_memory.offset = (uint64_t)offset_json->valuedouble;
+        server->current_command.context.read_memory.offset = (uint32_t)offset_json->valuedouble;
     }
 
     // Validate parameters
@@ -1340,13 +1333,8 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Default implementation if no callback is registered
     // This will be a mock implementation that returns dummy data
-    char *endptr = NULL;
-    uint32_t address = (uint32_t)strtoul(server->current_command.context.read_memory.memory_reference, &endptr, 0);
-    if (endptr == server->current_command.context.read_memory.memory_reference || *endptr != '\0')
-    {
-        set_response_error(response, "Invalid memory reference format");
-        return -1;
-    }
+    // Get the memory reference value directly (it's already a uint32_t)
+    uint32_t address = server->current_command.context.read_memory.memory_reference;
 
     // Apply offset to address
     address += (uint32_t)server->current_command.context.read_memory.offset;
@@ -1423,11 +1411,12 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Store memory reference in context
-    server->current_command.context.write_memory.memory_reference = strdup(memory_reference->valuestring);
-    if (!server->current_command.context.write_memory.memory_reference)
+    // Convert memory reference from string to uint32_t
+    char *endptr = NULL;
+    server->current_command.context.write_memory.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
+    if (endptr == memory_reference->valuestring || *endptr != '\0')
     {
-        set_response_error(response, "Failed to allocate memory for memoryReference");
+        set_response_error(response, "Invalid memory reference format");
         return -1;
     }
 
@@ -1452,7 +1441,7 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
     if (offset_json && cJSON_IsNumber(offset_json))
     {
-        server->current_command.context.write_memory.offset = (uint64_t)offset_json->valuedouble;
+        server->current_command.context.write_memory.offset = (uint32_t)offset_json->valuedouble;
     }
 
     // Parse optional allowPartial parameter (defaults to false)
@@ -2542,7 +2531,10 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
             }
             if (var->memory_reference)
             {
-                cJSON_AddStringToObject(variable, "memoryReference", var->memory_reference);
+                // Format memory_reference as a hex string
+                char memory_reference_str[32];
+                snprintf(memory_reference_str, sizeof(memory_reference_str), "0x%08x", var->memory_reference);
+                cJSON_AddStringToObject(variable, "memoryReference", memory_reference_str);
             }
             if (var->evaluate_name)
             {
@@ -3533,10 +3525,7 @@ void free_variable_array(DAPVariable *variables, int count)
         {
             free(variables[i].evaluate_name);
         }
-        if (variables[i].memory_reference)
-        {
-            free(variables[i].memory_reference);
-        }
+        // memory_reference is now uint32_t, no need to free it
     }
 
     // Free the array itself

@@ -237,8 +237,7 @@ typedef struct {
 /// @brief ContinueCommandContext
 /// @brief Context for continue command
 typedef struct {
-    int thread_id;               /**< Thread ID to continue */
-    bool single_thread;          /**< Whether to continue only the specified thread */
+    int thread_id;               /**< Thread ID to continue */    
 
     ///## Return results
 

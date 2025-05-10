@@ -988,11 +988,12 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    if (!server->debugger_state.has_stopped)
+    // TODO: Analyse if we really need this check
+    /* if (!server->debugger_state.has_stopped)
     {
         set_response_error(response, "Debugger not stopped");
         return -1;
-    }
+    } */
 
     // Parse thread ID and single_thread flag
     int thread_id = 1; // Default to thread 1
@@ -1004,16 +1005,9 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         {
             thread_id = thread_id_json->valueint;
         }
-
-        cJSON *single_thread_json = cJSON_GetObjectItem(args, "singleThread");
-        if (single_thread_json && cJSON_IsBool(single_thread_json))
-        {
-            single_thread = cJSON_IsTrue(single_thread_json);
-        }
     }
 
-    server->current_command.context.continue_cmd.thread_id = thread_id;
-    server->current_command.context.continue_cmd.single_thread = single_thread;
+    server->current_command.context.continue_cmd.thread_id = thread_id;    
 
     int callback_result = dap_server_execute_callback(server, DAP_CMD_CONTINUE);
     if (callback_result < 0)
@@ -1031,7 +1025,11 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    cJSON_AddBoolToObject(body, "allThreadsContinued", server->current_command.context.continue_cmd.single_thread);
+    if (server->current_command.context.continue_cmd.all_threads_continue)
+    {
+        cJSON_AddBoolToObject(body, "allThreadsContinued", true);
+    }
+
 
     set_response_success(response, body);
     // body is freed by set_response_success
@@ -2074,94 +2072,111 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Create a frame based on the current debugger state
-    cJSON *frame = cJSON_CreateObject();
-    if (!frame)
+    // Add frames from the command context
+    for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++)
     {
-        cJSON_Delete(body);
-        cJSON_Delete(frames);
-        set_response_error(response, "Failed to create frame object");
-        return -1;
-    }
-
-    // Required properties according to the DAP spec
-    cJSON_AddNumberToObject(frame, "id", server->current_command.context.stack_trace.start_frame);
-
-
-    for(int i = 0; i < server->current_command.context.stack_trace.frame_count; i++) 
-    {
-        // TODO refactor StackFrames response to use the frame_count and the frame_array
-    
-    }
-
-
-
-    // Use the appropriate name for the frame
-    char frame_name[64];
-    if (server->debugger_state.program_counter > 0)
-    {
-        snprintf(frame_name, sizeof(frame_name), "PC=0x%04X", server->debugger_state.program_counter);
-    }
-    else
-    {
-        strcpy(frame_name, "main");
-    }
-    cJSON_AddStringToObject(frame, "name", frame_name);
-
-    // Add line and column information
-    int line = server->debugger_state.source_line > 0 ? server->debugger_state.source_line : 1;
-    int column = server->debugger_state.source_column > 0 ? server->debugger_state.source_column : 1;
-    cJSON_AddNumberToObject(frame, "line", line);
-    cJSON_AddNumberToObject(frame, "column", column);
-
-    // Add source information if available
-    if (server->debugger_state.source_path || server->debugger_state.source_name)
-    {
-        cJSON *source = cJSON_CreateObject();
-        if (source)
+        DAPStackFrame *frame_data = &server->current_command.context.stack_trace.frames[i];
+        
+        // Create frame object
+        cJSON *frame = cJSON_CreateObject();
+        if (!frame)
         {
-            if (server->debugger_state.source_path)
-            {
-                cJSON_AddStringToObject(source, "path", server->debugger_state.source_path);
-            }
-
-            if (server->debugger_state.source_name)
-            {
-                cJSON_AddStringToObject(source, "name", server->debugger_state.source_name);
-            }
-            else if (server->debugger_state.source_path)
-            {
-                // Extract filename from path if name not provided
-                const char *name = strrchr(server->debugger_state.source_path, '/');
-                if (name)
-                {
-                    cJSON_AddStringToObject(source, "name", name + 1);
-                }
-            }
-
-            // Add source object to frame
-            cJSON_AddItemToObject(frame, "source", source);
+            cJSON_Delete(body);
+            cJSON_Delete(frames);
+            set_response_error(response, "Failed to create frame object");
+            return -1;
         }
+
+        // Add required properties according to the DAP spec
+        cJSON_AddNumberToObject(frame, "id", frame_data->id);
+        cJSON_AddStringToObject(frame, "name", frame_data->name ? frame_data->name : "unknown");
+        cJSON_AddNumberToObject(frame, "line", frame_data->line);
+        cJSON_AddNumberToObject(frame, "column", frame_data->column);
+
+        // Add optional source information if available
+        if (frame_data->source_path || frame_data->source_name)
+        {
+            cJSON *source = cJSON_CreateObject();
+            if (source)
+            {
+                if (frame_data->source_path)
+                {
+                    cJSON_AddStringToObject(source, "path", frame_data->source_path);
+                }
+
+                if (frame_data->source_name)
+                {
+                    cJSON_AddStringToObject(source, "name", frame_data->source_name);
+                }
+                else if (frame_data->source_path)
+                {
+                    // Extract filename from path if name not provided
+                    const char *name = strrchr(frame_data->source_path, '/');
+                    if (name)
+                    {
+                        cJSON_AddStringToObject(source, "name", name + 1);
+                    }
+                }
+
+                cJSON_AddItemToObject(frame, "source", source);
+            }
+        }
+
+        // Add optional end line/column if available
+        if (frame_data->end_line > 0)
+        {
+            cJSON_AddNumberToObject(frame, "endLine", frame_data->end_line);
+        }
+        if (frame_data->end_column > 0)
+        {
+            cJSON_AddNumberToObject(frame, "endColumn", frame_data->end_column);
+        }
+
+        // Add optional instruction pointer reference if available
+        if (frame_data->instruction_pointer_reference > 0)
+        {
+            char ref_str[32];
+            snprintf(ref_str, sizeof(ref_str), "0x%x", frame_data->instruction_pointer_reference);
+            cJSON_AddStringToObject(frame, "instructionPointerReference", ref_str);
+        }
+
+        // Add optional module ID if available
+        if (frame_data->module_id)
+        {
+            cJSON_AddStringToObject(frame, "moduleId", frame_data->module_id);
+        }
+
+        // Add optional presentation hint if available
+        if (frame_data->presentation_hint != DAP_FRAME_PRESENTATION_NORMAL)
+        {
+            const char *hint = "normal";
+            switch (frame_data->presentation_hint)
+            {
+                case DAP_FRAME_PRESENTATION_LABEL:
+                    hint = "label";
+                    break;
+                case DAP_FRAME_PRESENTATION_SUBTLE:
+                    hint = "subtle";
+                    break;
+            }
+            cJSON_AddStringToObject(frame, "presentationHint", hint);
+        }
+
+        // Add optional canRestart flag if available
+        if (frame_data->can_restart)
+        {
+            cJSON_AddBoolToObject(frame, "canRestart", true);
+        }
+
+        // Add frame to array
+        cJSON_AddItemToArray(frames, frame);
     }
-
-
-    // Add presentation hint if using a format
-    StackTraceFormat *format_opts = &server->current_command.context.stack_trace.format;
-    if (format_opts->parameters || format_opts->parameter_types ||
-        format_opts->parameter_names || format_opts->parameter_values ||
-        format_opts->line || format_opts->module || format_opts->include_all)
-    {
-        cJSON_AddStringToObject(frame, "presentationHint", "normal");
-    }
-
-    // Add frame to array
-    cJSON_AddItemToArray(frames, frame);
 
     // Add frames array to body
     cJSON_AddItemToObject(body, "stackFrames", frames);
 
-    // Add totalFrames property (defaults to 1 for our simple implementation)
-    cJSON_AddNumberToObject(body, "totalFrames", 1);
+    // Add totalFrames property
+    cJSON_AddNumberToObject(body, "totalFrames", server->current_command.context.stack_trace.total_frames);
 
     // Set response
     set_response_success(response, body);

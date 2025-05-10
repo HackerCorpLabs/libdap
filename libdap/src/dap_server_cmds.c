@@ -996,8 +996,7 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
     } */
 
     // Parse thread ID and single_thread flag
-    int thread_id = 1; // Default to thread 1
-    bool single_thread = false;
+    int thread_id = 1; // Default to thread 1    
     if (args)
     {
         cJSON *thread_id_json = cJSON_GetObjectItem(args, "threadId");
@@ -2158,6 +2157,9 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
                 case DAP_FRAME_PRESENTATION_SUBTLE:
                     hint = "subtle";
                     break;
+                case DAP_FRAME_PRESENTATION_NORMAL:
+                    hint = "normal";
+                    break;
             }
             cJSON_AddStringToObject(frame, "presentationHint", hint);
         }
@@ -2918,6 +2920,14 @@ int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse
 
     // Execute callback
     int callback_result = dap_server_execute_callback(server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS);
+
+               
+    if (callback_result != 0)
+    {    
+        set_response_error(response, "Breakpoint command callback failed");
+        return -1;
+    }
+
     
     // Create response
     cJSON *body = cJSON_CreateObject();

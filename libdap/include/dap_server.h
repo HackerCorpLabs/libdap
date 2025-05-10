@@ -253,7 +253,7 @@ typedef struct {
     const char* source_path;           /**< Source file path */
     const char* source_name;           /**< Source file name */
     bool source_modified;              /**< Whether the source file has been modified */
-    const DAPBreakpoint* breakpoints;  /**< Array of breakpoint objects */
+    DAPBreakpoint* breakpoints;        /**< Array of breakpoint objects */
     int breakpoint_count;              /**< Number of breakpoints */
     //int* lines;                        /**< Legacy: Simple line array */
     //bool use_lines_array;              /**< Whether to use simplified lines array */

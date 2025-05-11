@@ -215,6 +215,20 @@ int dap_transport_accept(DAPTransport* transport) {
     return 0;
 }
 
+/// @brief Check if the transport is connected
+/// @param transport Transport instance
+/// @return 0 if not connected, 1 if connected
+int dap_transport_is_connected(DAPTransport* transport) {
+    if (!transport) {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid transport");
+        return -1;
+    }
+    return transport->client_fd >= 0;
+}
+
+/// @brief Stop the transport layer
+/// @param transport Transport instance
+/// @return 0 on success, -1 on failure
 int dap_transport_stop(DAPTransport* transport) {
     if (!transport) {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid transport");

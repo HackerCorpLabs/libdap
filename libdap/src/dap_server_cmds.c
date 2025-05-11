@@ -1825,11 +1825,6 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
-void cleanup_breakpoints(DAPServer *server)
-{
-    // TODO: Implement cleanup_breakpoints
-}
-
 int handle_disconnect(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     if (!server || !response)
@@ -1880,8 +1875,7 @@ int handle_disconnect(DAPServer *server, cJSON *args, DAPResponse *response)
     {
         DAP_SERVER_DEBUG_LOG("Disconnect implementation callback failed with code %d", callback_result);
     }
-
-    cleanup_breakpoints(server);
+    
 
     // Reset server state
     server->attached = false;

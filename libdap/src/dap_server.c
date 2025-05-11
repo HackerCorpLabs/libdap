@@ -203,10 +203,6 @@ void dap_server_cleanup(DAPServer *server)
     // Clean up debugger state
     cleanup_debugger_state(server);
 
-    // Clean up breakpoints and line maps
-    cleanup_breakpoints(server);
-
-
 }
 
 /**
@@ -270,9 +266,11 @@ void cleanup_command_context(DAPServer *server)
             // Free source path and name
             if (server->current_command.context.breakpoint.source_path) {
                 free((void*)server->current_command.context.breakpoint.source_path);
+                server->current_command.context.breakpoint.source_path = NULL;
             }
             if (server->current_command.context.breakpoint.source_name) {
                 free((void*)server->current_command.context.breakpoint.source_name);
+                server->current_command.context.breakpoint.source_name = NULL;
             }
             // Free breakpoint arrays
             if (server->current_command.context.breakpoint.breakpoints) {
@@ -295,15 +293,19 @@ void cleanup_command_context(DAPServer *server)
             // Free strings in launch context
             if (server->current_command.context.launch.program_path) {
                 free((void*)server->current_command.context.launch.program_path);
+                server->current_command.context.launch.program_path = NULL;
             }
             if (server->current_command.context.launch.source_path) {
                 free((void*)server->current_command.context.launch.source_path);
+                server->current_command.context.launch.source_path = NULL;
             }
             if (server->current_command.context.launch.map_path) {
                 free((void*)server->current_command.context.launch.map_path);
+                server->current_command.context.launch.map_path = NULL;
             }
             if (server->current_command.context.launch.working_directory) {
                 free((void*)server->current_command.context.launch.working_directory);
+                server->current_command.context.launch.working_directory = NULL;
             }
             // Free command line arguments array
             if (server->current_command.context.launch.args) {
@@ -311,6 +313,7 @@ void cleanup_command_context(DAPServer *server)
                     free((void*)server->current_command.context.launch.args[i]);
                 }
                 free(server->current_command.context.launch.args);
+                server->current_command.context.launch.args = NULL;
             }
             break;
             
@@ -810,6 +813,35 @@ static void dap_server_send_welcome_message(DAPServer *server)
 }
 
 
+/// @brief Program exiting, we need to send a terminated event to the client and end the DAP adapter
+/// @param server 
+/// @param exit_code 
+void dap_server_terminate(DAPServer *server, int exit_code)
+{
+
+    if (!server)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
+        return;
+    }
+
+
+    if (dap_transport_is_connected(server->transport))
+    {
+        // Send exited event to the client
+        dap_server_send_exited_event(server, exit_code);
+
+        // Send a terminated event to the client
+        dap_server_send_terminated_event(server, false);        
+
+        // Sleep for 100 ms to allow the client to process the events
+        usleep(100000);
+    }
+
+    // Stop the server
+    dap_server_stop(server);    
+}
+
 /**
  * @brief Run the DAP server main loop
  * 
@@ -1099,6 +1131,68 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
     return -1;
 }
 
+
+/// @brief Send a terminated event to the client
+/// @param server 
+/// @param restart 
+/// @return 0 if successful, -1 if error
+/// @details This function sends a terminated event to the client.
+/// The event is used to notify the client that the program has terminated.
+/// The restart parameter is a boolean that indicates whether the program should be restarted.
+int dap_server_send_terminated_event(DAPServer *server, bool restart)
+{
+    if (!server )
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+
+    cJSON *event_body = cJSON_CreateObject();
+    if (event_body) {        
+                
+        cJSON_AddBoolToObject(event_body, "restart", restart);
+        
+
+        // Send the event
+        dap_server_send_event(server, "terminated", event_body);
+
+        return 0;
+    }
+    
+    return -1;
+}
+
+/// @brief Send an exited event to the client
+/// @param server 
+/// @param exitCode 
+/// @return 0 if successful, -1 if error
+/// @details This function sends an exited event to the client.
+/// The event is used to notify the client that the program has exited.
+/// The exitCode parameter is the exit code of the program.
+int dap_server_send_exited_event(DAPServer *server, int exitCode)
+{
+    if (!server )
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
+        return -1;
+    }
+
+
+    cJSON *event_body = cJSON_CreateObject();
+    if (event_body) {        
+                
+        cJSON_AddNumberToObject(event_body, "exitCode", exitCode);        
+
+        // Send the event
+        dap_server_send_event(server, "terminated", event_body);
+
+        return 0;
+    }
+    
+    return -1;
+}
+
 /**
  * @brief Clean up resources used by the debugger state
  * 
@@ -1113,7 +1207,7 @@ void cleanup_debugger_state(DAPServer *server)
     
     // Helper macro to safely free pointers with valid memory address check
     #define SAFE_FREE(ptr) do { \
-        if ((ptr) && (uintptr_t)(ptr) > 1024) { \
+        if (ptr) { \
             DAP_SERVER_DEBUG_LOG("Freeing debugger state pointer %s at %p", #ptr, (void*)(ptr)); \
             free((void*)(ptr)); \
             (ptr) = NULL; \

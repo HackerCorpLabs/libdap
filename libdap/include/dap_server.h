@@ -903,4 +903,28 @@ void cleanup_command_context(DAPServer *server);
  * @brief Send a welcome message when a client connects
  */
 
+
+/**
+ * @brief Send a terminated event to the client
+ * @param server The DAP server instance
+ * @param restart Whether to restart the server
+ */
+int dap_server_send_terminated_event(DAPServer *server, bool restart);
+
+
+/**
+ * @brief Send an exited event to the client
+ * @param server The DAP server instance
+ * @param exitCode The exit code of the program
+ */
+int dap_server_send_exited_event(DAPServer *server, int exitCode);
+
+/**
+ * @brief Terminate the DAP server
+ * @param server The DAP server instance
+ * @param sig The signal to terminate the server with
+ */
+void dap_server_terminate(DAPServer *server, int sig);
+
+
 #endif // ND100X_DAP_SERVER_H

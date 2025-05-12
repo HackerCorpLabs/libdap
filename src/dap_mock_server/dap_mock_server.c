@@ -1718,12 +1718,11 @@ int dbg_mock_start(void) {
     if (!mock_debugger.server) {
         return -1;
     }
-    
+   
     int result = dap_server_start(mock_debugger.server);
     if (result != 0) {
         return result;
-    }
-    
+    }    
     // Set up a hook to detect when a client connects
     // The original transport accept function accepts the connection
     DAPTransport *transport = mock_debugger.server->transport;
@@ -1732,7 +1731,7 @@ int dbg_mock_start(void) {
     // Monitor for client connections in a non-blocking way
     mock_debugger.client_connected = false;
     
-    return result;
+    return 0;
 }
 
 void dbg_mock_stop(void) {

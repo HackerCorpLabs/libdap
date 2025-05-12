@@ -352,10 +352,10 @@ typedef struct {
  *                    Can be used for language/runtime specific options.
  */
 typedef struct {
-    const char* program_path;       /**< Path to the program to be debugged */
-    const char* source_path;        /**< Path to the source file */
-    const char* map_path;           /**< Path to the map file (for debugging symbols) */
-    const char* working_directory;  /**< Working directory for the debuggee */
+    char* program_path;       /**< Path to the program to be debugged */
+    char* source_path;        /**< Path to the source file */
+    char* map_path;           /**< Path to the map file (for debugging symbols) */
+    char* working_directory;  /**< Working directory for the debuggee */
     bool no_debug;                  /**< Whether to run without debugging support */
     bool stop_at_entry;             /**< Whether to stop at program entry point */
     char** args;                    /**< Command line arguments array */
@@ -623,14 +623,14 @@ void dap_server_cleanup(DAPServer *server);
 void dap_server_free(DAPServer *server);
 
 /**
- * @brief Start the DAP server
+ * @brief Start the DAP server and transport layer
  * @param server Server instance
  * @return 0 on success, non-zero on failure
  */
 int dap_server_start(DAPServer *server);
 
 /**
- * @brief Stop the DAP server
+ * @brief Stop the DAP server and transport layer
  * @param server Server instance
  * @return 0 on success, non-zero on failure
  */

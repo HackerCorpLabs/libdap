@@ -1682,8 +1682,13 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
     }
     else
     {
-        // Make sure the working_directory field is NULL to avoid dangling pointers
+        //TODO: Maybe remove launch context ???
+        // Make sure the launch context fields are NULL to avoid dangling pointers 
         server->current_command.context.launch.working_directory = NULL;
+        server->current_command.context.launch.program_path = NULL;
+        server->current_command.context.launch.source_path = NULL;
+        server->current_command.context.launch.map_path = NULL;        
+
         DAP_SERVER_DEBUG_LOG("Working directory: (not specified)");
     }
 
@@ -1756,8 +1761,7 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // TODO: Evaluate all fields for the response and if STOP event should be sent (as its probably handled elsewhere)
 
-    // Set debugger state
-    server->is_running = true;
+    // Set debugger state    
     server->attached = true;
     server->debugger_state.has_stopped = true;
     server->debugger_state.current_thread_id = 1; // make sure we have a thread id
@@ -1805,9 +1809,7 @@ int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
         response->success = false;
         response->error_message = strdup("Missing or invalid process ID");
         return 0;
-    }
-
-    server->is_running = true;
+    }    
     server->attached = true;
     server->debugger_state.has_stopped = true;
 
@@ -3363,6 +3365,7 @@ int mock_handle_stack_trace(DAPServer *server)
     return 0;
 }
 
+#if 0 // not used now
 /**
  * @brief Create a presentationHint object for a variable
  *
@@ -3423,7 +3426,7 @@ static cJSON *create_presentation_hint(const char *kind, const char **attributes
 
     return hint;
 }
-
+#endif
 /**
  * @brief Helper function to clean up DAPVariable array
  * @param variables Array of variables to free

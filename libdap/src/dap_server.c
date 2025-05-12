@@ -11,8 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <stdarg.h>  // For va_list and related functions
-
+#include <stdarg.h> // For va_list and related functions
 
 #include "dap_server.h"
 #include "dap_error.h"
@@ -59,7 +58,7 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
     {
         return -1;
     }
-    
+
     // Enable debug logging for the transport
     server->transport->debuglog = true;
 
@@ -67,13 +66,13 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
     server->is_initialized = false; // Will be set to true after receiving initialize request
     server->is_running = false;
     server->attached = false;
-    //server->paused = false;
+    // server->paused = false;
     server->sequence = 0;
-    //server->current_thread_id = 0;
-    //server->current_line = 0;
-    //    server->current_column = 0;
-    //server->current_pc = 0;
-    
+    // server->current_thread_id = 0;
+    // server->current_line = 0;
+    //     server->current_column = 0;
+    // server->current_pc = 0;
+
     // Initialize the debugger state
     memset(&server->debugger_state, 0, sizeof(DebuggerState));
 
@@ -83,7 +82,7 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
     server->client_capabilities.adapterID = NULL;
     server->client_capabilities.locale = NULL;
     server->client_capabilities.pathFormat = NULL;
-    server->client_capabilities.linesStartAt1 = true; // Default to 1-based line numbers
+    server->client_capabilities.linesStartAt1 = true;   // Default to 1-based line numbers
     server->client_capabilities.columnsStartAt1 = true; // Default to 1-based column numbers
     server->client_capabilities.supportsVariableType = false;
     server->client_capabilities.supportsVariablePaging = false;
@@ -101,7 +100,7 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
 
     // Initialize command callbacks array to NULL
     memset(server->command_callbacks, 0, sizeof(server->command_callbacks));
-    
+
     // Initialize current command context
     memset(&server->current_command, 0, sizeof(server->current_command));
     server->current_command.type = DAP_CMD_INVALID;
@@ -167,27 +166,32 @@ void dap_server_cleanup(DAPServer *server)
         return;
 
     // Free client capabilities strings
-    if (server->client_capabilities.clientID) {
+    if (server->client_capabilities.clientID)
+    {
         free(server->client_capabilities.clientID);
         server->client_capabilities.clientID = NULL;
     }
-    
-    if (server->client_capabilities.clientName) {
+
+    if (server->client_capabilities.clientName)
+    {
         free(server->client_capabilities.clientName);
         server->client_capabilities.clientName = NULL;
     }
-    
-    if (server->client_capabilities.adapterID) {
+
+    if (server->client_capabilities.adapterID)
+    {
         free(server->client_capabilities.adapterID);
         server->client_capabilities.adapterID = NULL;
     }
-    
-    if (server->client_capabilities.locale) {
+
+    if (server->client_capabilities.locale)
+    {
         free(server->client_capabilities.locale);
         server->client_capabilities.locale = NULL;
     }
-    
-    if (server->client_capabilities.pathFormat) {
+
+    if (server->client_capabilities.pathFormat)
+    {
         free(server->client_capabilities.pathFormat);
         server->client_capabilities.pathFormat = NULL;
     }
@@ -198,11 +202,8 @@ void dap_server_cleanup(DAPServer *server)
         server->transport = NULL;
     }
 
-
-
     // Clean up debugger state
     cleanup_debugger_state(server);
-
 }
 
 /**
@@ -217,7 +218,7 @@ void dap_server_free(DAPServer *server)
 
     // Clean up all resources
     dap_server_cleanup(server);
-    
+
     // Free the server structure itself
     free(server);
 }
@@ -242,164 +243,185 @@ int dap_server_process_message(DAPServer *server, const char *message)
 
 /**
  * @brief Clean up resources used by the current command context
- * 
+ *
  * This function should be called after a command and its implementation have completed
  * to free any dynamically allocated memory in the command context.
- * 
+ *
  * @param server The DAP server instance
  */
 void cleanup_command_context(DAPServer *server)
 {
-    if (!server) {
+    if (!server)
+    {
         return;
     }
-    
+
     // Clean up any resources in the command context based on command type
-    switch (server->current_command.type) {
-        case DAP_CMD_STEP_IN:
-        case DAP_CMD_STEP_OUT:
-        case DAP_CMD_NEXT:
-            // No cleanup needed for step commands now that granularity is an enum
-            break;
-            
-        case DAP_CMD_SET_BREAKPOINTS:
-            // Free source path and name
-            if (server->current_command.context.breakpoint.source_path) {
-                free((void*)server->current_command.context.breakpoint.source_path);
-                server->current_command.context.breakpoint.source_path = NULL;
+    switch (server->current_command.type)
+    {
+    case DAP_CMD_STEP_IN:
+    case DAP_CMD_STEP_OUT:
+    case DAP_CMD_NEXT:
+        // No cleanup needed for step commands now that granularity is an enum
+        break;
+
+    case DAP_CMD_SET_BREAKPOINTS:
+        // Free source path and name
+        if (server->current_command.context.breakpoint.source_path)
+        {
+            free((void *)server->current_command.context.breakpoint.source_path);
+            server->current_command.context.breakpoint.source_path = NULL;
+        }
+        if (server->current_command.context.breakpoint.source_name)
+        {
+            free((void *)server->current_command.context.breakpoint.source_name);
+            server->current_command.context.breakpoint.source_name = NULL;
+        }
+        // Free breakpoint arrays
+        if (server->current_command.context.breakpoint.breakpoints)
+        {
+            free_breakpoints_array(server->current_command.context.breakpoint.breakpoints,
+                                   server->current_command.context.breakpoint.breakpoint_count);
+            server->current_command.context.breakpoint.breakpoints = NULL;
+        }
+        break;
+
+    case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
+        // Free filter arrays
+        free_filter_arrays(server->current_command.context.exception.filters,
+                           server->current_command.context.exception.conditions,
+                           server->current_command.context.exception.filter_count);
+        server->current_command.context.exception.filters = NULL;
+        server->current_command.context.exception.conditions = NULL;
+        break;
+
+    case DAP_CMD_LAUNCH:
+        // Free strings in launch context
+        if (server->current_command.context.launch.program_path)
+        {
+            free((void *)server->current_command.context.launch.program_path);
+            server->current_command.context.launch.program_path = NULL;
+        }
+        if (server->current_command.context.launch.source_path)
+        {
+            free((void *)server->current_command.context.launch.source_path);
+            server->current_command.context.launch.source_path = NULL;
+        }
+        if (server->current_command.context.launch.map_path)
+        {
+            free((void *)server->current_command.context.launch.map_path);
+            server->current_command.context.launch.map_path = NULL;
+        }
+        if (server->current_command.context.launch.working_directory)
+        {
+            free((void *)server->current_command.context.launch.working_directory);
+            server->current_command.context.launch.working_directory = NULL;
+        }
+        // Free command line arguments array
+        if (server->current_command.context.launch.args)
+        {
+            for (int i = 0; i < server->current_command.context.launch.args_count; i++)
+            {
+                free((void *)server->current_command.context.launch.args[i]);
             }
-            if (server->current_command.context.breakpoint.source_name) {
-                free((void*)server->current_command.context.breakpoint.source_name);
-                server->current_command.context.breakpoint.source_name = NULL;
-            }
-            // Free breakpoint arrays
-            if (server->current_command.context.breakpoint.breakpoints) {
-                free_breakpoints_array(server->current_command.context.breakpoint.breakpoints,
-                                    server->current_command.context.breakpoint.breakpoint_count);
-                server->current_command.context.breakpoint.breakpoints = NULL;
-            }
-            break;
-            
-        case DAP_CMD_SET_EXCEPTION_BREAKPOINTS:
-            // Free filter arrays
-            free_filter_arrays(server->current_command.context.exception.filters,
-                             server->current_command.context.exception.conditions,
-                             server->current_command.context.exception.filter_count);
-            server->current_command.context.exception.filters = NULL;
-            server->current_command.context.exception.conditions = NULL;
-            break;
-            
-        case DAP_CMD_LAUNCH:
-            // Free strings in launch context
-            if (server->current_command.context.launch.program_path) {
-                free((void*)server->current_command.context.launch.program_path);
-                server->current_command.context.launch.program_path = NULL;
-            }
-            if (server->current_command.context.launch.source_path) {
-                free((void*)server->current_command.context.launch.source_path);
-                server->current_command.context.launch.source_path = NULL;
-            }
-            if (server->current_command.context.launch.map_path) {
-                free((void*)server->current_command.context.launch.map_path);
-                server->current_command.context.launch.map_path = NULL;
-            }
-            if (server->current_command.context.launch.working_directory) {
-                free((void*)server->current_command.context.launch.working_directory);
-                server->current_command.context.launch.working_directory = NULL;
-            }
-            // Free command line arguments array
-            if (server->current_command.context.launch.args) {
-                for (int i = 0; i < server->current_command.context.launch.args_count; i++) {
-                    free((void*)server->current_command.context.launch.args[i]);
+            free(server->current_command.context.launch.args);
+            server->current_command.context.launch.args = NULL;
+        }
+        break;
+
+    case DAP_CMD_RESTART:
+        // Free restart arguments if present
+        if (server->current_command.context.restart.restart_args)
+        {
+            cJSON_Delete(server->current_command.context.restart.restart_args);
+            server->current_command.context.restart.restart_args = NULL;
+        }
+        break;
+
+    case DAP_CMD_DISASSEMBLE:
+        // No longer need to free memory_reference as it's now a uint32_t
+        break;
+
+    case DAP_CMD_READ_MEMORY:
+        // No longer need to free memory_reference as it's now a uint32_t
+        break;
+
+    case DAP_CMD_WRITE_MEMORY:
+        // Only free the data string, memory_reference is now a uint32_t
+        if (server->current_command.context.write_memory.data)
+        {
+            free((void *)server->current_command.context.write_memory.data);
+        }
+        break;
+
+    case DAP_CMD_VARIABLES:
+        // Free format string if set
+        if (server->current_command.context.variables.format)
+        {
+            free((void *)server->current_command.context.variables.format);
+        }
+        break;
+
+    case DAP_CMD_SET_VARIABLE:
+        // Free dynamically allocated strings
+        if (server->current_command.context.set_variable.name)
+        {
+            free((void *)server->current_command.context.set_variable.name);
+        }
+        if (server->current_command.context.set_variable.value)
+        {
+            free((void *)server->current_command.context.set_variable.value);
+        }
+        if (server->current_command.context.set_variable.format)
+        {
+            free((void *)server->current_command.context.set_variable.format);
+        }
+        break;
+
+    case DAP_CMD_STACK_TRACE:
+        // Free the frame name if allocated by the callback
+        if (server->current_command.context.stack_trace.frames)
+        {
+            // Free each frame in the array
+            for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++)
+            {
+                DAPStackFrame *frame = &server->current_command.context.stack_trace.frames[i];
+
+                // Free dynamically allocated strings
+                if (frame->name)
+                {
+                    free(frame->name);
                 }
-                free(server->current_command.context.launch.args);
-                server->current_command.context.launch.args = NULL;
-            }
-            break;
-            
-        case DAP_CMD_RESTART:
-            // Free restart arguments if present
-            if (server->current_command.context.restart.restart_args) {
-                cJSON_Delete(server->current_command.context.restart.restart_args);
-                server->current_command.context.restart.restart_args = NULL;
-            }
-            break;
-            
-        case DAP_CMD_DISASSEMBLE:
-            // No longer need to free memory_reference as it's now a uint32_t
-            break;
-            
-        case DAP_CMD_READ_MEMORY:
-            // No longer need to free memory_reference as it's now a uint32_t
-            break;
-            
-        case DAP_CMD_WRITE_MEMORY:
-            // Only free the data string, memory_reference is now a uint32_t
-            if (server->current_command.context.write_memory.data) {
-                free((void*)server->current_command.context.write_memory.data);
-            }
-            break;
-            
-        case DAP_CMD_VARIABLES:
-            // Free format string if set
-            if (server->current_command.context.variables.format) {
-                free((void*)server->current_command.context.variables.format);
-            }
-            break;
-            
-        case DAP_CMD_SET_VARIABLE:
-            // Free dynamically allocated strings
-            if (server->current_command.context.set_variable.name) {
-                free((void*)server->current_command.context.set_variable.name);
-            }
-            if (server->current_command.context.set_variable.value) {
-                free((void*)server->current_command.context.set_variable.value);
-            }
-            if (server->current_command.context.set_variable.format) {
-                free((void*)server->current_command.context.set_variable.format);
-            }
-            break;
-            
-        case DAP_CMD_STACK_TRACE:
-            // Free the frame name if allocated by the callback
-            if (server->current_command.context.stack_trace.frames) {
-                // Free each frame in the array
-                for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++) {
-                    DAPStackFrame *frame = &server->current_command.context.stack_trace.frames[i];
-                    
-                    // Free dynamically allocated strings
-                    if (frame->name) {
-                        free(frame->name);
-                    }
-                    
-                    if (frame->source_path) {
-                        free(frame->source_path);
-                    }
-                    
-                    if (frame->source_name) {
-                        free(frame->source_name);
-                    }                                        
-                    
-                    if (frame->module_id) {
-                        free(frame->module_id);
-                    }
+
+                if (frame->source_path)
+                {
+                    free(frame->source_path);
                 }
-                
-                // Free the array itself
-                free(server->current_command.context.stack_trace.frames);
-                server->current_command.context.stack_trace.frames = NULL;
-                server->current_command.context.stack_trace.frame_count = 0;
-                server->current_command.context.stack_trace.total_frames = 0;
+
+                if (frame->source_name)
+                {
+                    free(frame->source_name);
+                }
+
+                if (frame->module_id)
+                {
+                    free(frame->module_id);
+                }
             }
-            break;
-            
-      
-            
-        default:
-            // No cleanup needed for other command types
-            break;
+
+            // Free the array itself
+            free(server->current_command.context.stack_trace.frames);
+            server->current_command.context.stack_trace.frames = NULL;
+            server->current_command.context.stack_trace.frame_count = 0;
+            server->current_command.context.stack_trace.total_frames = 0;
+        }
+        break;
+
+    default:
+        // No cleanup needed for other command types
+        break;
     }
-    
+
     // Reset the command type to invalid to indicate context is clean
     server->current_command.type = DAP_CMD_INVALID;
 }
@@ -415,7 +437,7 @@ void cleanup_command_context(DAPServer *server)
  * @return int 0 on success, non-zero on failure
  */
 int dap_server_handle_command(DAPServer *server, DAPCommandType command,
-                             const char *args_str, cJSON *json_args, DAPResponse *response)
+                              const char *args_str, cJSON *json_args, DAPResponse *response)
 {
     if (!response || !server)
     {
@@ -428,7 +450,7 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     if (!json_args && args_str)
     {
         json_args = cJSON_Parse(args_str);
-        
+
         if (!json_args)
         {
             response->success = false;
@@ -440,7 +462,7 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     // Log the JSON arguments if available
     if (json_args)
     {
-        char* args_json_str = cJSON_Print(json_args);
+        char *args_json_str = cJSON_Print(json_args);
         if (args_json_str)
         {
             DAP_SERVER_DEBUG_LOG("Command arguments: %s", args_json_str);
@@ -452,7 +474,7 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     response->success = false;
     response->error_message = NULL;
     response->data = NULL;
-    
+
     // Store command information for callbacks to access
     server->current_command.type = command;
     server->current_command.request_seq = response->request_seq;
@@ -482,7 +504,7 @@ int dap_server_handle_command(DAPServer *server, DAPCommandType command,
     {
         cJSON_Delete(json_args);
     }
-    
+
     // Clean up command context resources
     cleanup_command_context(server);
 
@@ -506,7 +528,7 @@ int dap_server_handle_request(DAPServer *server, const char *request)
 
     // Parse message
     DAPMessageType type;
-    DAPCommandType command;    
+    DAPCommandType command;
     int request_seq;
     cJSON *content = NULL;
 
@@ -524,34 +546,36 @@ int dap_server_handle_request(DAPServer *server, const char *request)
 
     // Handle request
     DAPResponse response = {0};
-    
+
     // Store the request's sequence number in the response structure
     response.request_seq = request_seq;
     response.sequence = server->sequence++;
     // Call the appropriate command handler - dap_server_handle_command takes ownership of content
     // It will free content when done, so we don't need to free it here
     int result = dap_server_handle_command(server, command, NULL, content, &response);
-    
+
     // Send the response with the same command type as the request
     if (result >= 0)
     {
         cJSON *response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
         dap_server_send_response(server, command, response.sequence, request_seq, response.success, response_body);
-        //cJSON_Delete(response_body); (double free)
-        
+        // cJSON_Delete(response_body); (double free)
+
         // If this was an initialize request and it was successful, send the 'initialized' event
-        if (command == DAP_CMD_INITIALIZE && response.success) {
+        if (command == DAP_CMD_INITIALIZE && response.success)
+        {
             cJSON *event_body = cJSON_CreateObject();
-            if (event_body) {
+            if (event_body)
+            {
                 // dap_server_send_event takes ownership of event_body and will free it
                 dap_server_send_event(server, "initialized", event_body);
                 // Don't delete event_body here - it's owned by dap_server_send_event
 
                 // DEBUG, HACK!!
                 // Send process event and thread event after initialized event
-                // These events help clients proceed with the debug session                
-                //dap_server_send_thread_event(server, "started", 1);
-                //dap_server_send_process_event(server, "nd100x DAP", 1, true, "launch");
+                // These events help clients proceed with the debug session
+                // dap_server_send_thread_event(server, "started", 1);
+                // dap_server_send_process_event(server, "nd100x DAP", 1, true, "launch");
             }
         }
     }
@@ -575,7 +599,7 @@ int dap_server_handle_request(DAPServer *server, const char *request)
  * Creates a properly formatted DAP event and sends it to the client.
  * Events are asynchronous notifications that can be sent at any time
  * to inform the client about state changes or other information.
- * 
+ *
  * This function:
  * 1. Creates a new event JSON structure
  * 2. Sets the common fields (type="event", event=event_type)
@@ -587,7 +611,7 @@ int dap_server_handle_request(DAPServer *server, const char *request)
  * @param event_type Event type as string (e.g., "initialized", "stopped", "output")
  * @param body Event body (JSON object) containing event-specific data
  * @return 0 on success, non-zero on failure
- * 
+ *
  * @note IMPORTANT: This function TAKES OWNERSHIP of the provided body.
  *       The caller should not access or free the body after calling this function.
  *       The body will be freed by this function when the event is deleted.
@@ -627,13 +651,12 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
     // Convert to string and send
     char *event_str = cJSON_PrintUnformatted(event);
     cJSON_Delete(event); // This will also free the body since we added the reference above
-    
+
     if (!event_str)
     {
         dap_error_set(DAP_ERROR_MEMORY, "Failed to convert event to string");
         return -1;
     }
-
 
     if (dap_transport_send(server->transport, event_str) < 0)
     {
@@ -646,17 +669,15 @@ int dap_server_send_event(DAPServer *server, const char *event_type, cJSON *body
     return 0;
 }
 
-
-
-
 /**
  * @brief Initialize the command handlers array in the server struct
  * @param server Server instance to initialize handlers for
  */
-void initialize_command_handlers(DAPServer *server) {
+void initialize_command_handlers(DAPServer *server)
+{
     // Clear the array first
     memset(server->command_handlers, 0, sizeof(server->command_handlers));
-    
+
     // Also clear the command callbacks array
     memset(server->command_callbacks, 0, sizeof(server->command_callbacks));
 
@@ -669,8 +690,8 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_TERMINATE] = &handle_terminate;
     server->command_handlers[DAP_CMD_RESTART] = &handle_restart;
     server->command_handlers[DAP_CMD_SET_BREAKPOINTS] = &handle_set_breakpoints;
-    server->command_handlers[DAP_CMD_CLEAR_BREAKPOINTS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_SET_FUNCTION_BREAKPOINTS] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_CLEAR_BREAKPOINTS] = NULL;        // Not implemented
+    server->command_handlers[DAP_CMD_SET_FUNCTION_BREAKPOINTS] = NULL; // Not implemented
     server->command_handlers[DAP_CMD_SET_EXCEPTION_BREAKPOINTS] = &handle_set_exception_breakpoints;
     server->command_handlers[DAP_CMD_CONTINUE] = &handle_continue;
     server->command_handlers[DAP_CMD_NEXT] = &handle_next;
@@ -684,27 +705,26 @@ void initialize_command_handlers(DAPServer *server) {
     server->command_handlers[DAP_CMD_SOURCE] = &handle_source;
     server->command_handlers[DAP_CMD_THREADS] = &handle_threads;
     server->command_handlers[DAP_CMD_EVALUATE] = &handle_evaluate;
-    server->command_handlers[DAP_CMD_SET_EXPRESSION] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_SET_EXPRESSION] = NULL; // Not implemented
     server->command_handlers[DAP_CMD_LOADED_SOURCES] = NULL; // not implemented
     server->command_handlers[DAP_CMD_READ_MEMORY] = &handle_read_memory;
     server->command_handlers[DAP_CMD_WRITE_MEMORY] = &handle_write_memory;
-    server->command_handlers[DAP_CMD_DISASSEMBLE] = &handle_disassemble;        
-    server->command_handlers[DAP_CMD_CANCEL] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_DISASSEMBLE] = &handle_disassemble;
+    server->command_handlers[DAP_CMD_CANCEL] = NULL; // Not implemented
     server->command_handlers[DAP_CMD_CONFIGURATION_DONE] = &handle_configuration_done;
-    server->command_handlers[DAP_CMD_TERMINATE_THREADS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_COMPLETIONS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_EXCEPTION_INFO] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_DATA_BREAKPOINT_INFO] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_SET_DATA_BREAKPOINTS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_SET_INSTRUCTION_BREAKPOINTS] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_MODULES] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_STEP_BACK] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_REVERSE_CONTINUE] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_RESTART_FRAME] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_GOTO] = NULL;  // Not implemented
-    server->command_handlers[DAP_CMD_SET_EXCEPTION_FILTERS] = NULL;  // Not implemented
+    server->command_handlers[DAP_CMD_TERMINATE_THREADS] = NULL;           // Not implemented
+    server->command_handlers[DAP_CMD_COMPLETIONS] = NULL;                 // Not implemented
+    server->command_handlers[DAP_CMD_EXCEPTION_INFO] = NULL;              // Not implemented
+    server->command_handlers[DAP_CMD_DATA_BREAKPOINT_INFO] = NULL;        // Not implemented
+    server->command_handlers[DAP_CMD_SET_DATA_BREAKPOINTS] = NULL;        // Not implemented
+    server->command_handlers[DAP_CMD_SET_INSTRUCTION_BREAKPOINTS] = NULL; // Not implemented
+    server->command_handlers[DAP_CMD_MODULES] = NULL;                     // Not implemented
+    server->command_handlers[DAP_CMD_STEP_BACK] = NULL;                   // Not implemented
+    server->command_handlers[DAP_CMD_REVERSE_CONTINUE] = NULL;            // Not implemented
+    server->command_handlers[DAP_CMD_RESTART_FRAME] = NULL;               // Not implemented
+    server->command_handlers[DAP_CMD_GOTO] = NULL;                        // Not implemented
+    server->command_handlers[DAP_CMD_SET_EXCEPTION_FILTERS] = NULL;       // Not implemented
 }
-
 
 /**
  * @brief Register a command implementation callback
@@ -720,7 +740,6 @@ int dap_server_register_command_callback(DAPServer *server, DAPCommandType comma
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
     }
-    
 
     // The key principle of memory management in the DAP server for callbacks are:
     //
@@ -734,10 +753,9 @@ int dap_server_register_command_callback(DAPServer *server, DAPCommandType comma
     return 0;
 }
 
-
 /**
  * @brief Send a DAP response to a client request
- * 
+ *
  * Creates a properly formatted response object and sends it to the client.
  * This function handles the complete lifecycle of creating and sending the response:
  * 1. Creates the response JSON structure with proper fields
@@ -752,7 +770,7 @@ int dap_server_register_command_callback(DAPServer *server, DAPCommandType comma
  * @param success Whether the request was successfully processed
  * @param body Response body as a JSON object
  * @return int 0 on success, -1 on error
- * 
+ *
  * @note IMPORTANT: This function takes ownership of the body cJSON object and will free it.
  *       Do not access or free the body after calling this function.
  */
@@ -780,7 +798,7 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
     }
 
     // Log the full response content
-    //DAP_SERVER_DEBUG_LOG("Sending response: %s", response_str);
+    // DAP_SERVER_DEBUG_LOG("Sending response: %s", response_str);
 
     if (dap_transport_send(server->transport, response_str) < 0)
     {
@@ -793,29 +811,28 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
     return 0;
 }
 
-
 /**
  * @brief Send a welcome message when a client connects
- * 
+ *
  * @param server The DAP server instance
  */
 static void dap_server_send_welcome_message(DAPServer *server)
 {
-    if (!server) {
+    if (!server)
+    {
         return;
     }
-        
+
     // Send an important welcome message
     dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, "Connected to DAP debugger\n");
-    
+
     // Also send a regular console message with version info
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Mock DAP server version 1.0\n");
 }
 
-
 /// @brief Program exiting, we need to send a terminated event to the client and end the DAP adapter
-/// @param server 
-/// @param exit_code 
+/// @param server
+/// @param exit_code
 void dap_server_terminate(DAPServer *server, int exit_code)
 {
 
@@ -825,26 +842,25 @@ void dap_server_terminate(DAPServer *server, int exit_code)
         return;
     }
 
-
     if (dap_transport_is_connected(server->transport))
     {
         // Send exited event to the client
         dap_server_send_exited_event(server, exit_code);
 
         // Send a terminated event to the client
-        dap_server_send_terminated_event(server, false);        
+        dap_server_send_terminated_event(server, false);
 
         // Sleep for 100 ms to allow the client to process the events
         usleep(100000);
     }
 
     // Stop the server
-    dap_server_stop(server);    
+    dap_server_stop(server);
 }
 
 /**
  * @brief Run the DAP server main loop
- * 
+ *
  * @param server Server instance
  * @return int 0 on success, -1 on error
  */
@@ -856,62 +872,55 @@ int dap_server_run(DAPServer *server)
         return -1;
     }
 
-
-    while (server->is_running)
+    // If the transport is not connected, accept a new connection
+    if (server->transport->client_fd <= 0)
     {
-
-     
         if (dap_transport_accept(server->transport) < 0)
         {
-            continue;
+            // Not yet connected, wait for a connection
+            return 0;
         }
 
+        // Send a welcome message to the client
         dap_server_send_welcome_message(server);
+    }
 
-        while (server->is_running)
+    // Try to receive a message from the client and process it
+    char *message = NULL;
+    int result = dap_transport_receive(server->transport, &message);
+    if (result < 0)
+    {
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
         {
-            char *message = NULL;
-            int result = dap_transport_receive(server->transport, &message);
-            if (result < 0)
-            {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                {
-                    continue;
-                }
-                break;
-            }
-
-            if (message)
-            {                
-                if (dap_server_process_message(server, message) < 0)
-                {
-                    free(message);
-                    continue;
-                }
-
-                free(message);
-            }
-
-
-            DAPCommandCallback check_cpu_event = server->command_callbacks[DAP_CHECK_CPU_EVENTS];
-            if (check_cpu_event)
-            {
-                check_cpu_event(server);
-            }
-
+            server->is_running = false; // Transport is not connected anymore, stop the server
         }
+        return 0;
+    }
+    else
+    {
+        if (message)
+        {
+            dap_server_process_message(server, message);
+            free(message);
+        }
+    }
+
+    // Check if the CPU has events to process (use callback if provided)
+    DAPCommandCallback check_cpu_event = server->command_callbacks[DAP_CHECK_CPU_EVENTS];
+    if (check_cpu_event)
+    {
+        check_cpu_event(server);
     }
 
     return 0;
 }
 
-
 /**
  * @brief Send an output event to display text in the debug console
- * 
+ *
  * Creates and sends a properly formatted DAP output event to the client.
  * Output events are used to show text in the debug console of the IDE.
- * 
+ *
  * @param server Server instance
  * @param category Output category ("console", "stdout", "stderr", or "telemetry")
  * @param output The text content to display
@@ -945,16 +954,16 @@ int dap_server_send_output_event(DAPServer *server, const char *category, const 
 
     // Send output event (function takes ownership of body)
     int result = dap_server_send_event(server, "output", body);
-    
+
     return result;
 }
 
 /**
  * @brief Send an output message to the debug console
- * 
+ *
  * Simplified version of dap_server_send_output_event that uses "console" as the category.
  * Useful for quick debug messages or informational output.
- * 
+ *
  * @param server Server instance
  * @param message The message to display in the debug console
  * @return 0 on success, non-zero on failure
@@ -966,11 +975,11 @@ int dap_server_send_output(DAPServer *server, const char *message)
 
 /**
  * @brief Send an output event with specified category using enum
- * 
+ *
  * Creates and sends an output event using a category specified by the DAPOutputCategory enum.
  * This is a convenience wrapper around dap_server_send_output_event that converts
  * the enum value to the corresponding string.
- * 
+ *
  * @param server Server instance
  * @param category Output category from DAPOutputCategory enum
  * @param output The text content to display
@@ -986,31 +995,32 @@ int dap_server_send_output_category(DAPServer *server, DAPOutputCategory categor
 
     // Convert enum to string category
     const char *category_str = NULL;
-    switch (category) {
-        case DAP_OUTPUT_CONSOLE:
-            category_str = "console";
-            break;
-        case DAP_OUTPUT_STDOUT:
-            category_str = "stdout";
-            break;
-        case DAP_OUTPUT_STDERR:
-            category_str = "stderr";
-            break;
-        case DAP_OUTPUT_TELEMETRY:
-            category_str = "telemetry";
-            break;
-        case DAP_OUTPUT_IMPORTANT:
-            category_str = "important";
-            break;
-        case DAP_OUTPUT_PROGRESS:
-            category_str = "progress";
-            break;
-        case DAP_OUTPUT_LOG:
-            category_str = "log";
-            break;
-        default:
-            category_str = "console"; // Default to console for unknown values
-            break;
+    switch (category)
+    {
+    case DAP_OUTPUT_CONSOLE:
+        category_str = "console";
+        break;
+    case DAP_OUTPUT_STDOUT:
+        category_str = "stdout";
+        break;
+    case DAP_OUTPUT_STDERR:
+        category_str = "stderr";
+        break;
+    case DAP_OUTPUT_TELEMETRY:
+        category_str = "telemetry";
+        break;
+    case DAP_OUTPUT_IMPORTANT:
+        category_str = "important";
+        break;
+    case DAP_OUTPUT_PROGRESS:
+        category_str = "progress";
+        break;
+    case DAP_OUTPUT_LOG:
+        category_str = "log";
+        break;
+    default:
+        category_str = "console"; // Default to console for unknown values
+        break;
     }
 
     return dap_server_send_output_event(server, category_str, output);
@@ -1018,11 +1028,11 @@ int dap_server_send_output_category(DAPServer *server, DAPOutputCategory categor
 
 /**
  * @brief Send a process event to the client
- * 
+ *
  * Creates and sends a process event to notify the client about a process.
  * This is typically sent after initialized event to indicate the debugger
  * has started a new process or attached to an existing one.
- * 
+ *
  * @param server Server instance
  * @param name Name of the process
  * @param system_process_id System process ID (0 if not applicable)
@@ -1030,8 +1040,8 @@ int dap_server_send_output_category(DAPServer *server, DAPOutputCategory categor
  * @param start_method How the process was started ("launch", "attach", "attachForSuspendedLaunch")
  * @return 0 on success, non-zero on failure
  */
-int dap_server_send_process_event(DAPServer *server, const char *name, int system_process_id, 
-                                bool is_local_process, const char *start_method)
+int dap_server_send_process_event(DAPServer *server, const char *name, int system_process_id,
+                                  bool is_local_process, const char *start_method)
 {
     if (!server || !name || !start_method)
     {
@@ -1052,17 +1062,17 @@ int dap_server_send_process_event(DAPServer *server, const char *name, int syste
     cJSON_AddNumberToObject(body, "systemProcessId", system_process_id);
     cJSON_AddBoolToObject(body, "isLocalProcess", is_local_process);
     cJSON_AddStringToObject(body, "startMethod", start_method);
-    
+
     // Send the process event (function takes ownership of body)
     return dap_server_send_event(server, "process", body);
 }
 
 /**
  * @brief Send a thread event to the client
- * 
+ *
  * Creates and sends a thread event to notify the client about thread status.
  * Used to indicate when a thread has started or exited.
- * 
+ *
  * @param server Server instance
  * @param reason The reason for the event ("started" or "exited")
  * @param thread_id The identifier of the thread
@@ -1087,11 +1097,10 @@ int dap_server_send_thread_event(DAPServer *server, const char *reason, int thre
     // Add required fields - the thread event requires both reason and threadId
     cJSON_AddStringToObject(body, "reason", reason);
     cJSON_AddNumberToObject(body, "threadId", thread_id);
-    
+
     // Send the thread event (function takes ownership of body)
     return dap_server_send_event(server, "thread", body);
 }
-
 
 int dap_server_send_stopped_event(DAPServer *server, const char *reason, const char *description)
 {
@@ -1101,15 +1110,16 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
         return -1;
     }
 
-
     cJSON *event_body = cJSON_CreateObject();
-    if (event_body) {        
+    if (event_body)
+    {
         cJSON_AddNumberToObject(event_body, "threadId", server->debugger_state.current_thread_id);
-        
+
         // REQUIRED by the spec!!!
         cJSON_AddStringToObject(event_body, "reason", reason);
 
-        if (description) {
+        if (description)
+        {
             // Add description
             cJSON_AddStringToObject(event_body, "description", description);
         }
@@ -1127,93 +1137,95 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
 
         return 0;
     }
-    
+
     return -1;
 }
 
-
 /// @brief Send a terminated event to the client
-/// @param server 
-/// @param restart 
+/// @param server
+/// @param restart
 /// @return 0 if successful, -1 if error
 /// @details This function sends a terminated event to the client.
 /// The event is used to notify the client that the program has terminated.
 /// The restart parameter is a boolean that indicates whether the program should be restarted.
 int dap_server_send_terminated_event(DAPServer *server, bool restart)
 {
-    if (!server )
+    if (!server)
     {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
     }
 
-
     cJSON *event_body = cJSON_CreateObject();
-    if (event_body) {        
-                
+    if (event_body)
+    {
+
         cJSON_AddBoolToObject(event_body, "restart", restart);
-        
 
         // Send the event
         dap_server_send_event(server, "terminated", event_body);
 
         return 0;
     }
-    
+
     return -1;
 }
 
 /// @brief Send an exited event to the client
-/// @param server 
-/// @param exitCode 
+/// @param server
+/// @param exitCode
 /// @return 0 if successful, -1 if error
 /// @details This function sends an exited event to the client.
 /// The event is used to notify the client that the program has exited.
 /// The exitCode parameter is the exit code of the program.
 int dap_server_send_exited_event(DAPServer *server, int exitCode)
 {
-    if (!server )
+    if (!server)
     {
         dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid arguments");
         return -1;
     }
 
-
     cJSON *event_body = cJSON_CreateObject();
-    if (event_body) {        
-                
-        cJSON_AddNumberToObject(event_body, "exitCode", exitCode);        
+    if (event_body)
+    {
+
+        cJSON_AddNumberToObject(event_body, "exitCode", exitCode);
 
         // Send the event
         dap_server_send_event(server, "terminated", event_body);
 
         return 0;
     }
-    
+
     return -1;
 }
 
 /**
  * @brief Clean up resources used by the debugger state
- * 
+ *
  * This function handles the cleanup of all dynamically allocated memory
  * in the debugger_state structure. It should be called during server shutdown.
- * 
+ *
  * @param server The DAP server instance
  */
 void cleanup_debugger_state(DAPServer *server)
 {
-    if (!server) return;
-    
-    // Helper macro to safely free pointers with valid memory address check
-    #define SAFE_FREE(ptr) do { \
-        if (ptr) { \
-            DAP_SERVER_DEBUG_LOG("Freeing debugger state pointer %s at %p", #ptr, (void*)(ptr)); \
-            free((void*)(ptr)); \
-            (ptr) = NULL; \
-        } \
+    if (!server)
+        return;
+
+// Helper macro to safely free pointers with valid memory address check
+#define SAFE_FREE(ptr)                                                                            \
+    do                                                                                            \
+    {                                                                                             \
+        if (ptr)                                                                                  \
+        {                                                                                         \
+            DAP_SERVER_DEBUG_LOG("Freeing debugger state pointer %s at %p", #ptr, (void *)(ptr)); \
+            free((void *)(ptr));                                                                  \
+            (ptr) = NULL;                                                                         \
+        }                                                                                         \
     } while (0)
-    
+
     // Free all dynamically allocated strings
     SAFE_FREE(server->debugger_state.program_path);
     SAFE_FREE(server->debugger_state.source_path);
@@ -1221,24 +1233,27 @@ void cleanup_debugger_state(DAPServer *server)
     SAFE_FREE(server->debugger_state.working_directory);
     SAFE_FREE(server->debugger_state.stop_reason);
     SAFE_FREE(server->debugger_state.stop_description);
-    
+
     // Free command line arguments array if it exists
-    if (server->debugger_state.args) {
-        for (int i = 0; i < server->debugger_state.args_count; i++) {
+    if (server->debugger_state.args)
+    {
+        for (int i = 0; i < server->debugger_state.args_count; i++)
+        {
             SAFE_FREE(server->debugger_state.args[i]);
         }
         free(server->debugger_state.args);
         server->debugger_state.args = NULL;
         server->debugger_state.args_count = 0;
     }
-    
+
     // Free any user data if a cleanup function was provided
-    if (server->debugger_state.user_data) {
+    if (server->debugger_state.user_data)
+    {
         // If a custom cleanup function exists, it could be called here
         // For now, we're just nulling it out as we don't know how to free it
         server->debugger_state.user_data = NULL;
     }
-    
+
     // Reset other state fields to default values
     server->debugger_state.program_counter = 0;
     server->debugger_state.source_line = 0;
@@ -1247,9 +1262,6 @@ void cleanup_debugger_state(DAPServer *server)
     server->debugger_state.has_stopped = false;
     server->debugger_state.no_debug = false;
     server->debugger_state.stop_at_entry = false;
-    
-    #undef SAFE_FREE
+
+#undef SAFE_FREE
 }
-
-
-

@@ -2067,6 +2067,17 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
+    // FInd the longest frame name
+    int max_frame_name_len = 0;
+    for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++)
+    {
+        DAPStackFrame *frame_data = &server->current_command.context.stack_trace.frames[i];
+        if (frame_data->name && strlen(frame_data->name) > max_frame_name_len)
+        {
+            max_frame_name_len = strlen(frame_data->name);
+        }
+    }
+
     // Add frames from the command context
     for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++)
     {
@@ -2082,9 +2093,19 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
             return -1;
         }
 
+        char frame_name[50];
+        uint32_t offset = 0;
+        if (frame_data->valid_symbol)
+        {
+            offset = frame_data->instruction_pointer_reference - frame_data->symbol_entry_point; 
+        }
+
+        snprintf(frame_name, sizeof(frame_name), "%-*s +%d @%05o", max_frame_name_len, frame_data->name, offset,frame_data->instruction_pointer_reference );
+
+        
         // Add required properties according to the DAP spec
         cJSON_AddNumberToObject(frame, "id", frame_data->id);
-        cJSON_AddStringToObject(frame, "name", frame_data->name ? frame_data->name : "unknown");
+        cJSON_AddStringToObject(frame, "name", frame_name);
         cJSON_AddNumberToObject(frame, "line", frame_data->line);
         cJSON_AddNumberToObject(frame, "column", frame_data->column);
 

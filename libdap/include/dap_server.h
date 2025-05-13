@@ -29,14 +29,18 @@
 #define ND100X_DAP_SERVER_H
 
 
+#define DEBUG_LOG_ENABLED 0
+
 // Debug logging macro
 #define DAP_SERVER_DEBUG_LOG(...)                                   \
     do                                                              \
     {                                                               \
-        fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
-        fprintf(stderr, __VA_ARGS__);                               \
-        fprintf(stderr, "\n");                                      \
-        fflush(stderr);                                             \
+        if (DEBUG_LOG_ENABLED) {                                     \
+            fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
+            fprintf(stderr, __VA_ARGS__);                               \
+            fprintf(stderr, "\n");                                      \
+            fflush(stderr);                                             \
+        }                                                           \
     } while (0)
 
     

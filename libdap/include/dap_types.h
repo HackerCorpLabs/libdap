@@ -70,7 +70,10 @@ typedef enum {
  */
 typedef struct DAPStackFrame {
     int id;                             ///< Unique identifier for the frame
-    char* name;                         ///< Name of the frame (function name)
+    char* name;                         ///< Name of the frame (function name) that is closest to the current instruction pointer.
+    bool valid_symbol;                  ///< Whether the name/symbol is valid
+    uint32_t symbol_entry_point;        ///< Memory address for the start of the symbol    
+
     char* source_path;                  ///< Source file path
     char* source_name;                  ///< Source file name
     int line;                           ///< Line number in the source

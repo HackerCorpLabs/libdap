@@ -65,8 +65,6 @@ static const char* command_strings[] = {
     "readMemory",
     "writeMemory",
     "disassemble",
-    "readRegisters",
-    "writeRegisters",
     "cancel",
     "configurationDone",
     "terminateThreads",
@@ -171,6 +169,10 @@ DAPHeader dap_parse_header(const char* header_str) {
  * @return DAPCommandType Command type, or DAP_CMD_INVALID if not found
  */
 DAPCommandType find_command_type(const char* command_str) {
+
+    printf("find_command_type: %s\n", command_str);
+
+    
     size_t num_commands = sizeof(command_strings) / sizeof(command_strings[0]);
     for (size_t i = 0; i < num_commands; i++) {
         if (strcmp(command_str, command_strings[i]) == 0) {

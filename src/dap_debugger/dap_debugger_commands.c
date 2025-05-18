@@ -387,8 +387,8 @@ int print_variables(DAPClient* client, DAPVariable* variables, size_t num_variab
                 printf(" = %s", var->value);
                 
                 // Show memory reference if available
-                if (var->memory_reference != 0) {
-                    printf(" (Memory: 0x%08x)", var->memory_reference);
+                if (var->memory_reference) {
+                    printf(" (Memory: %s)", var->memory_reference);
                 }
             } else {
                 printf(" = <undefined>");

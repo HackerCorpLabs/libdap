@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #include "dap_server.h"
 #include "dap_error.h"
@@ -29,7 +30,7 @@
  * @param len The length of the data in bytes
  * @return char* The base64 encoded string (caller must free)
  */
-static char *base64_encode(const uint8_t *data, size_t len)
+char *base64_encode(const uint8_t *data, size_t len)
 {
     static const char base64_chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -61,6 +62,34 @@ static char *base64_encode(const uint8_t *data, size_t len)
 
     output[j] = '\0';
     return output;
+}
+
+/// @brief Convert a string to a uint32_t. Supports hex, octal, and decimal.
+/// @param str 
+/// @return 
+uint32_t string_to_uint32(const char *str)
+{
+    if (!str) {
+        return 0;
+    }
+
+    // Skip leading whitespace
+    while (*str && isspace(*str)) {
+        str++;
+    }
+
+    // Check for hex prefix
+    if (strncmp(str, "0x", 2) == 0) {
+        return strtoul(str, NULL, 16);
+    }
+
+    // Check for octal (6 chars long and starts with 0 or 1)
+    if (strlen(str) == 6 && (str[0] == '0' || str[0] == '1')) {
+        return strtoul(str, NULL, 8);
+    }
+
+    // Default to decimal
+    return strtoul(str, NULL, 10);
 }
 
 // Forward declarations for helper functions
@@ -188,7 +217,14 @@ static int dap_server_execute_callback(DAPServer *server, DAPCommandType cmd)
 
     if (callback)
     {
-        if (pre) pre(server);          // Wait for the debugger to be ready
+        if (pre) {
+            int pre_result = pre(server);          // Wait for the debugger to be ready
+            if (pre_result < 0)
+            {
+                return pre_result;
+            }
+        }
+        
         int result = callback(server); // DO the command
         if (post) post(server);        // Release the debugger
         return result;
@@ -800,6 +836,20 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
     server->current_command.type = DAP_CMD_DISASSEMBLE;
     memset(&server->current_command.context.disassemble, 0, sizeof(DisassembleCommandContext));
 
+
+/*
+{
+  "command": "disassemble",
+  "arguments": {
+    "memoryReference": "0x1000",   // Required: memory address or register name (string)
+    "offset": 0,                   // Optional: add/subtract bytes
+    "instructionOffset": 0,        // Optional: relative instruction index
+    "instructionCount": 32,        // Required: how many instructions to disassemble
+    "resolveSymbols": true         // Optional: whether to show symbols
+  }
+}
+*/
+
     // Parse required arguments - memoryReference
     cJSON *memory_reference = cJSON_GetObjectItem(args, "memoryReference");
     if (!memory_reference || !cJSON_IsString(memory_reference))
@@ -808,15 +858,9 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Convert memory reference from string to uint32_t
-    char *endptr = NULL;
-    server->current_command.context.disassemble.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
-    if (endptr == memory_reference->valuestring || *endptr != '\0')
-    {
-        set_response_error(response, "Invalid memory reference format");
-        return -1;
-    }
-
+    // Convert memory reference from string to uint32_t    
+    server->current_command.context.disassemble.memory_reference = (uint32_t)string_to_uint32(memory_reference->valuestring);
+    
     // Parse optional arguments with defaults
     cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
     if (offset_json && cJSON_IsNumber(offset_json))
@@ -844,21 +888,29 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         server->current_command.context.disassemble.resolve_symbols = cJSON_IsTrue(resolve_symbols_json);
     }
 
+    /****************** CALLBACK ******************/
     int callback_result = dap_server_execute_callback(server, DAP_CMD_DISASSEMBLE);
-
+    
     if (callback_result < 0)
     {
         DAP_SERVER_DEBUG_LOG("Disassemble implementation callback failed");
         set_response_error(response, "Disassemble implementation callback failed");
         return -1;
     }
+    
+    /****************** END CALLBACK ******************/
 
-    // Get the memory reference value directly (it's already a uint32_t)
-    uint32_t address = server->current_command.context.disassemble.memory_reference;
-
-    // Apply offset to address
-    address += (uint32_t)server->current_command.context.disassemble.offset;
-
+/*
+{
+  "instructions": [
+    {
+      "address": "0x1000",
+      "instruction": "mov a, b",
+      "symbol": "main"
+    }
+  ]
+}
+*/
     // Create response body
     cJSON *body = cJSON_CreateObject();
     if (!body)
@@ -875,95 +927,35 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Calculate total instructions to disassemble
-    int instruction_offset = server->current_command.context.disassemble.instruction_offset;
-    int instruction_count = server->current_command.context.disassemble.instruction_count;
-    size_t total_instructions = instruction_count + (instruction_offset > 0 ? instruction_offset : 0);
-
-    // Allocate array for disassembly strings
-    char **disassembly = malloc(total_instructions * sizeof(char *));
-    if (!disassembly)
+    // Add instructions to the response
+    for (int i = 0; i < server->current_command.context.disassemble.actual_instruction_count; i++)
     {
-        cJSON_Delete(body);
-        cJSON_Delete(instructions);
-        set_response_error(response, "Failed to allocate memory for disassembly");
-        return -1;
+
+        DisassembleInstruction *instruction = &server->current_command.context.disassemble.instructions[i];
+
+        cJSON *instruction_obj = cJSON_CreateObject();
+        if (!instruction_obj)
+            continue;
+
+        if(instruction->address)
+        {
+            cJSON_AddStringToObject(instruction_obj, "address", instruction->address);
+        }
+
+        if (instruction->instruction)
+        {
+            cJSON_AddStringToObject(instruction_obj, "instruction", instruction->instruction);
+        }
+
+        if (instruction->symbol)
+        {
+            cJSON_AddStringToObject(instruction_obj, "symbol", instruction->symbol);
+        }
+
+
+        cJSON_AddItemToArray(instructions, instruction_obj);
     }
 
-    // Mock disassembly - in a real implementation, this would use the machine debugger
-    for (size_t i = 0; i < total_instructions; i++)
-    {
-        char *instr = malloc(32);
-        if (!instr)
-        {
-            // Clean up previously allocated strings
-            for (size_t j = 0; j < i; j++)
-            {
-                free(disassembly[j]);
-            }
-            free(disassembly);
-            cJSON_Delete(body);
-            cJSON_Delete(instructions);
-            set_response_error(response, "Failed to allocate memory for instruction");
-            return -1;
-        }
-        snprintf(instr, 32, "MOV R%d, R%d", (int)(i % 8), (int)((i + 1) % 8));
-        disassembly[i] = instr;
-    }
-
-    // Add instructions to response
-    for (size_t i = 0; i < (size_t)instruction_count; i++)
-    {
-        size_t idx = i;
-        if (instruction_offset > 0)
-        {
-            idx += instruction_offset;
-        }
-
-        if (idx >= total_instructions || !disassembly[idx])
-        {
-            break;
-        }
-
-        cJSON *instruction = cJSON_CreateObject();
-        if (!instruction)
-        {
-            // Clean up and return error
-            for (size_t j = 0; j < total_instructions; j++)
-            {
-                free(disassembly[j]);
-            }
-            free(disassembly);
-            cJSON_Delete(body);
-            cJSON_Delete(instructions);
-            set_response_error(response, "Failed to create instruction object");
-            return -1;
-        }
-
-        // Format address as hexadecimal
-        char addr_str[16];
-        snprintf(addr_str, sizeof(addr_str), "0x%04x", address + (uint32_t)(i * 4));
-        cJSON_AddStringToObject(instruction, "address", addr_str);
-
-        // Add instruction text
-        cJSON_AddStringToObject(instruction, "instruction", disassembly[idx]);
-
-        // If resolve_symbols is true, try to resolve symbol names
-        if (server->current_command.context.disassemble.resolve_symbols)
-        {
-            // Mock symbol resolution
-            cJSON_AddStringToObject(instruction, "symbol", "");
-        }
-
-        cJSON_AddItemToArray(instructions, instruction);
-    }
-
-    // Clean up disassembly strings
-    for (size_t i = 0; i < total_instructions; i++)
-    {
-        free(disassembly[i]);
-    }
-    free(disassembly);
 
     // Add instructions array to body
     cJSON_AddItemToObject(body, "instructions", instructions);
@@ -1211,14 +1203,21 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     }
 
     // Validate parameters
-    if (server->current_command.context.read_memory.count <= 0 ||
-        server->current_command.context.read_memory.count > 1024)
+    if (server->current_command.context.read_memory.count < 0)
     {
-        set_response_error(response, "Invalid count parameter (must be > 0 and <= 1024)");
+        set_response_error(response, "Invalid count parameter (must be >=0)");
         return -1;
     }
 
+    // Limit the count to 4096  
+    if (server->current_command.context.read_memory.count > 4096)
+    {
+        server->current_command.context.read_memory.count = 4096;
+    }
+
+    /****************** CALLBACK ******************/
     int callback_result = dap_server_execute_callback(server, DAP_CMD_READ_MEMORY);
+
 
     if (callback_result < 0)
     {
@@ -1226,14 +1225,15 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         set_response_error(response, "readMemory implementation callback failed");
         return -1;
     }
+    /****************** END CALLBACK ******************/
+
 
     // Default implementation if no callback is registered
     // This will be a mock implementation that returns dummy data
     // Get the memory reference value directly (it's already a uint32_t)
-    uint32_t address = server->current_command.context.read_memory.memory_reference;
-
+    
     // Apply offset to address
-    address += (uint32_t)server->current_command.context.read_memory.offset;
+    int address = server->current_command.context.read_memory.memory_reference + server->current_command.context.read_memory.offset;
 
     // Create response body
     cJSON *body = cJSON_CreateObject();
@@ -1245,41 +1245,19 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
 
     // Format address as a string (per DAP spec)
     char address_str[32];
-    snprintf(address_str, sizeof(address_str), "0x%08x", address);
+    snprintf(address_str, sizeof(address_str), "%06o", address);
     cJSON_AddStringToObject(body, "address", address_str);
 
-    // Create fake data - a repeating pattern based on the address
-    size_t count = server->current_command.context.read_memory.count;
-    uint8_t *data = malloc(count);
-    if (!data)
+
+    if (server->current_command.context.read_memory.base64_data)
     {
-        cJSON_Delete(body);
-        set_response_error(response, "Failed to allocate memory for data");
-        return -1;
+        cJSON_AddStringToObject(body, "data", server->current_command.context.read_memory.base64_data);
+        free(server->current_command.context.read_memory.base64_data);
+        server->current_command.context.read_memory.base64_data = NULL;
     }
-
-    // Fill with a simple pattern
-    for (size_t i = 0; i < count; i++)
-    {
-        data[i] = (uint8_t)((address + i) & 0xFF);
-    }
-
-    // Encode as base64
-    char *encoded = base64_encode(data, count);
-    free(data);
-
-    if (!encoded)
-    {
-        cJSON_Delete(body);
-        set_response_error(response, "Failed to encode data as base64");
-        return -1;
-    }
-
-    cJSON_AddStringToObject(body, "data", encoded);
-    free(encoded);
 
     // Add unreadableBytes = 0 (all bytes were readable)
-    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
+    cJSON_AddNumberToObject(body, "unreadableBytes", server->current_command.context.read_memory.unreadable_bytes);
 
     // Set success response
     set_response_success(response, body);
@@ -1492,8 +1470,21 @@ int handle_configuration_done(DAPServer *server, cJSON *args, DAPResponse *respo
 
     if (!response)
         return -1;
-    response->success = true;
-    response->data = strdup("{}");
+
+    // Set the command type for the callback
+    server->current_command.type = DAP_CMD_CONFIGURATION_DONE;
+
+    // Call the implementation callback if registered
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_CONFIGURATION_DONE);
+    if (callback_result < 0) {        
+        set_response_error(response, "configurationDone implementation callback failed");
+        return -1;
+    }
+
+    // Set success response - no body needed as per spec        
+    response->data = NULL;
+    set_response_success(response, NULL);
+
     return 0;
 }
 
@@ -2149,7 +2140,7 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         // Add optional instruction pointer reference if available
-        if (frame_data->instruction_pointer_reference > 0)
+        if (frame_data->instruction_pointer_reference >= 0)
         {
             char ref_str[32];
             snprintf(ref_str, sizeof(ref_str), "0x%x", frame_data->instruction_pointer_reference);
@@ -2339,6 +2330,40 @@ int handle_scopes(DAPServer *server, cJSON *args, DAPResponse *response)
     return 0;
 }
 
+
+FormatOptions parse_format_options(cJSON *format) {
+    FormatOptions opts = {0}; // All flags default to 0
+
+    if (!cJSON_IsObject(format)) return opts;
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "hex")))
+        opts.hex = cJSON_IsTrue(cJSON_GetObjectItem(format, "hex"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "decimal")))
+        opts.decimal = cJSON_IsTrue(cJSON_GetObjectItem(format, "decimal"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "binary")))
+        opts.binary = cJSON_IsTrue(cJSON_GetObjectItem(format, "binary"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "octal")))
+        opts.octal = cJSON_IsTrue(cJSON_GetObjectItem(format, "octal"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "showHex")))
+        opts.showHex = cJSON_IsTrue(cJSON_GetObjectItem(format, "showHex"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "variableType")))
+        opts.variableType = cJSON_IsTrue(cJSON_GetObjectItem(format, "variableType"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "includePointer")))
+        opts.includePointer = cJSON_IsTrue(cJSON_GetObjectItem(format, "includePointer"));
+
+    if (cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(format, "showRawString")))
+        opts.showRawString = cJSON_IsTrue(cJSON_GetObjectItem(format, "showRawString"));
+
+    return opts;
+}
+
+
 int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
 {
     if (!server || !args || !response)
@@ -2347,7 +2372,7 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Get the variables reference from the args
+    // Get the variables reference from the args (Required)
     cJSON *vars_ref_json = cJSON_GetObjectItem(args, "variablesReference");
     if (!vars_ref_json || !cJSON_IsNumber(vars_ref_json))
     {
@@ -2360,145 +2385,138 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
     // Initialize the command context for variables
     server->current_command.type = DAP_CMD_VARIABLES;
     server->current_command.context.variables.variables_reference = ref;
+    server->current_command.context.variables.filter = DAP_VARIABLE_FILTER_NONE;
 
-    // Parse optional filter field
+    // Parse optional filter field (Optional)
     cJSON *filter_json = cJSON_GetObjectItem(args, "filter");
     if (filter_json && cJSON_IsString(filter_json))
     {
         const char *filter = filter_json->valuestring;
         if (strcmp(filter, "indexed") == 0)
         {
-            server->current_command.context.variables.filter = 1; // indexed
+            server->current_command.context.variables.filter = DAP_VARIABLE_FILTER_INDEXED;
         }
         else if (strcmp(filter, "named") == 0)
         {
-            server->current_command.context.variables.filter = 2; // named
+            server->current_command.context.variables.filter = DAP_VARIABLE_FILTER_NAMED;
+        }
+        else 
+        {
+            server->current_command.context.variables.filter = DAP_VARIABLE_FILTER_INVALID; // TODO: Add error handling
+            return -1;
         }
     }
 
-    // Parse optional start and count for paging
+    // Parse optional start and count for paging (Optional)
     cJSON *start_json = cJSON_GetObjectItem(args, "start");
     if (start_json && cJSON_IsNumber(start_json))
     {
         server->current_command.context.variables.start = start_json->valueint;
     }
 
+    // Parse optional count for paging (Optional)
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
     if (count_json && cJSON_IsNumber(count_json))
     {
         server->current_command.context.variables.count = count_json->valueint;
     }
 
-    // Parse optional format field
+    // Parse optional format field (Optional)
     cJSON *format_json = cJSON_GetObjectItem(args, "format");
-    if (format_json && cJSON_IsObject(format_json))
-    {
-        // Convert the format object to a string to pass to the callback
-        server->current_command.context.variables.format = cJSON_PrintUnformatted(format_json);
-    }
+    server->current_command.context.variables.format_options = parse_format_options(format_json);
 
+
+    /********************************************************************/
+    // Call the implementation callback
     int result = dap_server_execute_callback(server, DAP_CMD_VARIABLES);
     if (result != 0)
     {
-        // Free format string if allocated
-        if (server->current_command.context.variables.format)
-        {
-            free((void *)server->current_command.context.variables.format);
-            server->current_command.context.variables.format = NULL;
-        }
-
         set_response_error(response, "Variables callback failed");
         return -1;
     }
+    /********************************************************************/
 
-    // Create JSON response from the variables array filled by the callback
+    // Create response body
     cJSON *body = cJSON_CreateObject();
     if (!body)
     {
+        cleanup_command_context(server);
         set_response_error(response, "Failed to create response body");
         return -1;
     }
 
-    // Create variables array
+    // Add variables array to response
     cJSON *variables_array = cJSON_CreateArray();
     if (!variables_array)
     {
         cJSON_Delete(body);
+        cleanup_command_context(server);
         set_response_error(response, "Failed to create variables array");
         return -1;
     }
 
-    // Properly handle the variable array from the callback
-    DAPVariable *variable_array = server->current_command.context.variables.variable_array;
-    int variable_count = server->current_command.context.variables.count;
-
-    // Add each variable to the JSON response
-    if (variable_array != NULL && variable_count > 0)
+    // Add each variable to the array
+    for (int i = 0; i < server->current_command.context.variables.variable_count; i++)
     {
-        for (int i = 0; i < variable_count; i++)
+        DAPVariable *var = &server->current_command.context.variables.variable_array[i];
+        cJSON *var_obj = cJSON_CreateObject();
+        if (!var_obj)
         {
-            // Safely access each variable
-            DAPVariable *var = &variable_array[i];
-            if (var == NULL)
-                continue;
+            continue;
+        }
 
-            cJSON *variable = cJSON_CreateObject();
-            if (!variable)
-                continue;
+        // Add required fields
+        cJSON_AddStringToObject(var_obj, "name", var->name ? var->name : "UNKNOWN");
+        cJSON_AddStringToObject(var_obj, "value", var->value ? var->value : "UNKNOWN");
 
-            // Add required fields
-            if (var->name)
-            {
-                cJSON_AddStringToObject(variable, "name", var->name);
-            }
-            if (var->value)
-            {
-                cJSON_AddStringToObject(variable, "value", var->value);
-            }
-            if (var->type)
-            {
-                cJSON_AddStringToObject(variable, "type", var->type);
-            }
+        // Add optional fields if available
+        if (var->type)
+        {
+            cJSON_AddStringToObject(var_obj, "type", var->type);
+        }
 
-            // Add variablesReference (can be 0 for leaf nodes)
-            cJSON_AddNumberToObject(variable, "variablesReference", var->variables_reference);
 
-            // Add optional fields if present
-            if (var->named_variables > 0)
-            {
-                cJSON_AddNumberToObject(variable, "namedVariables", var->named_variables);
-            }
-            if (var->indexed_variables > 0)
-            {
-                cJSON_AddNumberToObject(variable, "indexedVariables", var->indexed_variables);
-            }
-            if (var->memory_reference)
-            {
-                // Format memory_reference as a hex string
-                char memory_reference_str[32];
-                snprintf(memory_reference_str, sizeof(memory_reference_str), "0x%08x", var->memory_reference);
-                cJSON_AddStringToObject(variable, "memoryReference", memory_reference_str);
-            }
-            if (var->evaluate_name)
-            {
-                cJSON_AddStringToObject(variable, "evaluateName", var->evaluate_name);
-            }
+        // variablesReference is an Required field!
+        cJSON_AddNumberToObject(var_obj, "variablesReference", var->variables_reference);
 
-            // Add presentationHint if available
-            if (var && (var->presentation_hint.has_kind ||
-                        var->presentation_hint.has_visibility ||
-                        var->presentation_hint.attributes != DAP_VARIABLE_ATTR_NONE))
-            {
+        // namedVariables is an optional field
+        if (var->named_variables > 0)
+        {
+            cJSON_AddNumberToObject(var_obj, "namedVariables", var->named_variables);
+        }
 
-                cJSON *hint = cJSON_CreateObject();
-                if (hint)
+        // indexedVariables is an optional field
+        if (var->indexed_variables > 0)
+        {
+            cJSON_AddNumberToObject(var_obj, "indexedVariables", var->indexed_variables);
+        }
+
+        // evaluateName is an optional field
+        if (var->evaluate_name)
+        {
+            cJSON_AddStringToObject(var_obj, "evaluateName", var->evaluate_name);
+        }
+
+        // memoryReference is an optional field
+        if (var->memory_reference)
+        {            
+            cJSON_AddStringToObject(var_obj, "memoryReference", var->memory_reference);
+        }
+
+        // Add presentation hint if available
+        if (var->presentation_hint.kind != DAP_VARIABLE_KIND_NONE || var->presentation_hint.visibility != DAP_VARIABLE_VISIBILITY_NONE || var->presentation_hint.attributes != DAP_VARIABLE_ATTR_NONE)
+        {
+            cJSON *hint_obj = cJSON_CreateObject();
+            if (hint_obj)
+            {
+                if (var->presentation_hint.kind != DAP_VARIABLE_KIND_NONE)
                 {
-                    // Add kind if present
-                    if (var->presentation_hint.has_kind)
+                    const char *kind_str = NULL;
+                    switch (var->presentation_hint.kind)
                     {
-                        const char *kind_str = NULL;
-                        switch (var->presentation_hint.kind)
-                        {
+                        case DAP_VARIABLE_KIND_NONE:
+                            // No kind specified, skip adding kind to hint
+                            break;
                         case DAP_VARIABLE_KIND_PROPERTY:
                             kind_str = "property";
                             break;
@@ -2532,21 +2550,21 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
                         case DAP_VARIABLE_KIND_DATABREAKPOINT:
                             kind_str = "dataBreakpoint";
                             break;
-                        default:
-                            break;
-                        }
-                        if (kind_str)
-                        {
-                            cJSON_AddStringToObject(hint, "kind", kind_str);
-                        }
                     }
-
-                    // Add visibility if present
-                    if (var->presentation_hint.has_visibility)
+                    if (kind_str)
                     {
-                        const char *visibility_str = NULL;
-                        switch (var->presentation_hint.visibility)
-                        {
+                        cJSON_AddStringToObject(hint_obj, "kind", kind_str);
+                    }
+                }
+
+                if (var->presentation_hint.visibility != DAP_VARIABLE_VISIBILITY_NONE)
+                {
+                    const char *visibility_str = NULL;
+                    switch (var->presentation_hint.visibility)
+                    {
+                        case DAP_VARIABLE_VISIBILITY_NONE:
+                            // No visibility specified, skip adding visibility to hint
+                            break;
                         case DAP_VARIABLE_VISIBILITY_PUBLIC:
                             visibility_str = "public";
                             break;
@@ -2556,101 +2574,59 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
                         case DAP_VARIABLE_VISIBILITY_PROTECTED:
                             visibility_str = "protected";
                             break;
-                        case DAP_VARIABLE_VISIBILITY_INTERNAL:
-                            visibility_str = "internal";
-                            break;
                         default:
+                            // Invalid visibility, skip adding visibility to hint
+                            DAP_SERVER_DEBUG_LOG("Invalid visibility: %d", var->presentation_hint.visibility);
                             break;
-                        }
-                        if (visibility_str)
-                        {
-                            cJSON_AddStringToObject(hint, "visibility", visibility_str);
-                        }
                     }
-
-                    // Add attributes if present
-                    if (var->presentation_hint.attributes != 0)
+                    if (visibility_str)
                     {
-                        cJSON *attributes = cJSON_CreateArray();
-                        if (attributes)
-                        {
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_STATIC)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("static"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CONSTANT)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("constant"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_READONLY)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("readOnly"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_RAWSTRING)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("rawString"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASOBJECTID)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasObjectId"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CANHAVEOBJECTID)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("canHaveObjectId"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASSIDEEFFECTS)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasSideEffects"));
-                            }
-                            if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASDATABREAKPOINT)
-                            {
-                                cJSON_AddItemToArray(attributes, cJSON_CreateString("hasDataBreakpoint"));
-                            }
-
-                            cJSON_AddItemToObject(hint, "attributes", attributes);
-                        }
+                        cJSON_AddStringToObject(hint_obj, "visibility", visibility_str);
                     }
-
-                    // Add the presentation hint to the variable
-                    cJSON_AddItemToObject(variable, "presentationHint", hint);
                 }
+
+                if (var->presentation_hint.attributes != 0)
+                {
+                    cJSON *attributes_array = cJSON_CreateArray();
+                    if (attributes_array)
+                    {
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_STATIC)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("static"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CONSTANT)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("constant"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_READONLY)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("readOnly"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_RAWSTRING)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("rawString"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASOBJECTID)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("hasObjectId"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_CANHAVEOBJECTID)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("canHaveObjectId"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASSIDEEFFECTS)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("hasSideEffects"));
+                        if (var->presentation_hint.attributes & DAP_VARIABLE_ATTR_HASDATABREAKPOINT)
+                            cJSON_AddItemToArray(attributes_array, cJSON_CreateString("hasDataBreakpoint"));
+
+                            
+                        cJSON_AddItemToObject(hint_obj, "attributes", attributes_array);
+                    }
+                }
+
+                cJSON_AddItemToObject(var_obj, "presentationHint", hint_obj);
             }
 
-            // Add this variable to the array
-            cJSON_AddItemToArray(variables_array, variable);
         }
 
-        // Add the variables array to the response body
-        cJSON_AddItemToObject(body, "variables", variables_array);
-
-        // Set the successful response
-        set_response_success(response, body);
-
-        // Clean up any allocated format string
-        if (server->current_command.context.variables.format)
-        {
-            free((void *)server->current_command.context.variables.format);
-            server->current_command.context.variables.format = NULL;
-        }
-
-        // Free the variable array if it exists
-        // Note: Since we've already constructed the JSON response with the data,
-        // we can now free the original variable array to prevent memory leaks
-        if (variable_array != NULL)
-        {
-            free_variable_array(variable_array, variable_count);
-            server->current_command.context.variables.variable_array = NULL;
-            server->current_command.context.variables.count = 0;
-        }     
+        cJSON_AddItemToArray(variables_array, var_obj);
     }
-    else {
-        // Clean up in case of no variables
-        cJSON_Delete(body);
-        cJSON_Delete(variables_array);
-    }
-   
+
+    // Add variables array to body
+    cJSON_AddItemToObject(body, "variables", variables_array);
+
+    // Set response and cleanup
+    set_response_success(response, body);
+    cleanup_command_context(server);
     return 0;
-
 }
 
 static void set_response_success(DAPResponse *response, cJSON *body)
@@ -3321,8 +3297,7 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
         cJSON_AddStringToObject(body, "memoryReference", "");
     }
 
-    set_response_success(response, body);
-    cJSON_Delete(body);
+    set_response_success(response, body);    
     return 0;
 }
 
@@ -3479,7 +3454,10 @@ void free_variable_array(DAPVariable *variables, int count)
         {
             free(variables[i].evaluate_name);
         }
-        // memory_reference is now uint32_t, no need to free it
+        if (variables[i].memory_reference)
+        {
+            free(variables[i].memory_reference);
+        }
     }
 
     // Free the array itself

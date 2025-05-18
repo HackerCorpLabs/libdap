@@ -1388,20 +1388,20 @@ static DAPVariable* add_variable_to_array(
     }
     
     // Increase the count and reallocate the array
-    server->current_command.context.variables.count++;
+    server->current_command.context.variables.variable_count++;
     server->current_command.context.variables.variable_array = realloc(
         server->current_command.context.variables.variable_array, 
-        server->current_command.context.variables.count * sizeof(DAPVariable)
+        server->current_command.context.variables.variable_count * sizeof(DAPVariable)
     );
     
     if (!server->current_command.context.variables.variable_array) {
-        server->current_command.context.variables.count--;
+        server->current_command.context.variables.variable_count--;
         return NULL;
     }
     
     // Get a pointer to the newly added variable
     DAPVariable* var = &server->current_command.context.variables.variable_array[
-        server->current_command.context.variables.count - 1
+        server->current_command.context.variables.variable_count - 1
     ];
     
     // Initialize the variable with the provided values
@@ -1430,13 +1430,13 @@ static DAPVariable* add_variable_to_array(
     
     // Handle presentation hint
     // Default initialization
-    var->presentation_hint.has_kind = false;
-    var->presentation_hint.has_visibility = false;
+    var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
+    var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_NONE;
     var->presentation_hint.attributes = DAP_VARIABLE_ATTR_NONE;
     
     // Set kind if provided
     if (kind && kind[0] != '\0') {
-        var->presentation_hint.has_kind = true;
+        var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
         
         // Map string kind to enum
         if (strcmp(kind, "property") == 0) {
@@ -1463,7 +1463,7 @@ static DAPVariable* add_variable_to_array(
             var->presentation_hint.kind = DAP_VARIABLE_KIND_DATABREAKPOINT;
         } else {
             // Unknown kind
-            var->presentation_hint.has_kind = false;
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
         }
     }
     
@@ -1486,10 +1486,8 @@ static DAPVariable* add_variable_to_array(
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CANHAVEOBJECTID;
             } else if (strcmp(attributes[i], "hasSideEffects") == 0) {
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASSIDEEFFECTS;
-            } else if (strcmp(attributes[i], "hasDataBreakpoint") == 0) {
-                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASDATABREAKPOINT;
-            } else if (strcmp(attributes[i], "hasChildren") == 0) {
-                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASCHILDREN;
+            } else if (strcmp(attributes[i], "register") == 0) {
+                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_REGISTER;
             }
         }
     }
@@ -1519,7 +1517,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "42",          // value
         "integer",     // type
         0,             // variablesReference
-        0,             // memoryReference (no memory reference for locals)
+        NULL,          // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes
@@ -1532,7 +1530,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "true",        // value
         "boolean",     // type
         0,             // variablesReference
-        0,             // memoryReference (no memory reference for locals)
+        NULL,          // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes

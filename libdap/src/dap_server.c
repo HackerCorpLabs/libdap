@@ -64,7 +64,7 @@ int dap_server_init(DAPServer *server, const DAPServerConfig *config)
 
     memcpy(&server->config, config, sizeof(DAPServerConfig));
     server->is_initialized = false; // Will be set to true after receiving initialize request
-    server->is_running = false;
+    server->is_running = true; // Will be set to false when the transport layer is stopped
     server->attached = false;
     // server->paused = false;
     server->sequence = 0;
@@ -339,7 +339,31 @@ void cleanup_command_context(DAPServer *server)
         break;
 
     case DAP_CMD_DISASSEMBLE:
-        // No longer need to free memory_reference as it's now a uint32_t
+        // Free the instructions array
+        if (server->current_command.context.disassemble.instructions)
+        {
+            for (int i = 0; i < server->current_command.context.disassemble.actual_instruction_count; i++)
+            {
+                DisassembleInstruction *instruction = &server->current_command.context.disassemble.instructions[i];
+                if (instruction->instruction)
+                {
+                    free(instruction->instruction);
+                }
+                if (instruction->symbol)
+                {
+                    free(instruction->symbol);
+                }
+                if (instruction->address)
+                {
+                    free(instruction->address);
+                }         
+            }
+            
+            free(server->current_command.context.disassemble.instructions);
+            server->current_command.context.disassemble.instructions = NULL;
+            server->current_command.context.disassemble.actual_instruction_count = 0;
+        }
+
         break;
 
     case DAP_CMD_READ_MEMORY:
@@ -355,10 +379,13 @@ void cleanup_command_context(DAPServer *server)
         break;
 
     case DAP_CMD_VARIABLES:
-        // Free format string if set
-        if (server->current_command.context.variables.format)
+        // Free variable array if set
+        if (server->current_command.context.variables.variable_array)
         {
-            free((void *)server->current_command.context.variables.format);
+            free_variable_array(server->current_command.context.variables.variable_array,
+                              server->current_command.context.variables.variable_count);
+            server->current_command.context.variables.variable_array = NULL;
+            server->current_command.context.variables.variable_count = 0;
         }
         break;
 
@@ -578,6 +605,9 @@ int dap_server_handle_request(DAPServer *server, const char *request)
                 // dap_server_send_process_event(server, "nd100x DAP", 1, true, "launch");
             }
         }
+    } else {
+        // If the command failed, send an error response
+        dap_server_send_response(server, command, response.sequence, request_seq, false, NULL);
     }
 
     // Clean up response
@@ -878,6 +908,7 @@ int dap_server_run(DAPServer *server)
         if (dap_transport_accept(server->transport) < 0)
         {
             // Not yet connected, wait for a connection
+            usleep(10000); // Sleep 10ms
             return 0;
         }
 
@@ -900,7 +931,14 @@ int dap_server_run(DAPServer *server)
     {
         if (message)
         {
+            printf("-----------------\n");
+            printf("Received message: %s\n", message);
+            printf("-----------------\n");
+
             dap_server_process_message(server, message);
+
+            printf("PROCESSED\n");
+            printf("==========================\n");
             free(message);
         }
     }

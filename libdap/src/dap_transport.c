@@ -42,7 +42,7 @@
 #include "dap_transport.h"
 #include "dap_error.h"
 
-#define DEBUG_LOG_ENABLED 0
+#define DEBUG_LOG_ENABLED 1
 
 // Debug logging macro - doesn't check transport->debuglog directly
 #define DEBUG_LOG(...) do { \
@@ -194,6 +194,30 @@ int dap_transport_accept(DAPTransport* transport) {
     }
 
     DEBUG_LOG("Waiting for client connection");
+    
+    // Set up select timeout
+    fd_set read_fds;
+    struct timeval tv;
+    FD_ZERO(&read_fds);
+    FD_SET(transport->listen_fd, &read_fds);
+    
+    // Set timeout to 100ms
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;  // 100ms in microseconds
+    
+    // Wait for connection with timeout
+    int select_result = select(transport->listen_fd + 1, &read_fds, NULL, NULL, &tv);
+    if (select_result < 0) {
+        dap_error_set(DAP_ERROR_TRANSPORT, "Select failed");
+        return -1;
+    }
+    if (select_result == 0) {
+        // Timeout occurred
+        errno = EAGAIN;
+        return -1;
+    }
+    
+    // Connection is available, accept it
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
     int client_fd = accept(transport->listen_fd, (struct sockaddr*)&client_addr, &client_len);

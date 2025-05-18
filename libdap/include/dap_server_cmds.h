@@ -121,3 +121,10 @@ void cleanup_debugger_state(DAPServer *server);
 void free_breakpoints_array(const DAPBreakpoint *breakpoints, int count);
 void free_filter_arrays(const char **filter_ids, const char **filter_conditions, int count);
 void free_variable_array(DAPVariable *variables, int count);
+
+
+/// @brief Encode data to base64
+/// @param data 
+/// @param len 
+/// @return 
+char *base64_encode(const uint8_t *data, size_t len);

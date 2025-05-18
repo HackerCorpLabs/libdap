@@ -52,6 +52,7 @@
 
 #include <dap_protocol.h>
 #include <dap_transport.h>
+#include <dap_types.h>
 
 
 // Forward declaration of DAPServer
@@ -386,16 +387,28 @@ typedef struct {
     bool restart;                   /**< Whether this disconnect is part of a restart sequence */
 } DisconnectCommandContext;
 
+
+typedef struct {
+    char *address;
+    char *instruction;
+    char *symbol;
+} DisassembleInstruction;
+
+
 /**
  * @struct DisassembleCommandContext
  * @brief Context for disassemble command
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference to the function to disassemble (required) */
-    uint32_t offset;                /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
+    int offset;                     /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
     int instruction_offset;         /**< Offset (in instructions) to add to the memory reference before disassembling (optional) */
     int instruction_count;          /**< Number of instructions to disassemble (optional, defaults to 10) */
     bool resolve_symbols;           /**< Whether to return symbols with the disassembled instructions (optional, default: false) */
+
+    // Return data
+    DisassembleInstruction *instructions;
+    int actual_instruction_count;
 } DisassembleCommandContext;
 
 /**
@@ -404,8 +417,12 @@ typedef struct {
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
-    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    int offset;                    /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
     size_t count;                   /**< Number of bytes to read (required) */
+
+    // Results - populated by the command handler
+    char *base64_data;              /**< Base64 encoded data read from memory (optional) */    
+    size_t unreadable_bytes;         /**< Number of bytes that were not readable (optional) */
 } ReadMemoryCommandContext;
 
 /**
@@ -414,7 +431,7 @@ typedef struct {
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
-    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    int offset;                    /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
     char* data;                     /**< Data to write in base64 encoding (required) */
     bool allow_partial;             /**< Whether to allow partial writes (optional) */
 
@@ -433,22 +450,6 @@ typedef struct {
     DAPScope* scopes;              /**< Array of scopes filled by callback */
     int scope_count;               /**< Number of scopes in the array */
 } ScopesCommandContext;
-
-/**
- * @struct VariablesCommandContext
- * @brief Context for variables command
- */
-typedef struct {
-    int variables_reference;        /**< The variables reference to retrieve children for (required) */
-    int filter;                     /**< Optional filter ("indexed" or "named") */
-    int start;                      /**< Optional start index for paged requests */
-    int count;                      /**< Optional number of variables to return */
-    const char* format;             /**< Optional formatting hints */
-
-     // Results  - populated by the command handler
-    DAPVariable *variable_array;       /**< Variables array to be filled by callback */
-    int variable_count;             /**< Number of variables in the array */        
-} VariablesCommandContext;
 
 /**
  * @struct SetVariableCommandContext
@@ -527,18 +528,11 @@ struct DAPServer
 {
     DAPServerConfig config;  /**< Server configuration */
     DAPTransport *transport; /**< Transport instance */
-    bool is_running;         /**< Whether server is running */
-    bool is_initialized;     /**< Whether server is initialized */
-    bool attached;           /**< Whether debugger is attached to target */        
+    bool is_running;         /**< Indicates if the servers transport layer is active */
+    bool is_initialized;     /**< Indicates if the server is initialized */
+    bool attached;           /**< Indicates if the debugger is attached to target */        
     int sequence;            /**< Current sequence number */
 
-
-    //int current_thread_id; /**< Current thread ID for execution control */
-    //int current_line;      /**< Current source line */
-    //int current_column;    /**< Current source column */
-    //int current_pc;        /**< Current program counter */
-    
-    //char *program_path;
 
     // Debugging state information structure for storing callback results
     DebuggerState debugger_state;  /**< Current debugger state, updated by callbacks */

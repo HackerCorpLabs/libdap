@@ -42,7 +42,7 @@
 #include "dap_transport.h"
 #include "dap_error.h"
 
-#define DEBUG_LOG_ENABLED 1
+#define DEBUG_LOG_ENABLED 0
 
 // Debug logging macro - doesn't check transport->debuglog directly
 #define DEBUG_LOG(...)                                                     \

@@ -36,7 +36,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <poll.h>
-#include <cjson/cJSON.h>
+#include "cJSON.h"
 #include <assert.h>
 
 #include "dap_client.h"

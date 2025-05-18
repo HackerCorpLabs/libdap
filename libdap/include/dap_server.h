@@ -499,6 +499,7 @@ typedef struct {
     int source_line;              /**< Current source line */
     int source_column;            /**< Current source column */
     bool has_stopped;             /**< Whether execution has stopped */
+    bool configuration_done;      /**< Whether the configuration is done */
     char* stop_reason;            /**< Reason for stopping (if has_stopped is true) */    
     char* stop_description;       /**< Description for stopping (if has_stopped is true) */
     int current_thread_id;        /**< Current thread ID for execution control */

@@ -1470,8 +1470,21 @@ int handle_configuration_done(DAPServer *server, cJSON *args, DAPResponse *respo
 
     if (!response)
         return -1;
-    response->success = true;
-    response->data = strdup("{}");
+
+    // Set the command type for the callback
+    server->current_command.type = DAP_CMD_CONFIGURATION_DONE;
+
+    // Call the implementation callback if registered
+    int callback_result = dap_server_execute_callback(server, DAP_CMD_CONFIGURATION_DONE);
+    if (callback_result < 0) {        
+        set_response_error(response, "configurationDone implementation callback failed");
+        return -1;
+    }
+
+    // Set success response - no body needed as per spec        
+    response->data = NULL;
+    set_response_success(response, NULL);
+
     return 0;
 }
 

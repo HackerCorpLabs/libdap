@@ -1486,8 +1486,6 @@ static DAPVariable* add_variable_to_array(
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CANHAVEOBJECTID;
             } else if (strcmp(attributes[i], "hasSideEffects") == 0) {
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASSIDEEFFECTS;
-            } else if (strcmp(attributes[i], "register") == 0) {
-                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_REGISTER;
             }
         }
     }
@@ -1517,7 +1515,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "42",          // value
         "integer",     // type
         0,             // variablesReference
-        NULL,          // memoryReference (no memory reference for locals)
+        0,             // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes
@@ -1530,7 +1528,7 @@ static void add_local_variables(DAPServer *server, char* info_message, size_t in
         "true",        // value
         "boolean",     // type
         0,             // variablesReference
-        NULL,          // memoryReference (no memory reference for locals)
+        0,             // memoryReference (no memory reference for locals)
         property_kind, // kind
         no_attributes, // attributes
         0              // num_attributes

@@ -931,14 +931,7 @@ int dap_server_run(DAPServer *server)
     {
         if (message)
         {
-            printf("-----------------\n");
-            printf("Received message: %s\n", message);
-            printf("-----------------\n");
-
             dap_server_process_message(server, message);
-
-            printf("PROCESSED\n");
-            printf("==========================\n");
             free(message);
         }
     }

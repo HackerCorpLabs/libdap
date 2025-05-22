@@ -502,7 +502,6 @@ int try_receive_message(DAPTransport *transport, char *buf, int maxlen, bool rea
         {
             return -1;
         }
-        printf("%c", smallbuf[0]);
         buf[bufcnt++] = smallbuf[0];
 
         // Detect end of header

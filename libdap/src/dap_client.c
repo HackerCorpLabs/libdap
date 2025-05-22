@@ -1607,9 +1607,7 @@ void dap_get_variables_result_free(DAPGetVariablesResult* result) {
             free(var->name);
             free(var->value);
             free(var->type);
-            // memory_reference is now uint32_t, no need to free it
             free(var->evaluate_name);
-            // presentationHint is now a struct, no need to free it
         }
         free(result->variables);
         result->variables = NULL;

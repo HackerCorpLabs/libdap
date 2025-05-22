@@ -2491,6 +2491,15 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
             cJSON_AddNumberToObject(var_obj, "indexedVariables", var->indexed_variables);
         }
 
+        // memoryReference is an optional field (is -1 if not present)
+        if (var->memory_reference >=0)
+        {
+            // send back as hex
+            char hex_str[16];
+            snprintf(hex_str, sizeof(hex_str), "0x%04x", var->memory_reference);
+            cJSON_AddStringToObject(var_obj, "memoryReference", hex_str);
+        }
+
         // evaluateName is an optional field
         if (var->evaluate_name)
         {

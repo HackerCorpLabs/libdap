@@ -194,7 +194,7 @@ typedef struct DAPVariable {
     char* name;                      /**< Variable name (required) */
     char* value;                     /**< Variable value as string (required) */
     char* type;                      /**< Type name (optional) */
-    uint32_t memory_reference;       /**< Memory address (optional) */
+    int memory_reference;            /**< Memory address (optional) */
     int variables_reference;         /**< Reference ID for querying children (0 = no children) */
     int named_variables;             /**< Number of named child variables */
     int indexed_variables;           /**< Number of indexed child variables */

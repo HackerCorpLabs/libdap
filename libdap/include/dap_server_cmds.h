@@ -128,3 +128,4 @@ void free_variable_array(DAPVariable *variables, int count);
 /// @param len 
 /// @return 
 char *base64_encode(const uint8_t *data, size_t len);
+

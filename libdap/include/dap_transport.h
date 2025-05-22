@@ -123,3 +123,4 @@ int dap_transport_connect(DAPTransport* transport);
  */
 int dap_transport_is_connected(DAPTransport* transport);
 #endif /* ND100X_DAP_TRANSPORT_H */ 
+

@@ -212,3 +212,4 @@ cJSON* dap_create_event(DAPEventType event_type, cJSON* body);
 DAPCommandType find_command_type(const char* command_str);
 
 #endif /* ND100X_DAP_PROTOCOL_H */ 
+

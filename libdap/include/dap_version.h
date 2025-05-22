@@ -55,3 +55,4 @@ int dap_version_patch(void);
 const char* dap_version_string(void);
 
 #endif /* ND100X_DAP_VERSION_H */ 
+

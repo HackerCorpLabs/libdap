@@ -118,3 +118,4 @@ char* dap_message_serialize(const DAPMessage* message);
 DAPMessage* dap_message_parse(const char* json);
 
 #endif /* ND100X_DAP_MESSAGE_H */ 
+

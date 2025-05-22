@@ -484,3 +484,4 @@ typedef struct {
 } VariablesCommandContext;
 
 #endif // DAP_TYPES_H 
+

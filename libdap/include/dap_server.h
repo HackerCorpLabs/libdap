@@ -417,12 +417,12 @@ typedef struct {
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
-    int offset;                    /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
-    size_t count;                   /**< Number of bytes to read (required) */
+    int offset;                     /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
+    int count;                      /**< Number of bytes to read (required) */
 
     // Results - populated by the command handler
     char *base64_data;              /**< Base64 encoded data read from memory (optional) */    
-    size_t unreadable_bytes;         /**< Number of bytes that were not readable (optional) */
+    size_t unreadable_bytes;        /**< Number of bytes that were not readable (optional) */
 } ReadMemoryCommandContext;
 
 /**

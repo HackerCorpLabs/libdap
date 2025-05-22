@@ -2063,7 +2063,7 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     for (int i = 0; i < server->current_command.context.stack_trace.frame_count; i++)
     {
         DAPStackFrame *frame_data = &server->current_command.context.stack_trace.frames[i];
-        if (frame_data->name && strlen(frame_data->name) > max_frame_name_len)
+        if (frame_data->name && (int)strlen(frame_data->name) > max_frame_name_len)
         {
             max_frame_name_len = strlen(frame_data->name);
         }
@@ -2495,12 +2495,6 @@ int handle_variables(DAPServer *server, cJSON *args, DAPResponse *response)
         if (var->evaluate_name)
         {
             cJSON_AddStringToObject(var_obj, "evaluateName", var->evaluate_name);
-        }
-
-        // memoryReference is an optional field
-        if (var->memory_reference)
-        {            
-            cJSON_AddStringToObject(var_obj, "memoryReference", var->memory_reference);
         }
 
         // Add presentation hint if available
@@ -3453,10 +3447,6 @@ void free_variable_array(DAPVariable *variables, int count)
         if (variables[i].evaluate_name)
         {
             free(variables[i].evaluate_name);
-        }
-        if (variables[i].memory_reference)
-        {
-            free(variables[i].memory_reference);
         }
     }
 

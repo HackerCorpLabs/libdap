@@ -804,9 +804,6 @@ static void dap_server_send_welcome_message(DAPServer *server)
         
     // Send an important welcome message
     dap_server_send_output_category(server, DAP_OUTPUT_IMPORTANT, "Connected to DAP debugger\n");
-    
-    // Also send a regular console message with version info
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Mock DAP server version 1.0\n");
 }
 
 

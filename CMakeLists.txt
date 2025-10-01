@@ -106,12 +106,35 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 if(BUILD_EXECUTABLES)
     message(STATUS "Building DAP test tools: dap_debugger and dap_mock_server")
     
-    # DAP Debugger executable
+    # DAP Debugger executable (original)
     file(GLOB DAP_DEBUGGER_SOURCES "src/dap_debugger/*.c")
+    # Exclude the threaded sources from the original debugger
+    list(FILTER DAP_DEBUGGER_SOURCES EXCLUDE REGEX ".*_thread.*")
+    list(FILTER DAP_DEBUGGER_SOURCES EXCLUDE REGEX ".*main_threaded.*")
     add_executable(dap_debugger ${DAP_DEBUGGER_SOURCES})
     target_link_libraries(dap_debugger PRIVATE dap_objects)
     # Include both libdap/include for headers and src/dap_debugger for local headers
-    target_include_directories(dap_debugger PRIVATE 
+    target_include_directories(dap_debugger PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_debugger
+        ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
+    )
+
+    # DAP Debugger Threaded executable (new)
+    set(DAP_DEBUGGER_THREADED_SOURCES
+        src/dap_debugger/dap_debugger_main_threaded.c
+        src/dap_debugger/dap_debugger_threads.c
+        src/dap_debugger/dap_client_thread.c
+        src/dap_debugger/dap_ui_thread.c
+        src/dap_debugger/dap_debugger_commands.c
+        src/dap_debugger/dap_debugger_help.c
+        src/dap_debugger/dap_debugger_ui.c
+        src/dap_debugger/dap_debugger_files.c
+        src/dap_debugger/dap_debugger.c
+        src/dap_debugger/dap_response_formatter.c
+    )
+    add_executable(dap_debugger_threaded ${DAP_DEBUGGER_THREADED_SOURCES})
+    target_link_libraries(dap_debugger_threaded PRIVATE dap_objects Threads::Threads readline)
+    target_include_directories(dap_debugger_threaded PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_debugger
         ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
     )
@@ -137,7 +160,7 @@ install(TARGETS dap_objects
 )
 
 if(BUILD_EXECUTABLES)
-    install(TARGETS dap_debugger dap_mock_server
+    install(TARGETS dap_debugger dap_debugger_threaded dap_mock_server
             RUNTIME DESTINATION bin
     )
 endif()

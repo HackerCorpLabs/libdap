@@ -19,6 +19,7 @@
 #include "dap_client.h"
 #include "dap_protocol.h"
 #include "dap_error.h"
+#include "dap_transport.h"
 #include <getopt.h>
 #include <ctype.h>
 #include <termios.h>
@@ -27,6 +28,7 @@
 #include "dap_debugger_ui.h"
 #include "dap_debugger_types.h"
 #include "dap_debugger_main.h"
+#include "dap_debugger_files.h"
 
 // Move DAP event/command macros to the very top
 #define DAP_CMD_STOPPED "stopped"
@@ -226,11 +228,13 @@ int main(int argc, char* argv[]) {
     tcsetattr(STDIN_FILENO, TCSANOW, &new_term);
     
     // Parse command line arguments
-    const char* program_file = NULL;
+    const char* input_file = NULL;  // Primary input file from user
     const char* host = DEFAULT_HOST;
     int port = DEFAULT_PORT;
     bool debug_mode = false;
-    bool stop_at_entry = false;
+    bool stop_at_entry = true;  // Default to true for debugging
+    bool auto_launch = false;
+    const char* show_disassembly = NULL;
     cJSON* program_args = NULL;
     cJSON* env_vars = NULL;
     const char* working_dir = NULL;
@@ -240,7 +244,10 @@ int main(int argc, char* argv[]) {
         {"host", required_argument, 0, 'h'},
         {"port", required_argument, 0, 'p'},
         {"stop-on-entry", no_argument, 0, 'e'},
-        {"program", required_argument, 0, 'f'},
+        {"no-stop-on-entry", no_argument, 0, 'E'},
+        {"file", required_argument, 0, 'f'},            // Primary input file
+        {"show-disassembly", required_argument, 0, 'D'}, // Disassembly mode
+        {"auto-launch", no_argument, 0, 'A'},           // Auto launch
         {"args", required_argument, 0, 'a'},
         {"env", required_argument, 0, 'v'},
         {"cwd", required_argument, 0, 'w'},
@@ -252,7 +259,7 @@ int main(int argc, char* argv[]) {
     int opt;
     int option_index = 0;
     
-    while ((opt = getopt_long(argc, argv, "h:p:ef:a:v:d:w:?", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "h:p:eEf:D:Aa:v:d:w:?", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'h':
                 host = optarg;
@@ -263,8 +270,17 @@ int main(int argc, char* argv[]) {
             case 'e':
                 stop_at_entry = true;
                 break;
+            case 'E':
+                stop_at_entry = false;
+                break;
             case 'f':
-                program_file = optarg;
+                input_file = optarg;
+                break;
+            case 'D':
+                show_disassembly = optarg;
+                break;
+            case 'A':
+                auto_launch = true;
                 break;
             case 'a': {
                 // Parse program arguments - comma-separated list
@@ -315,20 +331,44 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Check for positional program argument (backward compatibility)
-    if (optind < argc && !program_file) {
-        program_file = argv[optind];
+    // Check for positional file argument (backward compatibility)
+    if (optind < argc && !input_file) {
+        input_file = argv[optind];
     }
-    
-    if (!program_file) {
+
+    if (!input_file) {
         print_usage(argv[0]);
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         if (program_args) cJSON_Delete(program_args);
         if (env_vars) cJSON_Delete(env_vars);
         return 1;
     }
-    
-    g_program_file = program_file;  // Store program file path
+
+    // Discover related files
+    printf("Discovering files for: %s\n", input_file);
+    FileSet* files = discover_files(input_file);
+    if (!files) {
+        fprintf(stderr, "Failed to discover files for: %s\n", input_file);
+        tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
+        if (program_args) cJSON_Delete(program_args);
+        if (env_vars) cJSON_Delete(env_vars);
+        return 1;
+    }
+
+    // Print discovered files
+    print_file_set(files);
+
+    // Validate files
+    if (!validate_file_set(files)) {
+        fprintf(stderr, "File validation failed\n");
+        free_file_set(files);
+        tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
+        if (program_args) cJSON_Delete(program_args);
+        if (env_vars) cJSON_Delete(env_vars);
+        return 1;
+    }
+
+    g_program_file = files->source_file ? files->source_file : files->program_file;  // Store primary file path
     
     // Create client
     g_client = dap_client_create(host, port);
@@ -341,7 +381,7 @@ int main(int argc, char* argv[]) {
     
     g_client->debug_mode = debug_mode;
     // Store program path in client for future reference
-    g_client->program_path = strdup(program_file);
+    g_client->program_path = strdup(g_program_file);
     
     // Set shorter timeout value (5 seconds instead of default 30)
     g_client->timeout_ms = 5000;
@@ -393,10 +433,11 @@ int main(int argc, char* argv[]) {
         free(threads);
     }
     
-    // Create a launch arguments JSON object
+    // Create enhanced launch arguments JSON object
     cJSON* launch_args = cJSON_CreateObject();
     if (!launch_args) {
         fprintf(stderr, "Failed to create launch arguments\n");
+        free_file_set(files);
         DAPDisconnectResult result = {0};
         dap_client_disconnect(g_client, false, false, &result);
         dap_client_free(g_client);
@@ -405,51 +446,91 @@ int main(int argc, char* argv[]) {
         if (env_vars) cJSON_Delete(env_vars);
         return 1;
     }
-    
-    // Add the required program path parameter - specifies the executable/script to debug
-    cJSON_AddStringToObject(launch_args, "program", program_file);
-    // Set stopOnEntry parameter - controls whether debugger should pause execution at program start
+
+    // Core DAP fields
+    cJSON_AddStringToObject(launch_args, "request", "launch");
+
+    // Configuration identification
+    if (files->config_name) {
+        cJSON_AddStringToObject(launch_args, "name", files->config_name);
+    }
+    if (files->debug_type) {
+        cJSON_AddStringToObject(launch_args, "type", files->debug_type);
+    }
+
+    // File paths - send all discovered files
+    if (files->program_file) {
+        cJSON_AddStringToObject(launch_args, "program", files->program_file);
+    }
+    if (files->source_file) {
+        cJSON_AddStringToObject(launch_args, "sourceFile", files->source_file);
+    }
+    if (files->map_file) {
+        cJSON_AddStringToObject(launch_args, "mapFile", files->map_file);
+    }
+    if (files->secondary_source) {
+        cJSON_AddStringToObject(launch_args, "assemblyFile", files->secondary_source);
+    }
+
+    // Launch options (default to stop on entry for debugging)
     cJSON_AddBoolToObject(launch_args, "stopOnEntry", stop_at_entry);
-    // Set noDebug parameter - when false enables debugging features, when true runs program without debugging
+    cJSON_AddBoolToObject(launch_args, "autoLaunch", auto_launch);
     cJSON_AddBoolToObject(launch_args, "noDebug", false);
-    
-    // Add optional parameters if provided
-    if (program_args) {
-        cJSON_AddItemToObject(launch_args, "args", program_args);
+
+    // Type-specific options
+    if (files->debug_type && strcmp(files->debug_type, "ND-100 Assembly") == 0) {
+        cJSON_AddStringToObject(launch_args, "showDisassembly",
+                               show_disassembly ? show_disassembly : "always");
+        cJSON_AddNumberToObject(launch_args, "port", port);
     }
-    
-    if (env_vars) {
-        cJSON_AddItemToObject(launch_args, "env", env_vars);
-    }
-    
+
+    // Standard options
     if (working_dir) {
         cJSON_AddStringToObject(launch_args, "cwd", working_dir);
         printf("Setting working directory to: %s\n", working_dir);
     }
+    if (program_args) {
+        cJSON_AddItemToObject(launch_args, "args", program_args);
+        program_args = NULL; // Transfer ownership
+    }
+    if (env_vars) {
+        cJSON_AddItemToObject(launch_args, "env", env_vars);
+        env_vars = NULL; // Transfer ownership
+    }
     
-    // Send the launch request with all parameters
-    char* response = NULL;
-    if (dap_client_send_request(g_client, DAP_CMD_LAUNCH, launch_args, &response) != 0) {
-        fprintf(stderr, "Failed to launch program\n");
+    // Send the launch request asynchronously - don't wait for response
+    printf("Launching debuggee...\n");
+
+    // Create and send launch request without waiting for response
+    cJSON* request = cJSON_CreateObject();
+    cJSON_AddStringToObject(request, "type", "request");
+    cJSON_AddNumberToObject(request, "seq", g_client->seq++);
+    cJSON_AddStringToObject(request, "command", "launch");
+    cJSON_AddItemToObject(request, "arguments", cJSON_Duplicate(launch_args, true));
+
+    char* message_str = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+
+    if (dap_transport_send(g_client->transport, message_str) != 0) {
+        fprintf(stderr, "Failed to send launch request\n");
+        free(message_str);
         cJSON_Delete(launch_args);
+        free_file_set(files);
         DAPDisconnectResult result = {0};
         dap_client_disconnect(g_client, false, false, &result);
         dap_client_free(g_client);
         g_client = NULL;
         return 1;
     }
-    
-    if (response) {
-        // Print launch response if in debug mode
-        if (g_client->debug_mode) {
-            printf("Launch response: %s\n", response);
-        }
-        free(response);
-    }
-    
-    // Clean up launch_args (program_args and env_vars are now owned by launch_args)
+
+    free(message_str);
+    printf("Launch request sent. Processing events...\n");
+
+    // Clean up launch_args and file set
     cJSON_Delete(launch_args);
-    
+    free_file_set(files);
+    files = NULL;
+
     // Create command history
     g_history = history_create(100);
     if (!g_history) {
@@ -503,8 +584,19 @@ int main(int argc, char* argv[]) {
                     if (type && strcmp(type, "event") == 0) {
                         // Use the common event handler to log events
                         dap_client_handle_event(g_client, message);
-                        
-                        
+
+                        // Check for stopped event to notify user
+                        const char* event = cJSON_GetStringValue(cJSON_GetObjectItem(message, "event"));
+                        if (event && strcmp(event, "stopped") == 0) {
+                            const char* reason = cJSON_GetStringValue(
+                                cJSON_GetObjectItem(cJSON_GetObjectItem(message, "body"), "reason"));
+                            if (reason && strcmp(reason, "entry") == 0) {
+                                printf("\n🎯 Debuggee ready! Stopped at entry point.\n");
+                                printf("(dap) ");
+                                fflush(stdout);
+                            }
+                        }
+
                     } else if (type && strcmp(type, "response") == 0) {
                         // Process responses when they arrive
                         // This is needed to handle responses to requests sent from within the event loop

@@ -29,14 +29,18 @@
 #define ND100X_DAP_SERVER_H
 
 
+#define DEBUG_LOG_ENABLED 0
+
 // Debug logging macro
 #define DAP_SERVER_DEBUG_LOG(...)                                   \
     do                                                              \
     {                                                               \
-        fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
-        fprintf(stderr, __VA_ARGS__);                               \
-        fprintf(stderr, "\n");                                      \
-        fflush(stderr);                                             \
+        if (DEBUG_LOG_ENABLED) {                                     \
+            fprintf(stderr, "[DAP SERVER %s:%d] ", __func__, __LINE__); \
+            fprintf(stderr, __VA_ARGS__);                               \
+            fprintf(stderr, "\n");                                      \
+            fflush(stderr);                                             \
+        }                                                           \
     } while (0)
 
     
@@ -48,6 +52,7 @@
 
 #include <dap_protocol.h>
 #include <dap_transport.h>
+#include <dap_types.h>
 
 
 // Forward declaration of DAPServer
@@ -237,8 +242,7 @@ typedef struct {
 /// @brief ContinueCommandContext
 /// @brief Context for continue command
 typedef struct {
-    int thread_id;               /**< Thread ID to continue */
-    bool single_thread;          /**< Whether to continue only the specified thread */
+    int thread_id;               /**< Thread ID to continue */    
 
     ///## Return results
 
@@ -254,7 +258,7 @@ typedef struct {
     const char* source_path;           /**< Source file path */
     const char* source_name;           /**< Source file name */
     bool source_modified;              /**< Whether the source file has been modified */
-    const DAPBreakpoint* breakpoints;  /**< Array of breakpoint objects */
+    DAPBreakpoint* breakpoints;        /**< Array of breakpoint objects */
     int breakpoint_count;              /**< Number of breakpoints */
     //int* lines;                        /**< Legacy: Simple line array */
     //bool use_lines_array;              /**< Whether to use simplified lines array */
@@ -353,10 +357,10 @@ typedef struct {
  *                    Can be used for language/runtime specific options.
  */
 typedef struct {
-    const char* program_path;       /**< Path to the program to be debugged */
-    const char* source_path;        /**< Path to the source file */
-    const char* map_path;           /**< Path to the map file (for debugging symbols) */
-    const char* working_directory;  /**< Working directory for the debuggee */
+    char* program_path;       /**< Path to the program to be debugged */
+    char* source_path;        /**< Path to the source file */
+    char* map_path;           /**< Path to the map file (for debugging symbols) */
+    char* working_directory;  /**< Working directory for the debuggee */
     bool no_debug;                  /**< Whether to run without debugging support */
     bool stop_at_entry;             /**< Whether to stop at program entry point */
     char** args;                    /**< Command line arguments array */
@@ -383,16 +387,28 @@ typedef struct {
     bool restart;                   /**< Whether this disconnect is part of a restart sequence */
 } DisconnectCommandContext;
 
+
+typedef struct {
+    char *address;
+    char *instruction;
+    char *symbol;
+} DisassembleInstruction;
+
+
 /**
  * @struct DisassembleCommandContext
  * @brief Context for disassemble command
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference to the function to disassemble (required) */
-    uint32_t offset;                /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
+    int offset;                     /**< Offset (in bytes) to add to the memory reference before disassembling (optional) */
     int instruction_offset;         /**< Offset (in instructions) to add to the memory reference before disassembling (optional) */
     int instruction_count;          /**< Number of instructions to disassemble (optional, defaults to 10) */
     bool resolve_symbols;           /**< Whether to return symbols with the disassembled instructions (optional, default: false) */
+
+    // Return data
+    DisassembleInstruction *instructions;
+    int actual_instruction_count;
 } DisassembleCommandContext;
 
 /**
@@ -401,8 +417,12 @@ typedef struct {
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
-    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
-    size_t count;                   /**< Number of bytes to read (required) */
+    int offset;                     /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
+    int count;                      /**< Number of bytes to read (required) */
+
+    // Results - populated by the command handler
+    char *base64_data;              /**< Base64 encoded data read from memory (optional) */    
+    size_t unreadable_bytes;        /**< Number of bytes that were not readable (optional) */
 } ReadMemoryCommandContext;
 
 /**
@@ -411,7 +431,7 @@ typedef struct {
  */
 typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
-    uint32_t offset;                /**< Offset in bytes to add to the memory reference (optional) */
+    int offset;                    /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
     char* data;                     /**< Data to write in base64 encoding (required) */
     bool allow_partial;             /**< Whether to allow partial writes (optional) */
 
@@ -430,22 +450,6 @@ typedef struct {
     DAPScope* scopes;              /**< Array of scopes filled by callback */
     int scope_count;               /**< Number of scopes in the array */
 } ScopesCommandContext;
-
-/**
- * @struct VariablesCommandContext
- * @brief Context for variables command
- */
-typedef struct {
-    int variables_reference;        /**< The variables reference to retrieve children for (required) */
-    int filter;                     /**< Optional filter ("indexed" or "named") */
-    int start;                      /**< Optional start index for paged requests */
-    int count;                      /**< Optional number of variables to return */
-    const char* format;             /**< Optional formatting hints */
-
-     // Results  - populated by the command handler
-    DAPVariable *variable_array;       /**< Variables array to be filled by callback */
-    int variable_count;             /**< Number of variables in the array */        
-} VariablesCommandContext;
 
 /**
  * @struct SetVariableCommandContext
@@ -495,6 +499,7 @@ typedef struct {
     int source_line;              /**< Current source line */
     int source_column;            /**< Current source column */
     bool has_stopped;             /**< Whether execution has stopped */
+    bool configuration_done;      /**< Whether the configuration is done */
     char* stop_reason;            /**< Reason for stopping (if has_stopped is true) */    
     char* stop_description;       /**< Description for stopping (if has_stopped is true) */
     int current_thread_id;        /**< Current thread ID for execution control */
@@ -524,18 +529,11 @@ struct DAPServer
 {
     DAPServerConfig config;  /**< Server configuration */
     DAPTransport *transport; /**< Transport instance */
-    bool is_running;         /**< Whether server is running */
-    bool is_initialized;     /**< Whether server is initialized */
-    bool attached;           /**< Whether debugger is attached to target */        
+    bool is_running;         /**< Indicates if the servers transport layer is active */
+    bool is_initialized;     /**< Indicates if the server is initialized */
+    bool attached;           /**< Indicates if the debugger is attached to target */        
     int sequence;            /**< Current sequence number */
 
-
-    //int current_thread_id; /**< Current thread ID for execution control */
-    //int current_line;      /**< Current source line */
-    //int current_column;    /**< Current source column */
-    //int current_pc;        /**< Current program counter */
-    
-    //char *program_path;
 
     // Debugging state information structure for storing callback results
     DebuggerState debugger_state;  /**< Current debugger state, updated by callbacks */
@@ -624,14 +622,14 @@ void dap_server_cleanup(DAPServer *server);
 void dap_server_free(DAPServer *server);
 
 /**
- * @brief Start the DAP server
+ * @brief Start the DAP server and transport layer
  * @param server Server instance
  * @return 0 on success, non-zero on failure
  */
 int dap_server_start(DAPServer *server);
 
 /**
- * @brief Stop the DAP server
+ * @brief Stop the DAP server and transport layer
  * @param server Server instance
  * @return 0 on success, non-zero on failure
  */
@@ -904,4 +902,29 @@ void cleanup_command_context(DAPServer *server);
  * @brief Send a welcome message when a client connects
  */
 
+
+/**
+ * @brief Send a terminated event to the client
+ * @param server The DAP server instance
+ * @param restart Whether to restart the server
+ */
+int dap_server_send_terminated_event(DAPServer *server, bool restart);
+
+
+/**
+ * @brief Send an exited event to the client
+ * @param server The DAP server instance
+ * @param exitCode The exit code of the program
+ */
+int dap_server_send_exited_event(DAPServer *server, int exitCode);
+
+/**
+ * @brief Terminate the DAP server
+ * @param server The DAP server instance
+ * @param sig The signal to terminate the server with
+ */
+void dap_server_terminate(DAPServer *server, int sig);
+
+
 #endif // ND100X_DAP_SERVER_H
+

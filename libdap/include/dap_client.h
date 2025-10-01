@@ -419,3 +419,4 @@ int dap_client_set_exception_breakpoints(DAPClient* client,
                                        DAPSetExceptionBreakpointsResult* result);
 
 #endif /* DAP_CLIENT_H */ 
+

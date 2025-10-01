@@ -65,8 +65,6 @@ static const char* command_strings[] = {
     "readMemory",
     "writeMemory",
     "disassemble",
-    "readRegisters",
-    "writeRegisters",
     "cancel",
     "configurationDone",
     "terminateThreads",

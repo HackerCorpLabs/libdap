@@ -30,7 +30,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "dap_protocol.h"
 
 /**
  * @brief Naming Convention
@@ -70,14 +69,17 @@ typedef enum {
  */
 typedef struct DAPStackFrame {
     int id;                             ///< Unique identifier for the frame
-    char* name;                         ///< Name of the frame (function name)
+    char* name;                         ///< Name of the frame (function name) that is closest to the current instruction pointer.
+    bool valid_symbol;                  ///< Whether the name/symbol is valid
+    uint32_t symbol_entry_point;        ///< Memory address for the start of the symbol    
+
     char* source_path;                  ///< Source file path
     char* source_name;                  ///< Source file name
     int line;                           ///< Line number in the source
     int column;                         ///< Column number in the source
     int end_line;                       ///< Optional end line number
     int end_column;                     ///< Optional end column number
-    uint32_t instruction_pointer_reference;  ///< Optional instruction pointer reference (memory address)
+    int instruction_pointer_reference;  ///< Optional instruction pointer reference (memory address)
     char* module_id;                     ///< Optional module ID
     DAPStackFramePresentationHint presentation_hint; ///< Optional presentation hint
     bool can_restart;                    ///< Whether the frame can be restarted
@@ -103,6 +105,7 @@ typedef struct DAPScope {
  * @brief Variable presentation hint kind
  */
 typedef enum {
+    DAP_VARIABLE_KIND_NONE,          /**< None */
     DAP_VARIABLE_KIND_PROPERTY,      /**< Property */
     DAP_VARIABLE_KIND_METHOD,        /**< Method */
     DAP_VARIABLE_KIND_CLASS,         /**< Class */
@@ -115,6 +118,7 @@ typedef enum {
     DAP_VARIABLE_KIND_VIRTUAL,       /**< Virtual */
     DAP_VARIABLE_KIND_DATABREAKPOINT /**< Data breakpoint */
 } DAPVariableKind;
+
 
 /**
  * @brief Variable presentation attribute flags
@@ -131,19 +135,45 @@ typedef enum {
     DAP_VARIABLE_ATTR_HASOBJECTID = (1 << 4), /**< Has an associated objectId (inspector/REPL) */
     DAP_VARIABLE_ATTR_CANHAVEOBJECTID = (1 << 5), /**< Might have an objectId */
     DAP_VARIABLE_ATTR_HASSIDEEFFECTS = (1 << 6), /**< Evaluating causes side effects */
-    DAP_VARIABLE_ATTR_HASDATABREAKPOINT = (1 << 7), /**< Value is eligible for data breakpoint */
-    DAP_VARIABLE_ATTR_HASCHILDREN = (1 << 8) /**< Variable has children */
+    DAP_VARIABLE_ATTR_HASDATABREAKPOINT  = (1 << 7),  /**< Value is eligible for data breakpoint */        
 } DAPVariableAttributes;
 
+
 /**
- * @brief Variable presentation visibility
+ * @brief Presentation visibility hint for a variable, used in DAP Variable.presentationHint.
+ *
+ * This enum corresponds exactly to the allowed values in the Debug Adapter Protocol (DAP)
+ * for the `presentationHint.visibility` field in a `Variable` object.
+ *
+ * Reference:
+ * https://microsoft.github.io/debug-adapter-protocol/specification#Types_VariablePresentationHint
  */
 typedef enum {
-    DAP_VARIABLE_VISIBILITY_PUBLIC,     /**< Public visibility */
-    DAP_VARIABLE_VISIBILITY_PRIVATE,    /**< Private visibility */
-    DAP_VARIABLE_VISIBILITY_PROTECTED,  /**< Protected visibility */
-    DAP_VARIABLE_VISIBILITY_INTERNAL,   /**< Internal visibility */
-    DAP_VARIABLE_VISIBILITY_FINAL       /**< Final visibility */
+    /**
+     * No visibility hint is provided.
+     * This value should be treated as "unspecified" and excluded from the JSON output.
+     */
+    DAP_VARIABLE_VISIBILITY_NONE = 0,
+
+    /**
+     * The variable is publicly accessible (e.g., a public field or method).
+     * DAP string value: "public"
+     */
+    DAP_VARIABLE_VISIBILITY_PUBLIC,
+
+    /**
+     * The variable is privately scoped (e.g., a private member of a class).
+     * DAP string value: "private"
+     */
+    DAP_VARIABLE_VISIBILITY_PRIVATE,
+
+    /**
+     * The variable is protected (e.g., inherited access in object-oriented languages).
+     * DAP string value: "protected"
+     */
+    DAP_VARIABLE_VISIBILITY_PROTECTED
+
+    // ❌ DO NOT add other values (like "internal", "final") — not defined in DAP
 } DAPVariableVisibility;
 
 /**
@@ -152,9 +182,7 @@ typedef enum {
 typedef struct {
     DAPVariableKind kind;                /**< Kind of variable */
     DAPVariableAttributes attributes;    /**< Attribute flags */
-    DAPVariableVisibility visibility;    /**< Visibility type */
-    bool has_kind;                       /**< Whether kind is set */
-    bool has_visibility;                 /**< Whether visibility is set */
+    DAPVariableVisibility visibility;    /**< Visibility type */        
 } DAPVariablePresentationHint;
 
 /**
@@ -166,12 +194,12 @@ typedef struct DAPVariable {
     char* name;                      /**< Variable name (required) */
     char* value;                     /**< Variable value as string (required) */
     char* type;                      /**< Type name (optional) */
+    int memory_reference;            /**< Memory address (optional) */
     int variables_reference;         /**< Reference ID for querying children (0 = no children) */
     int named_variables;             /**< Number of named child variables */
     int indexed_variables;           /**< Number of indexed child variables */
     char* evaluate_name;             /**< Expression that evaluates to this variable (optional) */
-    DAPVariablePresentationHint presentation_hint; /**< UI hints (kind, attributes, visibility) */
-    uint32_t memory_reference;          /**< Memory address as int if variable represents memory (optional) */
+    DAPVariablePresentationHint presentation_hint; /**< UI hints (kind, attributes, visibility) */    
 } DAPVariable;
 
 /**
@@ -411,4 +439,49 @@ void dap_get_scopes_result_free(DAPGetScopesResult* result);
  */
 void dap_disassemble_result_free(DAPDisassembleResult* result);
 
+/**
+ * @brief Variable filter type for variables request
+ */
+typedef enum {
+    DAP_VARIABLE_FILTER_NONE = 0,    /**< No filter, return all variables */
+    DAP_VARIABLE_FILTER_INDEXED,     /**< Only return indexed variables */
+    DAP_VARIABLE_FILTER_NAMED,       /**< Only return named variables */
+    DAP_VARIABLE_FILTER_INVALID      /**< Invalid filter - give feedback to UI */
+} DAPVariableFilter;
+
+/**
+ * @brief Format options for variable values in the debugger UI
+ * 
+ * These options control how variable values are displayed in the debugger UI.
+ * Each bit represents a different formatting option that can be enabled/disabled.
+ * Multiple options can be combined using bitwise OR.
+ */
+typedef struct {
+    unsigned hex             : 1;  // Display value in hexadecimal format (e.g., 0x1A)
+    unsigned decimal         : 1;  // Display value in decimal format (e.g., 26)
+    unsigned binary          : 1;  // Display value in binary format (e.g., 0b11010)
+    unsigned octal           : 1;  // Display value in octal format (e.g., 032)
+    unsigned showHex         : 1;  // Legacy flag for hexadecimal display (deprecated, use 'hex' instead)
+    unsigned variableType    : 1;  // Show the variable's type alongside its value
+    unsigned includePointer  : 1;  // Include pointer address when displaying pointer values
+    unsigned showRawString   : 1;  // Display string values without escaping special characters
+} FormatOptions;
+
+/**
+ * @struct VariablesCommandContext
+ * @brief Context for variables command
+ */
+typedef struct {
+    int variables_reference;        /**< The variables reference to retrieve children for (required) */
+    DAPVariableFilter filter;       /**< Optional filter for variable type */
+    FormatOptions format_options;   /**< Optional Format options */
+    int start;                      /**< Optional start index for paged requests */
+    int count;                      /**< Optional number of variables to return */  
+
+    // Response  
+    DAPVariable *variable_array;    /**< Variables array to be filled by callback */
+    int variable_count;             /**< Number of variables in the array */        
+} VariablesCommandContext;
+
 #endif // DAP_TYPES_H 
+

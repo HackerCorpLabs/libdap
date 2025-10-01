@@ -108,3 +108,4 @@ void dap_response_cleanup(DAPResponse* response);
 #endif
 
 #endif /* DAP_ERROR_H */ 
+

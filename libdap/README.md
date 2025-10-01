@@ -77,6 +77,8 @@ typedef struct {
 
 ### Server Implementation
 
+TODO: Rewrite/update doc
+
 ```c
 // Create and configure a DAP server
 DAPServer* server = dap_server_create();

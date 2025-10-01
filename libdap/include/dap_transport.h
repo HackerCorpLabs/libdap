@@ -114,4 +114,13 @@ int dap_transport_accept(DAPTransport* transport);
  */
 int dap_transport_connect(DAPTransport* transport);
 
+
+/**
+ * @brief Check if the transport is connected
+ * 
+ * @param transport Transport instance
+ * @return int 0 on success, -1 on failure
+ */
+int dap_transport_is_connected(DAPTransport* transport);
 #endif /* ND100X_DAP_TRANSPORT_H */ 
+

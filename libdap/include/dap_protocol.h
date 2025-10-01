@@ -99,6 +99,7 @@ typedef enum {
     //---
     DAP_WAIT_FOR_DEBUGGER,         ///Always called before any other DAP command to wait for the debugger to be ready for access to CPU registers and memory
     DAP_RELEASE_DEBUGGER,          ///Always called after all DAP commands to release the debugger
+    DAP_CHECK_CPU_EVENTS,          ///Check if any CPU events have occurred
     //--
     DAP_CMD_MAX         
 } DAPCommandType;
@@ -211,3 +212,4 @@ cJSON* dap_create_event(DAPEventType event_type, cJSON* body);
 DAPCommandType find_command_type(const char* command_str);
 
 #endif /* ND100X_DAP_PROTOCOL_H */ 
+

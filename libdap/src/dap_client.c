@@ -36,7 +36,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <poll.h>
-#include <cjson/cJSON.h>
+#include "cJSON.h"
 #include <assert.h>
 
 #include "dap_client.h"
@@ -1607,9 +1607,7 @@ void dap_get_variables_result_free(DAPGetVariablesResult* result) {
             free(var->name);
             free(var->value);
             free(var->type);
-            // memory_reference is now uint32_t, no need to free it
             free(var->evaluate_name);
-            // presentationHint is now a struct, no need to free it
         }
         free(result->variables);
         result->variables = NULL;
@@ -1710,12 +1708,16 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
             var->memory_reference = (uint32_t)mem_ref_val;
         }
 
+        var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;            
+        var->presentation_hint.attributes = DAP_VARIABLE_ATTR_NONE;
+        var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_NONE;
+
         cJSON* presentation_hint = cJSON_GetObjectItem(variable_item, "presentationHint");
         if (presentation_hint) {
             // Parse presentation hint as an object according to DAP spec
             cJSON* kind = cJSON_GetObjectItem(presentation_hint, "kind");
             if (kind && cJSON_IsString(kind)) {
-                var->presentation_hint.has_kind = true;
+                var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE; // When no kind is present
                 
                 // Map the kind string to our enum
                 const char* kind_str = kind->valuestring;
@@ -1768,10 +1770,8 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
                             var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CANHAVEOBJECTID;
                         } else if (strcmp(attr_str, "hasSideEffects") == 0) {
                             var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASSIDEEFFECTS;
-                        } else if (strcmp(attr_str, "hasDataBreakpoint") == 0) {
+                        } else if (strcmp(attr_str, "hasDataBreakpoint") == 0) { 
                             var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASDATABREAKPOINT;
-                        } else if (strcmp(attr_str, "hasChildren") == 0) {
-                            var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASCHILDREN;
                         }
                     }
                 }
@@ -1780,7 +1780,7 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
             // Parse visibility
             cJSON* visibility = cJSON_GetObjectItem(presentation_hint, "visibility");
             if (visibility && cJSON_IsString(visibility)) {
-                var->presentation_hint.has_visibility = true;
+                
                 
                 const char* visibility_str = visibility->valuestring;
                 if (strcmp(visibility_str, "public") == 0) {
@@ -1789,19 +1789,9 @@ static int dap_parse_variables_response(cJSON* response, DAPGetVariablesResult* 
                     var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_PRIVATE;
                 } else if (strcmp(visibility_str, "protected") == 0) {
                     var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_PROTECTED;
-                } else if (strcmp(visibility_str, "internal") == 0) {
-                    var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_INTERNAL;
-                } else if (strcmp(visibility_str, "final") == 0) {
-                    var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_FINAL;
                 }
             }
-        } else {
-            // No presentation hint provided, initialize with defaults
-            var->presentation_hint.has_kind = false;
-            var->presentation_hint.has_visibility = false;
-            var->presentation_hint.attributes = DAP_VARIABLE_ATTR_NONE;
-        }
-
+        } 
         i++;
     }
 

@@ -24,12 +24,9 @@ else()
 endif()
 
 # Handle cJSON dependency more carefully
-# First try to find cJSON as a package with all possible methods
-find_package(cJSON QUIET)
-
-if(cJSON_FOUND AND TARGET cJSON::cJSON)
-    set(CJSON_METHOD "CMAKE_PACKAGE")
-    message(STATUS "Found cJSON via CMake package with target cJSON::cJSON")
+if(TARGET cjson_objects)
+    set(CJSON_METHOD "INTERNAL")
+    message(STATUS "Using internal cJSON object library")
 else()
     # Try pkg-config as an alternative
     find_package(PkgConfig QUIET)
@@ -73,8 +70,8 @@ if(UNIX)
 endif()
 
 # Handle cJSON based on detection method
-if(CJSON_METHOD STREQUAL "CMAKE_PACKAGE")
-    target_link_libraries(dap_objects PUBLIC cJSON::cJSON)
+if(CJSON_METHOD STREQUAL "INTERNAL")
+    target_link_libraries(dap_objects PUBLIC cjson_objects)
 elseif(CJSON_METHOD STREQUAL "PKG_CONFIG")
     target_include_directories(dap_objects PUBLIC ${CJSON_INCLUDE_DIRS})
     target_link_libraries(dap_objects PUBLIC ${CJSON_LIBRARIES})

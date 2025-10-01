@@ -389,6 +389,7 @@ static int handle_step_command(DAPServer *server, const char* step_type) {
     DBG_MOCK_LOG("%s", log_message);
     dap_server_send_output(server, log_message);
     
+
     // Handle different granularity types
     switch (ctx->granularity) {
         case DAP_STEP_GRANULARITY_INSTRUCTION:
@@ -437,6 +438,9 @@ static int handle_step_command(DAPServer *server, const char* step_type) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_next(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_NEXT, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "next");
 }
 
@@ -449,6 +453,9 @@ static int cmd_next(DAPServer *server) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_step_in(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_STEP_IN, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "step in");
 }
 
@@ -461,6 +468,9 @@ static int cmd_step_in(DAPServer *server) {
  * @return int 0 on success, non-zero on failure
  */
 static int cmd_step_out(DAPServer *server) {
+    dap_server_send_response(server, DAP_CMD_STEP_OUT, server->sequence++, 
+                            server->current_command.request_seq, true, NULL);
+
     return handle_step_command(server, "step out");
 }
 
@@ -1378,20 +1388,20 @@ static DAPVariable* add_variable_to_array(
     }
     
     // Increase the count and reallocate the array
-    server->current_command.context.variables.count++;
+    server->current_command.context.variables.variable_count++;
     server->current_command.context.variables.variable_array = realloc(
         server->current_command.context.variables.variable_array, 
-        server->current_command.context.variables.count * sizeof(DAPVariable)
+        server->current_command.context.variables.variable_count * sizeof(DAPVariable)
     );
     
     if (!server->current_command.context.variables.variable_array) {
-        server->current_command.context.variables.count--;
+        server->current_command.context.variables.variable_count--;
         return NULL;
     }
     
     // Get a pointer to the newly added variable
     DAPVariable* var = &server->current_command.context.variables.variable_array[
-        server->current_command.context.variables.count - 1
+        server->current_command.context.variables.variable_count - 1
     ];
     
     // Initialize the variable with the provided values
@@ -1420,13 +1430,13 @@ static DAPVariable* add_variable_to_array(
     
     // Handle presentation hint
     // Default initialization
-    var->presentation_hint.has_kind = false;
-    var->presentation_hint.has_visibility = false;
+    var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
+    var->presentation_hint.visibility = DAP_VARIABLE_VISIBILITY_NONE;
     var->presentation_hint.attributes = DAP_VARIABLE_ATTR_NONE;
     
     // Set kind if provided
     if (kind && kind[0] != '\0') {
-        var->presentation_hint.has_kind = true;
+        var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
         
         // Map string kind to enum
         if (strcmp(kind, "property") == 0) {
@@ -1453,7 +1463,7 @@ static DAPVariable* add_variable_to_array(
             var->presentation_hint.kind = DAP_VARIABLE_KIND_DATABREAKPOINT;
         } else {
             // Unknown kind
-            var->presentation_hint.has_kind = false;
+            var->presentation_hint.kind = DAP_VARIABLE_KIND_NONE;
         }
     }
     
@@ -1476,10 +1486,6 @@ static DAPVariable* add_variable_to_array(
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_CANHAVEOBJECTID;
             } else if (strcmp(attributes[i], "hasSideEffects") == 0) {
                 var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASSIDEEFFECTS;
-            } else if (strcmp(attributes[i], "hasDataBreakpoint") == 0) {
-                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASDATABREAKPOINT;
-            } else if (strcmp(attributes[i], "hasChildren") == 0) {
-                var->presentation_hint.attributes |= DAP_VARIABLE_ATTR_HASCHILDREN;
             }
         }
     }
@@ -1562,9 +1568,9 @@ static void add_register_variables(DAPServer *server, char* info_message, size_t
         // Format value based on type
         char value_str[32];
         if (strcmp(cpu_registers[i].type, "integer") == 0) {
-            snprintf(value_str, sizeof(value_str), "0x%04X", cpu_registers[i].value);
+            snprintf(value_str, sizeof(value_str), "%06o", cpu_registers[i].value);
         } else if (strcmp(cpu_registers[i].type, "bitmask") == 0) {
-            snprintf(value_str, sizeof(value_str), "0b%04X", cpu_registers[i].value);
+            snprintf(value_str, sizeof(value_str), "%06o", cpu_registers[i].value);
         } else {
             snprintf(value_str, sizeof(value_str), "%o", cpu_registers[i].value);
         }
@@ -1708,12 +1714,11 @@ int dbg_mock_start(void) {
     if (!mock_debugger.server) {
         return -1;
     }
-    
+   
     int result = dap_server_start(mock_debugger.server);
     if (result != 0) {
         return result;
-    }
-    
+    }    
     // Set up a hook to detect when a client connects
     // The original transport accept function accepts the connection
     DAPTransport *transport = mock_debugger.server->transport;
@@ -1722,7 +1727,7 @@ int dbg_mock_start(void) {
     // Monitor for client connections in a non-blocking way
     mock_debugger.client_connected = false;
     
-    return result;
+    return 0;
 }
 
 void dbg_mock_stop(void) {

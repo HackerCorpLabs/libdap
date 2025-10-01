@@ -110,10 +110,14 @@ int main(int argc, char* argv[]) {
         
     // Run the server's message processing loop with our custom handler
     // that sends welcome messages
-    if (dap_server_run(mock_debugger.server) != 0) {
-        fprintf(stderr, "Error: Server message loop failed.\n");
-        dbg_mock_cleanup();
-        return EXIT_FAILURE;
+    while (mock_debugger.server->is_running) {
+        if (dap_server_run(mock_debugger.server) != 0) {
+            fprintf(stderr, "Error: Server message loop failed.\n");
+            dbg_mock_cleanup();
+            return EXIT_FAILURE;
+        }
+        // sleep for 10ms to avoid busy-waiting
+        usleep(10000);
     }
     
     // This point is never reached due to signal handler,

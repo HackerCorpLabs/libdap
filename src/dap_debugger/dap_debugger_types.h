@@ -22,9 +22,10 @@ typedef enum {
 
 typedef struct {
     // Command identification
-    const char* name;           // Primary command name
-    const char* alias;          // Command alias (e.g., 'q' for 'quit')
-    
+    const char* name;           // Primary DAP command name
+    const char* alias;          // User-friendly alias (e.g., 'step' for 'stepIn')
+    const char* alias2;         // Short alias (e.g., 's' for 'stepIn')
+
     // Help information
     const char* syntax;         // Command syntax (e.g., "break <line> [file]")
     const char* description;    // Brief description

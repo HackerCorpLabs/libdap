@@ -38,11 +38,16 @@ void print_shell_help(void) {
     printf("Quick Reference:\n");
     printf("---------------\n");
     for (int i = 0; commands[i].name; i++) {
+        if (!commands[i].implemented) continue;
         printf("  %-15s", commands[i].name);
-        if (commands[i].alias) {
-            printf("(%s)", commands[i].alias);
+        if (commands[i].alias || commands[i].alias2) {
+            printf("(");
+            if (commands[i].alias2) printf("%s", commands[i].alias2);
+            if (commands[i].alias && commands[i].alias2) printf(",");
+            if (commands[i].alias) printf("%s", commands[i].alias);
+            printf(")");
         } else {
-            printf("    ");
+            printf("     ");
         }
         printf(" %s\n", commands[i].description);
     }
@@ -52,7 +57,7 @@ void print_shell_help(void) {
     for (CommandCategory category = 0; category < CATEGORY_COUNT; category++) {
         bool has_commands = false;
         for (int i = 0; commands[i].name; i++) {
-            if (commands[i].category == category) {
+            if (commands[i].category == category && commands[i].implemented) {
                 has_commands = true;
                 break;
             }
@@ -64,12 +69,16 @@ void print_shell_help(void) {
         printf("%s\n", str_repeat('-', strlen(category_name) + 10));
         
         for (int i = 0; commands[i].name; i++) {
-            if (commands[i].category == category) {
+            if (commands[i].category == category && commands[i].implemented) {
                 printf("  %-15s", commands[i].name);
-                if (commands[i].alias) {
-                    printf("(%s)", commands[i].alias);
+                if (commands[i].alias || commands[i].alias2) {
+                    printf("(");
+                    if (commands[i].alias2) printf("%s", commands[i].alias2);
+                    if (commands[i].alias && commands[i].alias2) printf(",");
+                    if (commands[i].alias) printf("%s", commands[i].alias);
+                    printf(")");
                 } else {
-                    printf("    ");
+                    printf("     ");
                 }
                 printf(" %s\n", commands[i].description);
             }
@@ -89,6 +98,9 @@ const DebuggerCommand* find_command(const char* name) {
             return &commands[i];
         }
         if (commands[i].alias && strcasecmp(commands[i].alias, name) == 0) {
+            return &commands[i];
+        }
+        if (commands[i].alias2 && strcasecmp(commands[i].alias2, name) == 0) {
             return &commands[i];
         }
     }
@@ -112,6 +124,14 @@ const DebuggerCommand* find_command(const char* name) {
                 return NULL;
             }
         }
+        if (commands[i].alias2 && strncasecmp(commands[i].alias2, name, strlen(name)) == 0) {
+            if (!partial_match) {
+                partial_match = &commands[i];
+            } else {
+                // Multiple matches found
+                return NULL;
+            }
+        }
     }
     
     return partial_match;
@@ -124,10 +144,14 @@ void print_command_help(const char* command_name) {
         return;
     }
 
-    // Print command name and alias
+    // Print command name and aliases
     printf("\nCommand: %s", cmd->name);
-    if (cmd->alias) {
-        printf(" (alias: %s)", cmd->alias);
+    if (cmd->alias || cmd->alias2) {
+        printf(" (aliases: ");
+        if (cmd->alias2) printf("%s", cmd->alias2);
+        if (cmd->alias && cmd->alias2) printf(", ");
+        if (cmd->alias) printf("%s", cmd->alias);
+        printf(")");
     }
     printf("\n");
 
@@ -187,4 +211,42 @@ void print_command_help(const char* command_name) {
     if (cmd->events) {
         printf("\nRelated Events:\n%s\n", cmd->events);
     }
-} 
+
+    // Print implementation status
+    printf("\nImplemented: %s\n", cmd->implemented ? "Yes" : "No");
+}
+
+void print_unsupported_commands(void) {
+    printf("\nUnsupported DAP Commands:\n");
+    printf("========================\n\n");
+
+    bool found_unsupported = false;
+    for (CommandCategory category = 0; category < CATEGORY_COUNT; category++) {
+        bool has_unsupported = false;
+        for (int i = 0; commands[i].name; i++) {
+            if (commands[i].category == category && !commands[i].implemented) {
+                has_unsupported = true;
+                break;
+            }
+        }
+        if (!has_unsupported) continue;
+
+        const char* category_name = category_to_text(category);
+        printf("%s Commands:\n", category_name);
+        printf("%s\n", str_repeat('-', strlen(category_name) + 10));
+
+        for (int i = 0; commands[i].name; i++) {
+            if (commands[i].category == category && !commands[i].implemented) {
+                printf("  %-15s %s\n", commands[i].name, commands[i].description);
+                found_unsupported = true;
+            }
+        }
+        printf("\n");
+    }
+
+    if (!found_unsupported) {
+        printf("All defined DAP commands are implemented!\n");
+    }
+
+    printf("Note: These commands are defined in the DAP specification but not yet implemented in this debugger.\n");
+}

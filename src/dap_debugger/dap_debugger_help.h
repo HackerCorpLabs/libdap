@@ -23,6 +23,9 @@ const DebuggerCommand* find_command(const char* name);
 // Print detailed help for a command
 void print_command_help(const char* command_name);
 
+// Print unsupported commands
+void print_unsupported_commands(void);
+
 // Command handler for help command
 int handle_help_command(DAPClient* client, const char* args);
 

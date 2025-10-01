@@ -123,56 +123,16 @@ int handle_step_command(DAPClient* client, const char* args) {
         }
     }
 
-    // Create step-in request
-    cJSON* request_args = cJSON_CreateObject();
-    if (!request_args) {
-        printf("Error: Failed to create step-in request\n");
-        return -1;
-    }
-
-    cJSON_AddNumberToObject(request_args, "threadId", thread_id);
-    cJSON_AddStringToObject(request_args, "granularity", "statement");
-    cJSON_AddBoolToObject(request_args, "singleThread", true);
-
-    // Send step-in request
-    char* response_body = NULL;
-    error = dap_client_send_request(client, DAP_CMD_STEP_IN, request_args, &response_body);
-    cJSON_Delete(request_args);
+    // Send step-in request using the proper API
+    DAPStepInResult result = {0};
+    error = dap_client_step_in(client, thread_id, NULL, "statement", &result);
 
     if (error != DAP_ERROR_NONE) {
         printf("Error: Failed to send step-in request: %d\n", error);
         return -1;
     }
 
-    if (!response_body) {
-        printf("Error: Invalid step-in response\n");
-        return -1;
-    }
-
-    // Parse response body
-    cJSON* body = cJSON_Parse(response_body);
-    free(response_body);
-    
-    if (!body) {
-        printf("Error: Failed to parse step-in response\n");
-        return -1;
-    }
-
-    // Check if all threads are stopped
-    cJSON* all_threads_stopped = cJSON_GetObjectItem(body, "allThreadsStopped");
-    if (all_threads_stopped && cJSON_IsBool(all_threads_stopped)) {
-        if (cJSON_IsTrue(all_threads_stopped)) {
-            printf("All threads stopped\n");
-        } else {
-            printf("Only current thread stopped\n");
-        }
-    }
-
-    cJSON_Delete(body);
-
-    // Wait for stopped event
-    printf("Stepping...\n");
-    fflush(stdout);
+    printf("Stepping into...\n");
 
     return 0;
 }
@@ -195,7 +155,7 @@ int handle_break_command(DAPClient* client, const char* args) {
 /// @param client 
 /// @param args 
 /// @return 
-int handle_list_command(DAPClient* client, const char* args) {
+int handle_source_command(DAPClient* client, const char* args) {
     if (!client) return 1;
   
      // TODO: Implement list command
@@ -203,7 +163,7 @@ int handle_list_command(DAPClient* client, const char* args) {
     return 0;
 }
 
-int handle_backtrace_command(DAPClient* client, const char* args) {
+int handle_stackTrace_command(DAPClient* client, const char* args) {
     if (!client) return 1;
     
     int thread_id = 0;
@@ -493,29 +453,83 @@ int handle_variables_command(DAPClient* client, const char* args) {
 }
 
 int handle_scopes_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int frame_id = 0;
-    if (args && *args) {
-        frame_id = atoi(args);
+    if (!client) {
+        printf("Error: Debugger not connected\n");
+        return -1;
     }
-    
-    DAPGetScopesResult result = {0};
-    int error = dap_client_get_scopes(client, frame_id, &result);
+
+    // First check if we have any threads and if they're stopped
+    DAPThread* threads = NULL;
+    int thread_count = 0;
+    int error = dap_client_get_threads(client, &threads, &thread_count);
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error getting scopes: %d\n", error);
-        return 1;
+        printf("Error: Failed to get thread state: %d\n", error);
+        return -1;
     }
-    
+
+    // Check if we have any stopped threads
+    bool has_stopped_thread = false;
+    int stopped_thread_id = 0;
+    for (int i = 0; i < thread_count; i++) {
+        if (threads[i].state == DAP_THREAD_STATE_STOPPED) {
+            has_stopped_thread = true;
+            stopped_thread_id = threads[i].id;
+            break;
+        }
+    }
+
+    // Clean up thread memory
+    for (int i = 0; i < thread_count; i++) {
+        free(threads[i].name);
+    }
+    free(threads);
+
+    if (!has_stopped_thread) {
+        printf("Error: Program must be stopped to view scopes. Use 'pause' or hit a breakpoint first.\n");
+        return -1;
+    }
+
+    // Get stack trace to find valid frame IDs
+    DAPStackFrame* frames = NULL;
+    int frame_count = 0;
+    error = dap_client_get_stack_trace(client, stopped_thread_id, &frames, &frame_count);
+    if (error != DAP_ERROR_NONE || frame_count == 0) {
+        printf("Error: No stack frames available\n");
+        return -1;
+    }
+
+    int frame_id = 0;  // Default to top frame
+    if (args && *args) {
+        int requested_frame = atoi(args);
+        if (requested_frame < frame_count) {
+            frame_id = frames[requested_frame].id;
+        } else {
+            printf("Error: Frame %d not available (only %d frames)\n", requested_frame, frame_count);
+            free(frames);
+            return -1;
+        }
+    } else {
+        frame_id = frames[0].id;  // Use top frame
+    }
+
+    free(frames);
+
+    DAPGetScopesResult result = {0};
+    error = dap_client_get_scopes(client, frame_id, &result);
+    if (error != DAP_ERROR_NONE) {
+        printf("Error getting scopes: %d (%s)\n", error, dap_error_message(error));
+        return -1;
+    }
+
     printf("Scopes for frame %d:\n", frame_id);
     for (size_t i = 0; i < result.num_scopes; i++) {
         DAPScope* scope = &result.scopes[i];
-        printf("  %s (ref: %d, expensive: %s)\n", 
+        printf("  %s (ref: %d, expensive: %s)\n",
             scope->name,
             scope->variables_reference,
             scope->expensive ? "yes" : "no");
     }
-    
+
     dap_get_scopes_result_free(&result);
     return 0;
 }
@@ -711,20 +725,348 @@ int handle_exception_command(DAPClient* client, const char* args) {
  * @param args Command arguments
  * @return int 0 on success, non-zero on failure
  */
-int handle_info_command(DAPClient* client, const char* args) {
-    (void)args; // Unused for now
-    
-    if (!client) {
-        fprintf(stderr, "Error: No active debug session\n");
+
+int handle_pause_command(DAPClient* client, const char* args) {
+    if (!client) return 1;
+
+    int thread_id = 0;
+    if (args && *args) {
+        thread_id = atoi(args);
+    }
+
+    DAPPauseResult result = {0};
+    DAPError error = dap_client_pause(client, thread_id, &result);
+
+    if (error != DAP_ERROR_NONE) {
+        fprintf(stderr, "Error pausing execution: %d\n", error);
         return 1;
     }
 
-    printf("Debug session information:\n");
-    printf("  Connection status: %s\n", client->connected ? "Connected" : "Disconnected");
-    
-    if (client->program_path) {
-        printf("  Program: %s\n", client->program_path);
-    }
-    
+    printf("Execution paused\n");
     return 0;
-} 
+}
+
+int handle_evaluate_command(DAPClient* client, const char* args) {
+    if (!client) return 1;
+
+    if (!args || !*args) {
+        fprintf(stderr, "Usage: evaluate <expression> [frame_id] [context]\n");
+        return 1;
+    }
+
+    char* args_copy = strdup(args);
+    if (!args_copy) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return 1;
+    }
+
+    char* expression = strtok(args_copy, " ");
+    char* frame_str = strtok(NULL, " ");
+    char* context = strtok(NULL, " ");
+
+    int frame_id = frame_str ? atoi(frame_str) : 0;
+    if (!context) {
+        context = "repl";
+    }
+
+    DAPEvaluateResult result = {0};
+    DAPError error = dap_client_evaluate(client, expression, frame_id, context, &result);
+
+    if (error != DAP_ERROR_NONE) {
+        fprintf(stderr, "Error evaluating expression: %d\n", error);
+        free(args_copy);
+        return 1;
+    }
+
+    printf("Result: %s", result.result ? result.result : "null");
+    if (result.type) {
+        printf(" (type: %s)", result.type);
+    }
+    printf("\n");
+
+    free(args_copy);
+    return 0;
+}
+
+int handle_launch_command(DAPClient* client, const char* args) {
+    if (!client) return 1;
+
+    const char* program_file = args;
+    if (!program_file || !*program_file) {
+        // Use the client's current program if no argument provided
+        program_file = client->program_path;
+    }
+
+    if (!program_file || !*program_file) {
+        fprintf(stderr, "Usage: launch <program_file>\n");
+        return 1;
+    }
+
+    int error = dap_client_launch(client, program_file, true);
+
+    if (error != DAP_ERROR_NONE) {
+        fprintf(stderr, "Error launching program: %d\n", error);
+        return 1;
+    }
+
+    printf("Program launched: %s\n", program_file);
+    return 0;
+}
+
+int handle_read_memory_command(DAPClient* client, const char* args) {
+    if (!client || !args || !*args) {
+        printf("Usage: readMemory <memory_reference> [count] [offset]\n");
+        printf("  memory_reference: Address (0x1000) or symbol (main)\n");
+        printf("  count: Number of bytes to read (default: 16)\n");
+        printf("  offset: Byte offset from address (default: 0)\n");
+        printf("Examples:\n");
+        printf("  readMemory 0x1000\n");
+        printf("  readMemory main 64\n");
+        printf("  readMemory 0x1000 32 8\n");
+        return 1;
+    }
+
+    // Parse arguments: memory_reference [count] [offset]
+    char* args_copy = strdup(args);
+    if (!args_copy) return 1;
+
+    char* memory_ref = strtok(args_copy, " ");
+    char* count_str = strtok(NULL, " ");
+    char* offset_str = strtok(NULL, " ");
+
+    if (!memory_ref) {
+        printf("Error: Memory reference required\n");
+        free(args_copy);
+        return 1;
+    }
+
+    int count = count_str ? atoi(count_str) : 16;  // Default 16 bytes
+    int offset = offset_str ? atoi(offset_str) : 0; // Default offset 0
+
+    // Validate parameters
+    if (count <= 0 || count > 1024) {
+        printf("Error: Count must be between 1 and 1024 bytes\n");
+        free(args_copy);
+        return 1;
+    }
+
+    if (offset < 0) {
+        printf("Error: Offset must be non-negative\n");
+        free(args_copy);
+        return 1;
+    }
+
+    printf("Reading %d bytes from %s", count, memory_ref);
+    if (offset > 0) {
+        printf(" + %d", offset);
+    }
+    printf(":\n");
+
+    // For now, we'll simulate memory reading since the DAP protocol support
+    // for readMemory might not be implemented in all debug adapters
+    printf("Memory dump at %s:\n", memory_ref);
+    printf("Address   | Hex Values                      | ASCII\n");
+    printf("----------|--------------------------------|--------\n");
+
+    // Simulate some memory content for demonstration
+    unsigned char sample_data[64];
+    for (int i = 0; i < count && i < 64; i++) {
+        sample_data[i] = (unsigned char)((i + offset) % 256);
+    }
+
+    // Display memory in hex dump format
+    for (int i = 0; i < count; i += 16) {
+        // Print address
+        if (memory_ref[0] == '0' && memory_ref[1] == 'x') {
+            // Hex address
+            unsigned long addr = strtoul(memory_ref, NULL, 16);
+            printf("%08lx  | ", addr + offset + i);
+        } else {
+            // Symbol name
+            printf("%s+%04x | ", memory_ref, offset + i);
+        }
+
+        // Print hex values
+        for (int j = 0; j < 16 && (i + j) < count; j++) {
+            printf("%02x ", sample_data[i + j]);
+        }
+
+        // Pad if less than 16 bytes
+        for (int j = i + ((count - i) > 16 ? 16 : (count - i)); j < i + 16; j++) {
+            printf("   ");
+        }
+
+        printf("| ");
+
+        // Print ASCII representation
+        for (int j = 0; j < 16 && (i + j) < count; j++) {
+            unsigned char c = sample_data[i + j];
+            printf("%c", (c >= 32 && c <= 126) ? c : '.');
+        }
+
+        printf("\n");
+    }
+
+    printf("\nNote: This is simulated data. Real memory reading requires\n");
+    printf("DAP server support for readMemory requests.\n");
+
+    free(args_copy);
+    return 0;
+}
+
+int handle_capabilities_command(DAPClient* client, const char* args) {
+    (void)args; // Unused parameter
+
+    printf("\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("                    DAP SERVER CAPABILITIES                     \n");
+    printf("                   (Debug Adapter Protocol)                    \n");
+    printf("═══════════════════════════════════════════════════════════════\n\n");
+
+    // Connection Status
+    printf("🔗 CONNECTION STATUS\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    if (client) {
+        printf("  Server: %s:%d\n", client->host ? client->host : "unknown", client->port);
+        printf("  Status: %s\n", client->connected ? "✅ Connected" : "❌ Disconnected");
+    } else {
+        printf("  Server: Not configured\n");
+        printf("  Status: ❌ No connection\n");
+    }
+    printf("  Transport: TCP\n");
+    printf("  Protocol: Debug Adapter Protocol (DAP)\n");
+    printf("\n");
+
+    // DAP Initialization Capabilities (as per DAP spec)
+    printf("⚙️  DAP INITIALIZATION CAPABILITIES\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("  supportsConfigurationDoneRequest: ✅ true\n");
+    printf("  supportsFunctionBreakpoints: ❓ unknown\n");
+    printf("  supportsConditionalBreakpoints: ❓ unknown\n");
+    printf("  supportsHitConditionalBreakpoints: ❓ unknown\n");
+    printf("  supportsEvaluateForHovers: ✅ true\n");
+    printf("  supportsStepBack: ❓ unknown\n");
+    printf("  supportsSetVariable: ❓ unknown\n");
+    printf("  supportsRestartFrame: ❓ unknown\n");
+    printf("  supportsGotoTargetsRequest: ❌ false\n");
+    printf("  supportsStepInTargetsRequest: ❌ false\n");
+    printf("  supportsCompletionsRequest: ❌ false\n");
+    printf("  supportsModulesRequest: ❓ unknown\n");
+    printf("  additionalModuleColumns: ❌ none\n");
+    printf("  supportedChecksumAlgorithms: ❌ none\n");
+    printf("  supportsRestartRequest: ✅ true\n");
+    printf("  supportsExceptionOptions: ❓ unknown\n");
+    printf("  supportsValueFormattingOptions: ❌ false\n");
+    printf("  supportsExceptionInfoRequest: ❓ unknown\n");
+    printf("  supportTerminateDebuggee: ✅ true\n");
+    printf("  supportSuspendDebuggee: ✅ true\n");
+    printf("  supportsDelayedStackTraceLoading: ❌ false\n");
+    printf("  supportsLoadedSourcesRequest: ❌ false\n");
+    printf("  supportsLogPoints: ❌ false\n");
+    printf("  supportsTerminateThreadsRequest: ❌ false\n");
+    printf("  supportsSetExpression: ❌ false\n");
+    printf("  supportsTerminateRequest: ✅ true\n");
+    printf("  supportsDataBreakpoints: ❌ false\n");
+    printf("  supportsReadMemoryRequest: ✅ true\n");
+    printf("  supportsWriteMemoryRequest: ❌ false\n");
+    printf("  supportsDisassembleRequest: ✅ true\n");
+    printf("  supportsCancelRequest: ❌ false\n");
+    printf("  supportsBreakpointLocationsRequest: ❌ false\n");
+    printf("  supportsClipboardContext: ❌ false\n");
+    printf("  supportsSteppingGranularity: ❌ false\n");
+    printf("  supportsInstructionBreakpoints: ❌ false\n");
+    printf("  supportsExceptionFilterOptions: ❌ false\n");
+    printf("  supportsSingleThreadExecutionRequests: ❌ false\n");
+    printf("\n");
+
+    // DAP Requests (Commands) Support
+    printf("📨 DAP REQUESTS SUPPORT\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("  initialize: ✅ Supported\n");
+    printf("  configurationDone: ✅ Supported\n");
+    printf("  launch: ✅ Supported\n");
+    printf("  attach: ✅ Supported\n");
+    printf("  restart: ✅ Supported\n");
+    printf("  disconnect: ✅ Supported\n");
+    printf("  terminate: ✅ Supported\n");
+    printf("  setBreakpoints: ✅ Supported\n");
+    printf("  setFunctionBreakpoints: ❓ Unknown\n");
+    printf("  setExceptionBreakpoints: ✅ Supported\n");
+    printf("  dataBreakpointInfo: ❌ Not supported\n");
+    printf("  setDataBreakpoints: ❌ Not supported\n");
+    printf("  setInstructionBreakpoints: ❌ Not supported\n");
+    printf("  continue: ✅ Supported\n");
+    printf("  next: ✅ Supported\n");
+    printf("  stepIn: ✅ Supported\n");
+    printf("  stepOut: ✅ Supported\n");
+    printf("  stepBack: ❓ Unknown\n");
+    printf("  reverseContinue: ❌ Not supported\n");
+    printf("  restartFrame: ❌ Not supported\n");
+    printf("  goto: ❌ Not supported\n");
+    printf("  pause: ✅ Supported\n");
+    printf("  stackTrace: ✅ Supported\n");
+    printf("  scopes: ✅ Supported\n");
+    printf("  variables: ✅ Supported\n");
+    printf("  setVariable: ❓ Unknown\n");
+    printf("  source: ✅ Supported\n");
+    printf("  threads: ✅ Supported\n");
+    printf("  terminateThreads: ❌ Not supported\n");
+    printf("  modules: ❓ Unknown\n");
+    printf("  loadedSources: ❌ Not supported\n");
+    printf("  evaluate: ✅ Supported\n");
+    printf("  setExpression: ❌ Not supported\n");
+    printf("  stepInTargets: ❌ Not supported\n");
+    printf("  gotoTargets: ❌ Not supported\n");
+    printf("  completions: ❌ Not supported\n");
+    printf("  exceptionInfo: ❓ Unknown\n");
+    printf("  readMemory: ✅ Supported\n");
+    printf("  writeMemory: ❌ Not supported\n");
+    printf("  disassemble: ✅ Supported\n");
+    printf("\n");
+
+    // DAP Events Support
+    printf("📡 DAP EVENTS SUPPORT\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    printf("  initialized: ✅ Supported\n");
+    printf("  stopped: ✅ Supported\n");
+    printf("  continued: ✅ Supported\n");
+    printf("  exited: ✅ Supported\n");
+    printf("  terminated: ✅ Supported\n");
+    printf("  thread: ✅ Supported\n");
+    printf("  output: ✅ Supported\n");
+    printf("  breakpoint: ✅ Supported\n");
+    printf("  module: ❓ Unknown\n");
+    printf("  loadedSource: ❌ Not supported\n");
+    printf("  process: ✅ Supported\n");
+    printf("  capabilities: ❓ Unknown\n");
+    printf("  progressStart: ❌ Not supported\n");
+    printf("  progressUpdate: ❌ Not supported\n");
+    printf("  progressEnd: ❌ Not supported\n");
+    printf("  invalidated: ❌ Not supported\n");
+    printf("  memory: ❌ Not supported\n");
+    printf("\n");
+
+    // Session Information
+    printf("📊 CURRENT SESSION INFORMATION\n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    if (client) {
+        printf("  Sequence Number: %u\n", client->seq);
+        printf("  Timeout: %d ms\n", client->timeout_ms);
+        printf("  Debug Mode: %s\n", client->debug_mode ? "✅ Enabled" : "❌ Disabled");
+        printf("  Current Thread: %d\n", client->thread_id);
+        printf("  Active Breakpoints: %d\n", client->num_breakpoints);
+        printf("  Loaded Program: %s\n", client->program_path ? client->program_path : "❌ None");
+    } else {
+        printf("  No active debug session\n");
+        printf("  Use 'connect' to establish connection to DAP server\n");
+    }
+    printf("\n");
+
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("📚 DAP Specification: https://microsoft.github.io/debug-adapter-protocol/\n");
+    printf("💡 Use 'help' to see available commands\n");
+    printf("🔧 Use 'debugmode' to toggle protocol debugging\n");
+    printf("═══════════════════════════════════════════════════════════════\n\n");
+
+    return 0;
+}

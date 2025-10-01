@@ -7,29 +7,42 @@
 #include "dap_debugger_help.h"
 
 void print_usage(const char* program_name) {
-    printf("Usage: %s [options] [program_file]\n", program_name);
-    printf("Options:\n");
-    printf("  -h, --host HOST           Specify the host to connect to (default: localhost)\n");
-    printf("  -p, --port PORT           Specify the port to connect to (default: 4711)\n");
-    printf("  -e, --stop-on-entry       Stop at program entry point\n");
-    printf("  -f, --program FILE        Program file to debug (alternative to positional argument)\n");
-    printf("  -a, --args ARGS           Comma-separated list of arguments for the program\n");
-    printf("  -v, --env VARS            Comma-separated list of environment variables (NAME=VALUE,...)\n");
-    printf("  -d, --cwd DIR             Working directory for the program\n");
-    printf("  -b, --break LINE          Set breakpoint at line (can be specified multiple times)\n");
-    printf("  -?, --help                Display this help message and exit\n");
-    printf("\n");
-    printf("Program file:\n");
-    printf("  The program file can be an assembly source file (.asm), binary file (.bin),\n");
-    printf("  or any other file format supported by the debugger. The server will\n");
-    printf("  automatically look for related files (binary, map) in the same directory.\n");
-    printf("\n");
-    printf("Examples:\n");
-    printf("  %s -f program.asm -h localhost -p 4711\n", program_name);
-    printf("  %s program.asm -e\n", program_name);
-    printf("  %s --program=program.asm --args=arg1,arg2,arg3\n", program_name);
-    printf("  %s --program=program.asm --env=VAR1=value1,VAR2=value2 --cwd=/tmp\n", program_name);
-    printf("  %s program.asm -b 10 -b 20\n", program_name);
+    printf("Usage: %s [options] [file]\n", program_name);
+    printf("\nUser-Friendly File Discovery:\n");
+    printf("  Just specify any file and related files will be auto-discovered:\n");
+    printf("  - For .s/.asm files: Finds .out (binary) and .map files\n");
+    printf("  - For .c/.C files: Finds .s (assembly), .out (binary) files\n");
+    printf("  - For .out/.bin files: Finds .s/.c (source) and .map files\n");
+    printf("  - Relative paths are converted to absolute paths automatically\n");
+    printf("\nConnection Options:\n");
+    printf("  -h, --host HOST           Server host (default: localhost)\n");
+    printf("  -p, --port PORT           Server port (default: 4711)\n");
+    printf("\nFile Options:\n");
+    printf("  -f, --file FILE           Primary file to debug\n");
+    printf("\nExecution Options:\n");
+    printf("  -e, --stop-on-entry       Force stop at program entry point (default)\n");
+    printf("  -E, --no-stop-on-entry    Don't stop at program entry point\n");
+    printf("  -A, --auto-launch         Enable auto-launch\n");
+    printf("  -a, --args ARGS           Program arguments (comma-separated)\n");
+    printf("  -v, --env VARS            Environment variables (NAME=VALUE,...)\n");
+    printf("  -w, --cwd DIR             Working directory\n");
+    printf("\nAssembly Options:\n");
+    printf("  -D, --show-disassembly MODE  Disassembly mode:\n");
+    printf("                            always, never, onlyWhenNoSource\n");
+    printf("\nOther Options:\n");
+    printf("  -d, --debug               Enable debug mode\n");
+    printf("  -?, --help                Show this help\n");
+    printf("\nExamples:\n");
+    printf("  # Auto-discover from hello.s (finds hello.out, hello.map)\n");
+    printf("  %s hello.s\n", program_name);
+    printf("\n  # C program debugging (finds hello.s, hello.out)\n");
+    printf("  %s hello.c\n", program_name);
+    printf("\n  # Assembly with options\n");
+    printf("  %s hello.s --stop-on-entry --show-disassembly always\n", program_name);
+    printf("\n  # Remote debugging\n");
+    printf("  %s hello.s --host 192.168.1.100 --port 4711\n", program_name);
+    printf("\n  # With program arguments\n");
+    printf("  %s hello.c --args arg1,arg2,arg3\n", program_name);
 }
 
 

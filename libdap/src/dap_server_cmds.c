@@ -1966,7 +1966,7 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
     }
     else
     {
-        server->current_command.context.stack_trace.levels = 1; // Default to 1 level
+        server->current_command.context.stack_trace.levels = 0; // Default to 0 = all levels (per DAP spec)
     }
 
     // Parse format options into our StackTraceFormat structure
@@ -2023,12 +2023,16 @@ int handle_stack_trace(DAPServer *server, cJSON *args, DAPResponse *response)
         }
     }
 
-    // Validate start_frame and levels
-    if (server->current_command.context.stack_trace.start_frame < 0 ||
-        server->current_command.context.stack_trace.levels < 1)
+    // Validate start_frame
+    if (server->current_command.context.stack_trace.start_frame < 0)
     {
-        set_response_error(response, "Invalid startFrame or levels parameter");
+        set_response_error(response, "Invalid startFrame parameter");
         return -1;
+    }
+    // Per DAP spec: levels == 0 means return all frames
+    if (server->current_command.context.stack_trace.levels == 0)
+    {
+        server->current_command.context.stack_trace.levels = 1000; // Large number = all frames
     }
 
     // Call implementation callback if registered

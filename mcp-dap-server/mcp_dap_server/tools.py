@@ -363,15 +363,19 @@ class DAPDebugger:
         self,
         variables: list[str],
         access_type: str = "write",
+        address_space: str = "virtual",
     ) -> dict[str, Any]:
         """Set data breakpoints (watchpoints)."""
         self._check_connected()
+
+        # Prefix variables with address space hint for physical mode
+        prefix = "phys:" if address_space == "physical" else ""
 
         # First get data breakpoint info for each variable
         dap_bps = []
         for var_name in variables:
             info_resp = await self.conn.send_request("dataBreakpointInfo", {
-                "name": var_name,
+                "name": f"{prefix}{var_name}",
             })
             if not info_resp.get("success"):
                 continue
@@ -392,6 +396,29 @@ class DAPDebugger:
         if "error" in err:
             return err
 
+        return {"breakpoints": fmt.format_breakpoints(response)}
+
+    async def set_function_breakpoints(
+        self,
+        names: list[str],
+        conditions: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Set breakpoints on functions by name."""
+        self._check_connected()
+
+        dap_bps = []
+        for i, name in enumerate(names):
+            bp: dict[str, Any] = {"name": name}
+            if conditions and i < len(conditions) and conditions[i]:
+                bp["condition"] = conditions[i]
+            dap_bps.append(bp)
+
+        response = await self.conn.send_request("setFunctionBreakpoints", {
+            "breakpoints": dap_bps,
+        })
+        err = self._check_response(response)
+        if "error" in err:
+            return err
         return {"breakpoints": fmt.format_breakpoints(response)}
 
     # ── Inspection ──────────────────────────────────────────────────────

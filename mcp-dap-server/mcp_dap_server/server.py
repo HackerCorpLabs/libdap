@@ -171,8 +171,21 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "variables": {"type": "array", "items": {"type": "string"}, "description": "Variable names to watch"},
                     "access_type": {"type": "string", "enum": ["read", "write", "readWrite"], "default": "write"},
+                    "address_space": {"type": "string", "enum": ["virtual", "physical"], "default": "virtual", "description": "Address space: virtual (default) or physical"},
                 },
                 "required": ["variables"],
+            },
+        ),
+        Tool(
+            name="debug_set_function_breakpoints",
+            description="Set breakpoints on functions by name. Replaces all previous function breakpoints.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "names": {"type": "array", "items": {"type": "string"}, "description": "Function names to break on"},
+                    "conditions": {"type": "array", "items": {"type": "string"}, "description": "Optional condition per breakpoint"},
+                },
+                "required": ["names"],
             },
         ),
         # Inspection
@@ -324,6 +337,12 @@ async def _dispatch(name: str, args: dict) -> dict | list:
             return await debugger.set_data_breakpoints(
                 variables=args["variables"],
                 access_type=args.get("access_type", "write"),
+                address_space=args.get("address_space", "virtual"),
+            )
+        case "debug_set_function_breakpoints":
+            return await debugger.set_function_breakpoints(
+                names=args["names"],
+                conditions=args.get("conditions"),
             )
 
         # Inspection

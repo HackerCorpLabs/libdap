@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <cjson/cJSON.h>
 #include "dap_client.h"
+#include "dap_protocol.h"
 #include "dap_debugger_types.h"
 #include "dap_debugger_help.h"
 
@@ -38,185 +40,325 @@ int handle_quit_command(DAPClient* client, const char* args) {
 }
 
 int handle_continue_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int thread_id = 0;
+    if (!client) return 0;
+
+    int thread_id = client->thread_id;
     bool single_thread = false;
     if (args && *args) {
         thread_id = atoi(args);
         single_thread = true;
     }
-    
+
     DAPContinueResult result = {0};
     int error = dap_client_continue(client, thread_id, single_thread, &result);
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error continuing execution: %d\n", error);
-        return 1;
     }
     return 0;
 }
 
 int handle_next_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int thread_id = 0;
+    if (!client) return 0;
+
+    int thread_id = client->thread_id;
     const char* granularity = "statement";
     bool single_thread = false;
     if (args && *args) {
         thread_id = atoi(args);
         single_thread = true;
     }
-    
+
     DAPStepResult result = {0};
     int error = dap_client_next(client, thread_id, granularity, single_thread, &result);
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error stepping over: %d\n", error);
-        return 1;
     }
     return 0;
 }
 
 int handle_step_command(DAPClient* client, const char* args) {
-    if (!client) {
-        printf("Error: Debugger not connected\n");
-        return -1;
-    }
+    if (!client) return 0;
 
-    // Get current thread state
-    DAPThread* threads = NULL;
-    int thread_count = 0;
-    int error = dap_client_get_threads(client, &threads, &thread_count);
-    if (error != DAP_ERROR_NONE) {
-        printf("Error: Failed to get thread state: %d\n", error);
-        return -1;
-    }
-
-    // Check if we have any stopped threads
-    bool has_stopped_thread = false;
-    int stopped_thread_id = 0;
-    for (int i = 0; i < thread_count; i++) {
-        if (threads[i].state == DAP_THREAD_STATE_STOPPED) {
-            has_stopped_thread = true;
-            stopped_thread_id = threads[i].id;
-            break;
-        }
-    }
-
-    // Clean up thread memory
-    for (int i = 0; i < thread_count; i++) {
-        free(threads[i].name);
-    }
-    free(threads);
-
-    if (!has_stopped_thread) {
-        printf("Error: No threads are stopped\n");
-        return -1;
-    }
-
-    // Parse thread ID from args if provided
-    int thread_id = stopped_thread_id;
+    int thread_id = client->thread_id;
     if (args && *args) {
-        char* endptr;
-        int parsed_id = strtol(args, &endptr, 10);
-        if (endptr != args && *endptr == '\0') {
-            thread_id = parsed_id;
+        thread_id = atoi(args);
+    }
+
+    DAPStepInResult result = {0};
+    int error = dap_client_step_in(client, thread_id, NULL, "statement", &result);
+    if (error != DAP_ERROR_NONE) {
+        printf("Error stepping in: %d\n", error);
+    }
+    return 0;
+}
+
+/// @brief Set source breakpoints
+/// @param client DAP client
+/// @param args Format: <line> [file] [if <condition>]
+/// @return 0 on success
+int handle_break_command(DAPClient* client, const char* args) {
+    if (!client) return 0;
+
+    if (!args || !*args) {
+        printf("Usage: break <line> [file] [if <condition>]\n");
+        printf("  break 12          - Set breakpoint at line 12 in current source\n");
+        printf("  break 12 hello.c  - Set breakpoint at line 12 in hello.c\n");
+        printf("  break 12 if A>0   - Conditional breakpoint\n");
+        return 0;
+    }
+
+    char* args_copy = strdup(args);
+    if (!args_copy) return 0;
+
+    // Parse: <line> [file] [if <condition>]
+    int line = 0;
+    const char* source_path = client->program_path;
+    char* condition = NULL;
+    char local_source[256] = {0};
+
+    char* saveptr;
+    char* token = strtok_r(args_copy, " ", &saveptr);
+    if (!token) {
+        free(args_copy);
+        printf("Error: line number required\n");
+        return 0;
+    }
+
+    line = atoi(token);
+    if (line <= 0) {
+        printf("Error: invalid line number: %s\n", token);
+        free(args_copy);
+        return 0;
+    }
+
+    // Check for optional file or "if"
+    token = strtok_r(NULL, " ", &saveptr);
+    if (token) {
+        if (strcmp(token, "if") == 0) {
+            condition = saveptr;
+        } else {
+            snprintf(local_source, sizeof(local_source), "%s", token);
+            source_path = local_source;
+            token = strtok_r(NULL, " ", &saveptr);
+            if (token && strcmp(token, "if") == 0) {
+                condition = saveptr;
+            }
         }
     }
 
-    // Send step-in request using the proper API
-    DAPStepInResult result = {0};
-    error = dap_client_step_in(client, thread_id, NULL, "statement", &result);
+    // Build source breakpoint and use the tracking API
+    DAPSourceBreakpoint src_bp = {0};
+    src_bp.line = line;
+    src_bp.condition = (condition && *condition) ? condition : NULL;
+
+    DAPSetBreakpointsResult result = {0};
+    int error = dap_client_set_breakpoints(client, source_path, &src_bp, 1, &result);
 
     if (error != DAP_ERROR_NONE) {
-        printf("Error: Failed to send step-in request: %d\n", error);
-        return -1;
+        printf("Error setting breakpoint: %d\n", error);
+        if (result.base.message)
+            printf("  %s\n", result.base.message);
+        dap_set_breakpoints_result_free(&result);
+        free(args_copy);
+        return 0;
     }
 
-    printf("Stepping into...\n");
+    // Report results
+    for (size_t i = 0; i < result.num_breakpoints; i++) {
+        if (result.breakpoints[i].verified) {
+            printf("Breakpoint %d set at %s:%d",
+                   result.breakpoints[i].id, source_path, result.breakpoints[i].line);
+            if (condition && *condition)
+                printf(" (condition: %s)", condition);
+            if (result.breakpoints[i].instruction_reference)
+                printf(" @%06o", result.breakpoints[i].instruction_reference);
+            printf("\n");
+        } else {
+            printf("Breakpoint at line %d NOT verified", line);
+            if (result.breakpoints[i].message)
+                printf(": %s", result.breakpoints[i].message);
+            printf("\n");
+        }
+    }
 
+    dap_set_breakpoints_result_free(&result);
+    free(args_copy);
     return 0;
 }
 
-/// @brief Delete 
-/// @param client 
-/// @param args 
-/// @return 
-int handle_break_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-   
-    // TODO: Need to implement BREAK command (which is NOT set breakpoints)
-    
-    return 0;
-}
 
 
-
-/// @brief List source code
-/// @param client 
-/// @param args 
-/// @return 
+/// @brief List source code around the current execution point or a given line
+/// @param client DAP client
+/// @param args Optional: [line] [file] - line number and/or source file path
+/// @return 0 on success
 int handle_source_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-  
-     // TODO: Implement list command
+    if (!client) return 0;
 
+    const char* source_path = client->program_path;
+    int center_line = -1;
+    int context_lines = 10; // Show 10 lines before and after
+
+    // Parse args: [line] [file]
+    if (args && *args) {
+        char* args_copy = strdup(args);
+        if (args_copy) {
+            char* token = strtok(args_copy, " ");
+            if (token) {
+                char* endptr;
+                long val = strtol(token, &endptr, 10);
+                if (*endptr == '\0' && val > 0) {
+                    center_line = (int)val;
+                    token = strtok(NULL, " ");
+                    if (token) source_path = args; // Use original args for path
+                } else {
+                    // Not a number - treat as filename
+                    source_path = args;
+                }
+            }
+            free(args_copy);
+        }
+    }
+
+    // If no center line specified, try to get current PC line from stack trace
+    if (center_line < 0) {
+        DAPStackFrame* frames = NULL;
+        int frame_count = 0;
+        int err = dap_client_get_stack_trace(client, client->thread_id, &frames, &frame_count);
+        if (err == DAP_ERROR_NONE && frame_count > 0) {
+            center_line = frames[0].line;
+            if (frames[0].source_path && *frames[0].source_path) {
+                source_path = frames[0].source_path;
+            }
+        }
+        if (frames) {
+            for (int i = 0; i < frame_count; i++) {
+                free(frames[i].name);
+                free(frames[i].source_path);
+                free(frames[i].source_name);
+                free(frames[i].module_id);
+            }
+            free(frames);
+        }
+        if (center_line < 0) center_line = 1;
+    }
+
+    if (!source_path || !*source_path) {
+        printf("No source file available. Use: list <file>\n");
+        return 0;
+    }
+
+    FILE* fp = fopen(source_path, "r");
+    if (!fp) {
+        printf("Cannot open source file: %s\n", source_path);
+        return 0;
+    }
+
+    int start_line = center_line - context_lines;
+    if (start_line < 1) start_line = 1;
+    int end_line = center_line + context_lines;
+
+    char line_buf[256];
+    int line_num = 0;
+    while (fgets(line_buf, sizeof(line_buf), fp)) {
+        line_num++;
+        if (line_num < start_line) continue;
+        if (line_num > end_line) break;
+
+        // Check if this line has a breakpoint
+        bool has_bp = false;
+        for (int b = 0; b < client->num_breakpoints; b++) {
+            if (client->breakpoints[b].verified &&
+                client->breakpoints[b].line == line_num) {
+                has_bp = true;
+                break;
+            }
+        }
+
+        // Left margin: breakpoint (*) and current line (>>>)
+        char bp_mark = has_bp ? '*' : ' ';
+        const char* pc_mark = (line_num == center_line) ? ">>>" : "   ";
+        printf("%c%s %4d  %s", bp_mark, pc_mark, line_num, line_buf);
+        // Add newline if the line doesn't end with one
+        size_t len = strlen(line_buf);
+        if (len == 0 || line_buf[len - 1] != '\n') {
+            printf("\n");
+        }
+    }
+
+    fclose(fp);
     return 0;
 }
 
 int handle_stackTrace_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int thread_id = 0;
+    if (!client) return 0;
+
+    int thread_id = client->thread_id;
     if (args && *args) {
         thread_id = atoi(args);
     }
-    
+
     DAPStackFrame* frames = NULL;
     int frame_count = 0;
     int error = dap_client_get_stack_trace(client, thread_id, &frames, &frame_count);
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error getting backtrace: %d\n", error);
-        return 1;
+        fprintf(stderr, "Error getting backtrace: %d (%s)\n", error, dap_error_message(error));
+        return 0;
     }
-    
+
     printf("Stack trace:\n");
     for (int i = 0; i < frame_count; i++) {
-        printf("  #%d %s:%d\n", i, 
-               client->program_path,
-               frames[i].line);
+        const char* name = frames[i].name ? frames[i].name : "<unknown>";
+        const char* src = frames[i].source_name ? frames[i].source_name :
+                         (frames[i].source_path ? frames[i].source_path : "");
+
+        if (frames[i].instruction_pointer_reference > 0) {
+            printf("  #%d  0%06o in %s", i, frames[i].instruction_pointer_reference, name);
+        } else {
+            printf("  #%d  %s", i, name);
+        }
+        if (src[0] && frames[i].line > 0) {
+            printf(" at %s:%d", src, frames[i].line);
+        }
+        printf("\n");
     }
-    
+
+    for (int i = 0; i < frame_count; i++) {
+        free(frames[i].name);
+        free(frames[i].source_path);
+        free(frames[i].source_name);
+        free(frames[i].module_id);
+    }
     free(frames);
     return 0;
 }
 
 int handle_step_out_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int thread_id = 0;
+    if (!client) return 0;
+
+    int thread_id = client->thread_id;
     if (args && *args) {
         thread_id = atoi(args);
     }
-    
+
     DAPStepOutResult result = {0};
     int error = dap_client_step_out(client, thread_id, &result);
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error stepping out: %d\n", error);
-        return 1;
     }
     return 0;
 }
 
 int handle_threads_command(DAPClient* client, const char* args) {
-    (void)args; // Unused parameter
-    if (!client) return 1;
-    
+    (void)args;
+    if (!client) return 0;
+
     DAPThread* threads = NULL;
     int thread_count = 0;
     int error = dap_client_get_threads(client, &threads, &thread_count);
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error getting threads: %d\n", error);
-        return 1;
+        return 0;
     }
     
     printf("Threads:\n");
@@ -229,9 +371,9 @@ int handle_threads_command(DAPClient* client, const char* args) {
 }
 
 int handle_stack_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
-    
-    int thread_id = 0;
+    if (!client) return 0;
+
+    int thread_id = client->thread_id;
     int start_frame = 0;
     int levels = 20;
     
@@ -250,17 +392,33 @@ int handle_stack_command(DAPClient* client, const char* args) {
     int frame_count = 0;
     int error = dap_client_get_stack_trace(client, thread_id, &frames, &frame_count);
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error getting stack trace: %d\n", error);
-        return 1;
+        fprintf(stderr, "Error getting stack trace: %d (%s)\n", error, dap_error_message(error));
+        return 0;
     }
     
     printf("Stack trace:\n");
     for (int i = start_frame; i < frame_count && i < start_frame + levels; i++) {
-        printf("  #%d %s:%d\n", i, 
-               frames[i].source_name ? frames[i].source_name : "unknown",
-               frames[i].line);
+        const char* name = frames[i].name ? frames[i].name : "<unknown>";
+        const char* src = frames[i].source_name ? frames[i].source_name :
+                         (frames[i].source_path ? frames[i].source_path : "");
+
+        if (frames[i].instruction_pointer_reference > 0) {
+            printf("  #%d  0%06o in %s", i, frames[i].instruction_pointer_reference, name);
+        } else {
+            printf("  #%d  %s", i, name);
+        }
+        if (src[0] && frames[i].line > 0) {
+            printf(" at %s:%d", src, frames[i].line);
+        }
+        printf("\n");
     }
-    
+
+    for (int i = 0; i < frame_count; i++) {
+        free(frames[i].name);
+        free(frames[i].source_path);
+        free(frames[i].source_name);
+        free(frames[i].module_id);
+    }
     free(frames);
     return 0;
 }
@@ -537,7 +695,7 @@ int handle_scopes_command(DAPClient* client, const char* args) {
 int handle_debugmode_command(DAPClient* client, const char* args) {
     if (!client) {
         printf("Error: No active debug session\n");
-        return 1;
+        return 0;
     }
 
     // Get current debug mode state
@@ -553,7 +711,7 @@ int handle_debugmode_command(DAPClient* client, const char* args) {
             printf("Debug mode disabled\n");
         } else {
             printf("Invalid argument. Use 'on' or 'off', or no argument to toggle.\n");
-            return 1;
+            return 0;
         }
     } else {
         // Toggle mode if no arguments
@@ -578,30 +736,37 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
     bool memory_reference_set = false;
 
     // Parse command line arguments
-    char* saveptr;
-    char* token = strtok_r((char*)args, " ", &saveptr);
-    while (token != NULL) {
-        if (strcmp(token, "-o") == 0) {
-            token = strtok_r(NULL, " ", &saveptr);
-            if (token) offset = (uint32_t)strtoull(token, NULL, 0);
-        } else if (strcmp(token, "-i") == 0) {
-            token = strtok_r(NULL, " ", &saveptr);
-            if (token) instruction_offset = strtoul(token, NULL, 0);
-        } else if (strcmp(token, "-c") == 0) {
-            token = strtok_r(NULL, " ", &saveptr);
-            if (token) instruction_count = strtoul(token, NULL, 0);
-        } else if (strcmp(token, "-s") == 0) {
-            resolve_symbols = true;
-        } else if (!memory_reference_set) {
-            memory_reference = (uint32_t)strtoull(token, NULL, 0);
-            memory_reference_set = true;
+    if (args && *args) {
+        char* args_copy = strdup(args);
+        if (args_copy) {
+            char* saveptr;
+            char* token = strtok_r(args_copy, " ", &saveptr);
+            while (token != NULL) {
+                if (strcmp(token, "-o") == 0) {
+                    token = strtok_r(NULL, " ", &saveptr);
+                    if (token) offset = (uint32_t)strtoull(token, NULL, 0);
+                } else if (strcmp(token, "-i") == 0) {
+                    token = strtok_r(NULL, " ", &saveptr);
+                    if (token) instruction_offset = strtoul(token, NULL, 0);
+                } else if (strcmp(token, "-c") == 0) {
+                    token = strtok_r(NULL, " ", &saveptr);
+                    if (token) instruction_count = strtoul(token, NULL, 0);
+                } else if (strcmp(token, "-s") == 0) {
+                    resolve_symbols = true;
+                } else if (!memory_reference_set) {
+                    memory_reference = (uint32_t)strtoull(token, NULL, 0);
+                    memory_reference_set = true;
+                }
+                token = strtok_r(NULL, " ", &saveptr);
+            }
+            free(args_copy);
         }
-        token = strtok_r(NULL, " ", &saveptr);
     }
 
     if (!memory_reference_set) {
-        fprintf(stderr, "Error: Memory reference is required\n");
-        return -1;
+        // Default: disassemble at current PC
+        // Use 0 as memory_reference - the server will use the current PC
+        memory_reference = 0;
     }
 
     // Call the disassemble function
@@ -639,18 +804,18 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
  */
 int handle_exception_command(DAPClient* client, const char* args) {
     if (!client) {
-        fprintf(stderr, "Error: Client not initialized\n");
-        return 1;
+        printf("Error: Client not initialized\n");
+        return 0;
     }
     
     // Tokenize the arguments by commas
     // If no arguments, then use 'uncaught' as the default filter
     char* args_copy = args ? strdup(args) : strdup("uncaught");
     if (!args_copy) {
-        fprintf(stderr, "Error: Failed to allocate memory\n");
-        return 1;
+        printf("Error: Failed to allocate memory\n");
+        return 0;
     }
-    
+
     // Count the number of filters
     size_t num_filters = 0;
     char* p = args_copy;
@@ -665,9 +830,9 @@ int handle_exception_command(DAPClient* client, const char* args) {
     // Allocate memory for the filters
     const char** filters = calloc(num_filters, sizeof(char*));
     if (!filters) {
-        fprintf(stderr, "Error: Failed to allocate memory for filters\n");
+        printf("Error: Failed to allocate memory for filters\n");
         free(args_copy);
-        return 1;
+        return 0;
     }
     
     // Parse the filters
@@ -695,9 +860,9 @@ int handle_exception_command(DAPClient* client, const char* args) {
     free(filters);
     
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error setting exception breakpoints: %s\n", dap_error_message(error));
+        printf("Error setting exception breakpoints: %s\n", dap_error_message(error));
         free(args_copy);
-        return 1;
+        return 0;
     }
     
     // Show result
@@ -727,9 +892,9 @@ int handle_exception_command(DAPClient* client, const char* args) {
  */
 
 int handle_pause_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
+    if (!client) return 0;
 
-    int thread_id = 0;
+    int thread_id = client->thread_id;
     if (args && *args) {
         thread_id = atoi(args);
     }
@@ -739,7 +904,7 @@ int handle_pause_command(DAPClient* client, const char* args) {
 
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error pausing execution: %d\n", error);
-        return 1;
+        return 0;
     }
 
     printf("Execution paused\n");
@@ -747,49 +912,38 @@ int handle_pause_command(DAPClient* client, const char* args) {
 }
 
 int handle_evaluate_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
+    if (!client) return 0;
 
     if (!args || !*args) {
-        fprintf(stderr, "Usage: evaluate <expression> [frame_id] [context]\n");
-        return 1;
+        printf("Usage: eval <expression>\n");
+        printf("  eval A + B        - Evaluate register expression\n");
+        printf("  eval [0x100]      - Read memory at address\n");
+        printf("  eval A == 5       - Boolean expression\n");
+        return 0;
     }
 
-    char* args_copy = strdup(args);
-    if (!args_copy) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 1;
-    }
-
-    char* expression = strtok(args_copy, " ");
-    char* frame_str = strtok(NULL, " ");
-    char* context = strtok(NULL, " ");
-
-    int frame_id = frame_str ? atoi(frame_str) : 0;
-    if (!context) {
-        context = "repl";
-    }
-
+    // The entire args string is the expression (supports spaces)
     DAPEvaluateResult result = {0};
-    DAPError error = dap_client_evaluate(client, expression, frame_id, context, &result);
+    DAPError error = dap_client_evaluate(client, args, 0, "repl", &result);
 
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error evaluating expression: %d\n", error);
-        free(args_copy);
-        return 1;
+        printf("Error evaluating expression: %d\n", error);
+        return 0;
     }
 
-    printf("Result: %s", result.result ? result.result : "null");
+    printf("%s", result.result ? result.result : "null");
     if (result.type) {
-        printf(" (type: %s)", result.type);
+        printf("  (%s)", result.type);
     }
     printf("\n");
 
-    free(args_copy);
+    free(result.result);
+    free(result.type);
     return 0;
 }
 
 int handle_launch_command(DAPClient* client, const char* args) {
-    if (!client) return 1;
+    if (!client) return 0;
 
     const char* program_file = args;
     if (!program_file || !*program_file) {
@@ -798,15 +952,15 @@ int handle_launch_command(DAPClient* client, const char* args) {
     }
 
     if (!program_file || !*program_file) {
-        fprintf(stderr, "Usage: launch <program_file>\n");
-        return 1;
+        printf("Usage: launch <program_file>\n");
+        return 0;
     }
 
     int error = dap_client_launch(client, program_file, true);
 
     if (error != DAP_ERROR_NONE) {
-        fprintf(stderr, "Error launching program: %d\n", error);
-        return 1;
+        printf("Error launching program: %d\n", error);
+        return 0;
     }
 
     printf("Program launched: %s\n", program_file);
@@ -814,102 +968,66 @@ int handle_launch_command(DAPClient* client, const char* args) {
 }
 
 int handle_read_memory_command(DAPClient* client, const char* args) {
-    if (!client || !args || !*args) {
-        printf("Usage: readMemory <memory_reference> [count] [offset]\n");
-        printf("  memory_reference: Address (0x1000) or symbol (main)\n");
-        printf("  count: Number of bytes to read (default: 16)\n");
-        printf("  offset: Byte offset from address (default: 0)\n");
+    if (!client) return 0;
+
+    if (!args || !*args) {
+        printf("Usage: x <address> [count]\n");
+        printf("  address: Octal (0177), hex (0xFF), or decimal address\n");
+        printf("  count:   Number of words to read (default: 16)\n");
         printf("Examples:\n");
-        printf("  readMemory 0x1000\n");
-        printf("  readMemory main 64\n");
-        printf("  readMemory 0x1000 32 8\n");
-        return 1;
+        printf("  x 0100         - Read 16 words at octal 0100\n");
+        printf("  x 0x40 32      - Read 32 words at hex 0x40\n");
+        return 0;
     }
 
-    // Parse arguments: memory_reference [count] [offset]
     char* args_copy = strdup(args);
-    if (!args_copy) return 1;
+    if (!args_copy) return 0;
 
-    char* memory_ref = strtok(args_copy, " ");
+    char* addr_str = strtok(args_copy, " ");
     char* count_str = strtok(NULL, " ");
-    char* offset_str = strtok(NULL, " ");
 
-    if (!memory_ref) {
-        printf("Error: Memory reference required\n");
+    uint32_t address = (uint32_t)strtoul(addr_str, NULL, 0);
+    int count = count_str ? atoi(count_str) : 16;
+    if (count <= 0) count = 16;
+    if (count > 512) count = 512;
+
+    DAPReadMemoryResult result = {0};
+    int error = dap_client_read_memory(client, address, 0, count, &result);
+
+    if (error != DAP_ERROR_NONE) {
+        printf("Error reading memory at 0%06o: %d\n", address, error);
         free(args_copy);
-        return 1;
+        return 0;
     }
 
-    int count = count_str ? atoi(count_str) : 16;  // Default 16 bytes
-    int offset = offset_str ? atoi(offset_str) : 0; // Default offset 0
+    // The data comes back as hex string from the server
+    if (result.data && *result.data) {
+        // Parse hex string data and display as octal words (ND-100 is 16-bit)
+        const char* hex = result.data;
+        size_t hex_len = strlen(hex);
+        int word_count = 0;
 
-    // Validate parameters
-    if (count <= 0 || count > 1024) {
-        printf("Error: Count must be between 1 and 1024 bytes\n");
-        free(args_copy);
-        return 1;
-    }
+        printf("Address  | Octal   Hex    Dec   | ASCII\n");
+        printf("---------+----------------------+------\n");
 
-    if (offset < 0) {
-        printf("Error: Offset must be non-negative\n");
-        free(args_copy);
-        return 1;
-    }
+        for (size_t i = 0; i + 3 < hex_len; i += 4) {
+            // Each word is 4 hex chars (2 bytes, big-endian)
+            char word_hex[5] = { hex[i], hex[i+1], hex[i+2], hex[i+3], '\0' };
+            uint16_t word = (uint16_t)strtoul(word_hex, NULL, 16);
 
-    printf("Reading %d bytes from %s", count, memory_ref);
-    if (offset > 0) {
-        printf(" + %d", offset);
-    }
-    printf(":\n");
-
-    // For now, we'll simulate memory reading since the DAP protocol support
-    // for readMemory might not be implemented in all debug adapters
-    printf("Memory dump at %s:\n", memory_ref);
-    printf("Address   | Hex Values                      | ASCII\n");
-    printf("----------|--------------------------------|--------\n");
-
-    // Simulate some memory content for demonstration
-    unsigned char sample_data[64];
-    for (int i = 0; i < count && i < 64; i++) {
-        sample_data[i] = (unsigned char)((i + offset) % 256);
-    }
-
-    // Display memory in hex dump format
-    for (int i = 0; i < count; i += 16) {
-        // Print address
-        if (memory_ref[0] == '0' && memory_ref[1] == 'x') {
-            // Hex address
-            unsigned long addr = strtoul(memory_ref, NULL, 16);
-            printf("%08lx  | ", addr + offset + i);
-        } else {
-            // Symbol name
-            printf("%s+%04x | ", memory_ref, offset + i);
+            printf(" %06o  | %06o  %04X  %5u  | %c%c\n",
+                   address + word_count,
+                   word, word, word,
+                   ((word >> 8) >= 32 && (word >> 8) <= 126) ? (char)(word >> 8) : '.',
+                   ((word & 0xFF) >= 32 && (word & 0xFF) <= 126) ? (char)(word & 0xFF) : '.');
+            word_count++;
         }
-
-        // Print hex values
-        for (int j = 0; j < 16 && (i + j) < count; j++) {
-            printf("%02x ", sample_data[i + j]);
-        }
-
-        // Pad if less than 16 bytes
-        for (int j = i + ((count - i) > 16 ? 16 : (count - i)); j < i + 16; j++) {
-            printf("   ");
-        }
-
-        printf("| ");
-
-        // Print ASCII representation
-        for (int j = 0; j < 16 && (i + j) < count; j++) {
-            unsigned char c = sample_data[i + j];
-            printf("%c", (c >= 32 && c <= 126) ? c : '.');
-        }
-
-        printf("\n");
+    } else {
+        printf("No data returned\n");
     }
 
-    printf("\nNote: This is simulated data. Real memory reading requires\n");
-    printf("DAP server support for readMemory requests.\n");
-
+    free(result.address);
+    free(result.data);
     free(args_copy);
     return 0;
 }
@@ -1055,6 +1173,7 @@ int handle_capabilities_command(DAPClient* client, const char* args) {
         printf("  Debug Mode: %s\n", client->debug_mode ? "✅ Enabled" : "❌ Disabled");
         printf("  Current Thread: %d\n", client->thread_id);
         printf("  Active Breakpoints: %d\n", client->num_breakpoints);
+        printf("  Active Watchpoints: %d\n", client->num_data_breakpoints);
         printf("  Loaded Program: %s\n", client->program_path ? client->program_path : "❌ None");
     } else {
         printf("  No active debug session\n");
@@ -1068,5 +1187,209 @@ int handle_capabilities_command(DAPClient* client, const char* args) {
     printf("🔧 Use 'debugmode' to toggle protocol debugging\n");
     printf("═══════════════════════════════════════════════════════════════\n\n");
 
+    return 0;
+}
+
+int handle_watch_command(DAPClient* client, const char* args) {
+    if (!client) return 0;
+
+    if (!args || !*args) {
+        printf("Usage: watch [phys] <address> [read|write|readwrite]\n");
+        printf("  watch 01000            - Watch virtual address 01000 for writes\n");
+        printf("  watch 01000 read       - Watch virtual address 01000 for reads\n");
+        printf("  watch 01000 readwrite  - Watch virtual address 01000 for read/write\n");
+        printf("  watch 0x200            - Hex address (virtual)\n");
+        printf("  watch phys 01000       - Watch physical address 01000 for writes\n");
+        printf("  watch phys 0x200 read  - Watch physical hex address for reads\n");
+        return 0;
+    }
+
+    char* args_copy = strdup(args);
+    if (!args_copy) return 0;
+
+    char* saveptr;
+    char* first_token = strtok_r(args_copy, " ", &saveptr);
+
+    // Check for "phys" prefix
+    DAPDataBreakpointAddressSpace addr_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    char* addr_str = first_token;
+    if (first_token && (strcmp(first_token, "phys") == 0 || strcmp(first_token, "physical") == 0)) {
+        addr_space = DAP_DATA_BP_ADDR_PHYSICAL;
+        addr_str = strtok_r(NULL, " ", &saveptr);
+    }
+
+    char* access_str = strtok_r(NULL, " ", &saveptr);
+
+    if (!addr_str) {
+        printf("Error: address required\n");
+        free(args_copy);
+        return 0;
+    }
+
+    // Parse address (octal by default for ND-100)
+    uint32_t address = (uint32_t)strtoul(addr_str, NULL, 0);
+
+    // Parse access type (default: write)
+    DAPDataBreakpointAccessType access = DAP_DATA_BP_ACCESS_WRITE;
+    if (access_str) {
+        if (strcmp(access_str, "read") == 0)
+            access = DAP_DATA_BP_ACCESS_READ;
+        else if (strcmp(access_str, "readwrite") == 0 || strcmp(access_str, "rw") == 0)
+            access = DAP_DATA_BP_ACCESS_READWRITE;
+    }
+
+    // Format data_id with address space prefix (V: or P:) and octal address
+    char data_id[32];
+    snprintf(data_id, sizeof(data_id), "%c:%06o",
+             addr_space == DAP_DATA_BP_ADDR_PHYSICAL ? 'P' : 'V', address);
+
+    // Build the request including all existing data breakpoints plus this new one
+    int existing_count = 0;
+    const DAPDataBreakpoint* existing = dap_client_get_data_breakpoints(client, &existing_count);
+
+    int total = existing_count + 1;
+    DAPDataBreakpoint* all_bps = calloc(total, sizeof(DAPDataBreakpoint));
+    if (!all_bps) {
+        free(args_copy);
+        return 0;
+    }
+
+    // Copy existing
+    for (int i = 0; i < existing_count; i++) {
+        if (existing[i].data_id)
+            all_bps[i].data_id = strdup(existing[i].data_id);
+        all_bps[i].access_type = existing[i].access_type;
+        all_bps[i].address_space = existing[i].address_space;
+        all_bps[i].address = existing[i].address;
+    }
+
+    // Add new one
+    all_bps[existing_count].data_id = strdup(data_id);
+    all_bps[existing_count].access_type = access;
+    all_bps[existing_count].address_space = addr_space;
+    all_bps[existing_count].address = address;
+
+    DAPSetDataBreakpointsResult result = {0};
+    int error = dap_client_set_data_breakpoints(client, all_bps, total, &result);
+
+    // Free temporary array
+    for (int i = 0; i < total; i++)
+        free(all_bps[i].data_id);
+    free(all_bps);
+
+    if (error != DAP_ERROR_NONE) {
+        printf("Error setting watchpoint: %d\n", error);
+        if (result.base.message)
+            printf("  %s\n", result.base.message);
+        dap_set_data_breakpoints_result_free(&result);
+        free(args_copy);
+        return 0;
+    }
+
+    // Report the last added watchpoint
+    if (result.num_breakpoints > 0) {
+        size_t last = result.num_breakpoints - 1;
+        const char* type_str = "write";
+        switch (access) {
+            case DAP_DATA_BP_ACCESS_READ:      type_str = "read"; break;
+            case DAP_DATA_BP_ACCESS_WRITE:     type_str = "write"; break;
+            case DAP_DATA_BP_ACCESS_READWRITE: type_str = "read/write"; break;
+        }
+        const char* space_str = addr_space == DAP_DATA_BP_ADDR_PHYSICAL ? "phys" : "virt";
+        if (result.breakpoints[last].verified) {
+            printf("Watchpoint %d set at %s %06o (%s)\n",
+                   result.breakpoints[last].id, space_str, address, type_str);
+        } else {
+            printf("Watchpoint at %s %06o NOT verified", space_str, address);
+            if (result.breakpoints[last].message)
+                printf(": %s", result.breakpoints[last].message);
+            printf("\n");
+        }
+    }
+
+    dap_set_data_breakpoints_result_free(&result);
+    free(args_copy);
+    return 0;
+}
+
+int handle_info_command(DAPClient* client, const char* args) {
+    if (!client) return 0;
+
+    if (!args || !*args) {
+        printf("Usage: info breakpoints|watchpoints\n");
+        printf("  info breakpoints   - List all source breakpoints\n");
+        printf("  info watchpoints   - List all data breakpoints (watchpoints)\n");
+        printf("  info b             - Short for breakpoints\n");
+        printf("  info w             - Short for watchpoints\n");
+        return 0;
+    }
+
+    if (strncmp(args, "breakpoints", 11) == 0 || strcmp(args, "b") == 0 ||
+        strncmp(args, "break", 5) == 0) {
+        int count = 0;
+        const DAPBreakpoint* bps = dap_client_get_breakpoints(client, &count);
+
+        if (count == 0) {
+            printf("No breakpoints set.\n");
+            return 0;
+        }
+
+        printf("Num  Verified  Line  Address   Condition  Source\n");
+        printf("---  --------  ----  --------  ---------  ------\n");
+        for (int i = 0; i < count; i++) {
+            printf("%-3d  %-8s  %-4d  ",
+                   bps[i].id ? bps[i].id : i + 1,
+                   bps[i].verified ? "yes" : "no",
+                   bps[i].line);
+            if (bps[i].instruction_reference)
+                printf("%06o    ", bps[i].instruction_reference);
+            else
+                printf("          ");
+            if (bps[i].condition)
+                printf("%-9s  ", bps[i].condition);
+            else
+                printf("           ");
+            if (bps[i].source_path)
+                printf("%s", bps[i].source_path);
+            printf("\n");
+        }
+        return 0;
+    }
+
+    if (strncmp(args, "watchpoints", 11) == 0 || strcmp(args, "w") == 0 ||
+        strncmp(args, "watch", 5) == 0) {
+        int count = 0;
+        const DAPDataBreakpoint* wps = dap_client_get_data_breakpoints(client, &count);
+
+        if (count == 0) {
+            printf("No watchpoints set.\n");
+            return 0;
+        }
+
+        printf("Num  Verified  Space  Address   Access     Condition\n");
+        printf("---  --------  -----  --------  ---------  ---------\n");
+        for (int i = 0; i < count; i++) {
+            const char* type_str = "write";
+            switch (wps[i].access_type) {
+                case DAP_DATA_BP_ACCESS_READ:      type_str = "read"; break;
+                case DAP_DATA_BP_ACCESS_WRITE:     type_str = "write"; break;
+                case DAP_DATA_BP_ACCESS_READWRITE: type_str = "readwrite"; break;
+            }
+            const char* space_str = wps[i].address_space == DAP_DATA_BP_ADDR_PHYSICAL ? "phys" : "virt";
+            printf("%-3d  %-8s  %-5s  %06o    %-9s  ",
+                   wps[i].id ? wps[i].id : i + 1,
+                   wps[i].verified ? "yes" : "no",
+                   space_str,
+                   wps[i].address,
+                   type_str);
+            if (wps[i].condition)
+                printf("%s", wps[i].condition);
+            printf("\n");
+        }
+        return 0;
+    }
+
+    printf("Unknown info topic: %s\n", args);
+    printf("Use: info breakpoints, info watchpoints\n");
     return 0;
 }

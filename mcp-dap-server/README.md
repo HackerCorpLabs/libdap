@@ -174,6 +174,7 @@ Set data breakpoints (memory watchpoints). These monitor memory locations and br
 |-----------|------|----------|-------------|
 | `variables` | array[string] | Yes | Variable names or memory addresses to watch (see below) |
 | `access_type` | string | No (default: `"write"`) | `"read"`, `"write"`, or `"readWrite"` |
+| `address_space` | string | No (default: `"virtual"`) | `"virtual"` or `"physical"` - which address space to monitor |
 
 Returns: List of breakpoints with verified status.
 
@@ -206,9 +207,19 @@ debug_set_data_breakpoints(variables=["0x40"], access_type="write")
 
 # Mix symbols and addresses
 debug_set_data_breakpoints(variables=["counter", "0x1d"], access_type="readWrite")
+
+# Watch a physical memory address for writes
+debug_set_data_breakpoints(variables=["0x40"], access_type="write", address_space="physical")
+
+# Watch physical memory for any access (catches DMA, page table ops, aliased mappings)
+debug_set_data_breakpoints(variables=["0x1000"], access_type="readWrite", address_space="physical")
 ```
 
-**Important**: Each call replaces all previous data breakpoints (per DAP spec). To watch multiple locations, include all of them in a single call.
+**Address space**:
+- `"virtual"` (default) - monitors virtual addresses, checked during normal CPU memory operations
+- `"physical"` - monitors physical addresses after MMS translation, catches all accesses including DMA and aliased virtual mappings. Physical addresses can exceed 16 bits (up to 21+ bits for extended memory).
+
+**Important**: Each call replaces all previous data breakpoints, both virtual and physical (per DAP spec). To watch multiple locations, include all of them in a single call. All watchpoints in a single call share the same address space.
 
 ### Inspection
 
@@ -396,7 +407,11 @@ When debugging ND-100 programs (via the nd100x emulator):
 - **Stack traces**: For C programs, the stack trace walks the B-register chain (csav/cret frame linkage) to show full C-level call stacks with function names. For pure assembly, JPL (Jump and Link) calls and EXIT returns are tracked.
 - **Mixed C/assembly**: The srcmap tracks which source file (`.c` or `.s`) each address belongs to, so stepping through mixed programs shows the correct file for each frame.
 - **Register scopes**: Variables with scope `"CPU Registers"` shows the 8 ND-100 registers (STS, D, P, B, L, A, T, X) with decoded status flags.
-- **Memory watchpoints**: The nd100x emulator supports data breakpoints (watchpoints) on any 16-bit memory address with read, write, or readWrite access types. Up to 32 simultaneous watchpoints are supported. Variables can be specified by symbol name (looked up across all loaded symbol tables) or by numeric address. The `dataId` used internally is the octal address string (e.g., `"000040"`).
+- **Memory watchpoints**: The nd100x emulator supports data breakpoints (watchpoints) in two address spaces:
+  - **Virtual** (default): Monitors 16-bit virtual addresses, checked during normal CPU memory operations via `MemoryRead`/`MemoryWrite`. Up to 32 simultaneous virtual watchpoints.
+  - **Physical**: Monitors physical addresses (up to 21+ bits for extended memory) after MMS translation, checked in `ReadPhysicalMemory`/`WritePhysicalMemoryWM`. Catches all accesses including DMA, aliased virtual mappings, and page table operations. Up to 32 simultaneous physical watchpoints.
+
+  Variables can be specified by symbol name (looked up across all loaded symbol tables) or by numeric address. The `dataId` used internally encodes the address space and octal address (e.g., `"V:000040"` for virtual, `"P:000040"` for physical).
 
 ## Troubleshooting
 

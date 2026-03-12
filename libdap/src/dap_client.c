@@ -282,6 +282,8 @@ DAPClient* dap_client_create(const char* host, int port) {
     // Initialize breakpoints tracking
     client->breakpoints = NULL;
     client->num_breakpoints = 0;
+    client->data_breakpoints = NULL;
+    client->num_data_breakpoints = 0;
     
     // Create transport configuration
     DAPTransportConfig transport_config = {
@@ -414,21 +416,11 @@ void dap_client_free(DAPClient* client) {
         client->program_path = NULL;
     }
     
-    // Free breakpoints if they exist
-    if (client->breakpoints) {
-        // Free any dynamically allocated fields within breakpoints
-        for (int i = 0; i < client->num_breakpoints; i++) {
-            if (client->breakpoints[i].message) {
-                free(client->breakpoints[i].message);
-            }
-            if (client->breakpoints[i].condition) {
-                free(client->breakpoints[i].condition);
-            }
-            // Free any other fields that might be dynamically allocated
-        }
-        free(client->breakpoints);
-        client->breakpoints = NULL;
-    }
+    // Free tracked breakpoints
+    dap_client_clear_breakpoints(client);
+
+    // Free tracked data breakpoints (watchpoints)
+    dap_client_clear_data_breakpoints(client);
     
     // Free client structure
     free(client);
@@ -1172,8 +1164,99 @@ int dap_client_continue(DAPClient* client, int thread_id, bool single_thread, DA
 }
 
 int dap_client_get_stack_trace(DAPClient* client, int thread_id, DAPStackFrame** frames, int* frame_count) {
-    (void)client; (void)thread_id; (void)frames; (void)frame_count;
-    return DAP_ERROR_NOT_IMPLEMENTED;
+    if (!client || !frames || !frame_count) {
+        return DAP_ERROR_INVALID_ARG;
+    }
+
+    *frames = NULL;
+    *frame_count = 0;
+
+    cJSON* args = cJSON_CreateObject();
+    if (!args) return DAP_ERROR_MEMORY;
+
+    cJSON_AddNumberToObject(args, "threadId", thread_id);
+    cJSON_AddNumberToObject(args, "startFrame", 0);
+    cJSON_AddNumberToObject(args, "levels", 20);
+
+    char* response = NULL;
+    int error = dap_client_send_request(client, DAP_CMD_STACK_TRACE, args, &response);
+    cJSON_Delete(args);
+
+    if (error != DAP_ERROR_NONE) {
+        return error;
+    }
+    if (!response) {
+        return DAP_ERROR_PARSE_ERROR;
+    }
+
+    cJSON* json = cJSON_Parse(response);
+    free(response);
+    if (!json) {
+        return DAP_ERROR_PARSE_ERROR;
+    }
+
+    cJSON* success = cJSON_GetObjectItem(json, "success");
+    if (!success || !cJSON_IsTrue(success)) {
+        cJSON_Delete(json);
+        return DAP_ERROR_REQUEST_FAILED;
+    }
+
+    cJSON* body = cJSON_GetObjectItem(json, "body");
+    if (!body) {
+        cJSON_Delete(json);
+        return DAP_ERROR_PARSE_ERROR;
+    }
+
+    cJSON* stack_frames = cJSON_GetObjectItem(body, "stackFrames");
+    if (!stack_frames || !cJSON_IsArray(stack_frames)) {
+        cJSON_Delete(json);
+        return DAP_ERROR_PARSE_ERROR;
+    }
+
+    int count = cJSON_GetArraySize(stack_frames);
+    if (count == 0) {
+        cJSON_Delete(json);
+        return DAP_ERROR_NONE;
+    }
+
+    DAPStackFrame* result = calloc(count, sizeof(DAPStackFrame));
+    if (!result) {
+        cJSON_Delete(json);
+        return DAP_ERROR_MEMORY;
+    }
+
+    for (int i = 0; i < count; i++) {
+        cJSON* frame = cJSON_GetArrayItem(stack_frames, i);
+
+        cJSON* id = cJSON_GetObjectItem(frame, "id");
+        cJSON* name = cJSON_GetObjectItem(frame, "name");
+        cJSON* line = cJSON_GetObjectItem(frame, "line");
+        cJSON* column = cJSON_GetObjectItem(frame, "column");
+        cJSON* ipr = cJSON_GetObjectItem(frame, "instructionPointerReference");
+
+        result[i].id = id ? id->valueint : i;
+        result[i].name = name && name->valuestring ? strdup(name->valuestring) : NULL;
+        result[i].line = line ? line->valueint : 0;
+        result[i].column = column ? column->valueint : 0;
+
+        if (ipr && ipr->valuestring) {
+            result[i].instruction_pointer_reference = (int)strtoul(ipr->valuestring, NULL, 0);
+        }
+
+        cJSON* source = cJSON_GetObjectItem(frame, "source");
+        if (source) {
+            cJSON* path = cJSON_GetObjectItem(source, "path");
+            cJSON* sname = cJSON_GetObjectItem(source, "name");
+            result[i].source_path = path && path->valuestring ? strdup(path->valuestring) : NULL;
+            result[i].source_name = sname && sname->valuestring ? strdup(sname->valuestring) : NULL;
+        }
+    }
+
+    *frames = result;
+    *frame_count = count;
+
+    cJSON_Delete(json);
+    return DAP_ERROR_NONE;
 }
 
 int dap_client_initialize(DAPClient* client) {
@@ -1487,10 +1570,11 @@ int dap_client_get_scopes(DAPClient* client, int frame_id, DAPGetScopesResult* r
         cJSON* end_line = cJSON_GetObjectItem(scope, "endLine");
         cJSON* end_column = cJSON_GetObjectItem(scope, "endColumn");
 
-        if (!name || !variables_reference) {
-            dap_get_scopes_result_free(result);
-            cJSON_Delete(root);
-            return DAP_ERROR_PARSE_ERROR;
+        // Skip scopes without name or variablesReference (server may send empty entries)
+        if (!name || !name->valuestring || !variables_reference) {
+            result->scopes[i].name = strdup("");
+            result->scopes[i].variables_reference = 0;
+            continue;
         }
 
         result->scopes[i].name = strdup(name->valuestring);
@@ -2206,7 +2290,409 @@ int dap_client_set_exception_breakpoints(DAPClient* client,
             result->breakpoints[i].message = strdup(message->valuestring);
         }
     }
-    
+
     cJSON_Delete(root);
     return DAP_ERROR_NONE;
+}
+
+// ---------------------------------------------------------------------------
+// Breakpoint tracking API
+// ---------------------------------------------------------------------------
+
+void dap_client_clear_breakpoints(DAPClient* client) {
+    if (!client || !client->breakpoints) return;
+
+    for (int i = 0; i < client->num_breakpoints; i++) {
+        free(client->breakpoints[i].message);
+        free(client->breakpoints[i].condition);
+        free(client->breakpoints[i].hit_condition);
+        free(client->breakpoints[i].log_message);
+        free(client->breakpoints[i].source_path);
+        free(client->breakpoints[i].source_name);
+    }
+    free(client->breakpoints);
+    client->breakpoints = NULL;
+    client->num_breakpoints = 0;
+}
+
+void dap_client_clear_data_breakpoints(DAPClient* client) {
+    if (!client || !client->data_breakpoints) return;
+
+    for (int i = 0; i < client->num_data_breakpoints; i++) {
+        free(client->data_breakpoints[i].data_id);
+        free(client->data_breakpoints[i].condition);
+        free(client->data_breakpoints[i].hit_condition);
+        free(client->data_breakpoints[i].message);
+    }
+    free(client->data_breakpoints);
+    client->data_breakpoints = NULL;
+    client->num_data_breakpoints = 0;
+}
+
+const DAPBreakpoint* dap_client_get_breakpoints(DAPClient* client, int* count) {
+    if (!client) {
+        if (count) *count = 0;
+        return NULL;
+    }
+    if (count) *count = client->num_breakpoints;
+    return client->breakpoints;
+}
+
+const DAPDataBreakpoint* dap_client_get_data_breakpoints(DAPClient* client, int* count) {
+    if (!client) {
+        if (count) *count = 0;
+        return NULL;
+    }
+    if (count) *count = client->num_data_breakpoints;
+    return client->data_breakpoints;
+}
+
+int dap_client_set_breakpoints(DAPClient* client, const char* source_path,
+                               const DAPSourceBreakpoint* source_breakpoints,
+                               int count, DAPSetBreakpointsResult* result) {
+    if (!client || !source_path || !result)
+        return DAP_ERROR_INVALID_ARG;
+
+    result->base.success = false;
+    result->base.message = NULL;
+    result->breakpoints = NULL;
+    result->num_breakpoints = 0;
+
+    // Build merged breakpoint list: existing for this source + new ones
+    int existing_for_source = 0;
+    for (int i = 0; i < client->num_breakpoints; i++) {
+        if (client->breakpoints[i].source_path &&
+            strcmp(client->breakpoints[i].source_path, source_path) == 0)
+            existing_for_source++;
+    }
+
+    int merged_count = existing_for_source + count;
+    DAPSourceBreakpoint* merged = calloc(merged_count, sizeof(DAPSourceBreakpoint));
+    if (!merged) return DAP_ERROR_MEMORY;
+
+    // Copy existing breakpoints for this source
+    int mi = 0;
+    for (int i = 0; i < client->num_breakpoints; i++) {
+        if (client->breakpoints[i].source_path &&
+            strcmp(client->breakpoints[i].source_path, source_path) == 0) {
+            merged[mi].line = client->breakpoints[i].line;
+            merged[mi].condition = client->breakpoints[i].condition;       // borrow, don't strdup
+            merged[mi].hit_condition = client->breakpoints[i].hit_condition;
+            merged[mi].log_message = client->breakpoints[i].log_message;
+            mi++;
+        }
+    }
+    // Append new breakpoints
+    for (int i = 0; i < count; i++) {
+        merged[mi].line = source_breakpoints[i].line;
+        merged[mi].condition = source_breakpoints[i].condition;
+        merged[mi].hit_condition = source_breakpoints[i].hit_condition;
+        merged[mi].log_message = source_breakpoints[i].log_message;
+        mi++;
+    }
+
+    // Build JSON request from merged list
+    cJSON* args = cJSON_CreateObject();
+    if (!args) { free(merged); return DAP_ERROR_MEMORY; }
+
+    cJSON* source_obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(source_obj, "path", source_path);
+    cJSON_AddItemToObject(args, "source", source_obj);
+
+    cJSON* bp_array = cJSON_CreateArray();
+    for (int i = 0; i < merged_count; i++) {
+        cJSON* bp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(bp, "line", merged[i].line);
+        if (merged[i].condition)
+            cJSON_AddStringToObject(bp, "condition", merged[i].condition);
+        if (merged[i].hit_condition)
+            cJSON_AddStringToObject(bp, "hitCondition", merged[i].hit_condition);
+        if (merged[i].log_message)
+            cJSON_AddStringToObject(bp, "logMessage", merged[i].log_message);
+        cJSON_AddItemToArray(bp_array, bp);
+    }
+    cJSON_AddItemToObject(args, "breakpoints", bp_array);
+
+    char* response = NULL;
+    int err = dap_client_send_request(client, DAP_CMD_SET_BREAKPOINTS, args, &response);
+    cJSON_Delete(args);
+
+    if (err != DAP_ERROR_NONE) {
+        free(merged);
+        free(response);
+        return err;
+    }
+
+    if (!response) { free(merged); return DAP_ERROR_INVALID_RESPONSE; }
+
+    cJSON* root = cJSON_Parse(response);
+    free(response);
+    if (!root) { free(merged); return DAP_ERROR_INVALID_RESPONSE; }
+
+    cJSON* success = cJSON_GetObjectItem(root, "success");
+    if (!success || !cJSON_IsTrue(success)) {
+        cJSON* msg = cJSON_GetObjectItem(root, "message");
+        if (msg && msg->valuestring)
+            result->base.message = strdup(msg->valuestring);
+        free(merged);
+        cJSON_Delete(root);
+        return DAP_ERROR_INVALID_RESPONSE;
+    }
+    result->base.success = true;
+
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    cJSON* bps = body ? cJSON_GetObjectItem(body, "breakpoints") : NULL;
+    int num_bps = (bps && cJSON_IsArray(bps)) ? cJSON_GetArraySize(bps) : 0;
+
+    if (num_bps > 0) {
+        result->breakpoints = calloc(num_bps, sizeof(DAPBreakpoint));
+        if (!result->breakpoints) {
+            free(merged);
+            cJSON_Delete(root);
+            return DAP_ERROR_MEMORY;
+        }
+        result->num_breakpoints = num_bps;
+
+        for (int i = 0; i < num_bps; i++) {
+            cJSON* b = cJSON_GetArrayItem(bps, i);
+            if (!b) continue;
+
+            cJSON* id_j = cJSON_GetObjectItem(b, "id");
+            if (id_j) result->breakpoints[i].id = id_j->valueint;
+
+            cJSON* v = cJSON_GetObjectItem(b, "verified");
+            result->breakpoints[i].verified = v ? cJSON_IsTrue(v) : false;
+
+            cJSON* line_j = cJSON_GetObjectItem(b, "line");
+            if (line_j) result->breakpoints[i].line = line_j->valueint;
+
+            cJSON* msg = cJSON_GetObjectItem(b, "message");
+            if (msg && msg->valuestring)
+                result->breakpoints[i].message = strdup(msg->valuestring);
+
+            cJSON* ipr = cJSON_GetObjectItem(b, "instructionReference");
+            if (ipr && ipr->valuestring)
+                result->breakpoints[i].instruction_reference = (uint32_t)strtoul(ipr->valuestring, NULL, 0);
+
+            result->breakpoints[i].source_path = strdup(source_path);
+        }
+    }
+
+    // Update client tracking: remove old breakpoints for this source, add new ones
+    int keep = 0;
+    for (int i = 0; i < client->num_breakpoints; i++) {
+        if (client->breakpoints[i].source_path &&
+            strcmp(client->breakpoints[i].source_path, source_path) != 0)
+            keep++;
+    }
+
+    int new_total = keep + num_bps;
+    DAPBreakpoint* new_list = NULL;
+    if (new_total > 0) {
+        new_list = calloc(new_total, sizeof(DAPBreakpoint));
+        if (!new_list) {
+            free(merged);
+            cJSON_Delete(root);
+            return DAP_ERROR_MEMORY;
+        }
+
+        // Copy breakpoints from other sources
+        int idx = 0;
+        for (int i = 0; i < client->num_breakpoints; i++) {
+            if (client->breakpoints[i].source_path &&
+                strcmp(client->breakpoints[i].source_path, source_path) != 0) {
+                new_list[idx] = client->breakpoints[i];
+                // Transfer ownership
+                client->breakpoints[i].source_path = NULL;
+                client->breakpoints[i].source_name = NULL;
+                client->breakpoints[i].message = NULL;
+                client->breakpoints[i].condition = NULL;
+                client->breakpoints[i].hit_condition = NULL;
+                client->breakpoints[i].log_message = NULL;
+                idx++;
+            }
+        }
+
+        // Add verified breakpoints from response, conditions from merged list
+        for (int i = 0; i < num_bps; i++) {
+            new_list[idx].id = result->breakpoints[i].id;
+            new_list[idx].verified = result->breakpoints[i].verified;
+            new_list[idx].line = result->breakpoints[i].line;
+            new_list[idx].source_path = strdup(source_path);
+            new_list[idx].instruction_reference = result->breakpoints[i].instruction_reference;
+            if (result->breakpoints[i].message)
+                new_list[idx].message = strdup(result->breakpoints[i].message);
+            if (i < merged_count && merged[i].condition)
+                new_list[idx].condition = strdup(merged[i].condition);
+            if (i < merged_count && merged[i].hit_condition)
+                new_list[idx].hit_condition = strdup(merged[i].hit_condition);
+            if (i < merged_count && merged[i].log_message)
+                new_list[idx].log_message = strdup(merged[i].log_message);
+            idx++;
+        }
+    }
+
+    // Free old list (strings already transferred or freed above)
+    dap_client_clear_breakpoints(client);
+    client->breakpoints = new_list;
+    client->num_breakpoints = new_total;
+
+    free(merged);
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
+}
+
+int dap_client_set_data_breakpoints(DAPClient* client,
+                                    const DAPDataBreakpoint* data_breakpoints,
+                                    int count,
+                                    DAPSetDataBreakpointsResult* result) {
+    if (!client || !result)
+        return DAP_ERROR_INVALID_ARG;
+
+    result->base.success = false;
+    result->base.message = NULL;
+    result->breakpoints = NULL;
+    result->num_breakpoints = 0;
+
+    // Build JSON request
+    cJSON* args = cJSON_CreateObject();
+    if (!args) return DAP_ERROR_MEMORY;
+
+    cJSON* bp_array = cJSON_CreateArray();
+    for (int i = 0; i < count; i++) {
+        cJSON* bp = cJSON_CreateObject();
+        if (data_breakpoints[i].data_id)
+            cJSON_AddStringToObject(bp, "dataId", data_breakpoints[i].data_id);
+
+        const char* access_str = "write";
+        switch (data_breakpoints[i].access_type) {
+            case DAP_DATA_BP_ACCESS_READ:      access_str = "read"; break;
+            case DAP_DATA_BP_ACCESS_WRITE:     access_str = "write"; break;
+            case DAP_DATA_BP_ACCESS_READWRITE: access_str = "readWrite"; break;
+        }
+        cJSON_AddStringToObject(bp, "accessType", access_str);
+
+        if (data_breakpoints[i].condition)
+            cJSON_AddStringToObject(bp, "condition", data_breakpoints[i].condition);
+        if (data_breakpoints[i].hit_condition)
+            cJSON_AddStringToObject(bp, "hitCondition", data_breakpoints[i].hit_condition);
+
+        cJSON_AddItemToArray(bp_array, bp);
+    }
+    cJSON_AddItemToObject(args, "breakpoints", bp_array);
+
+    char* response = NULL;
+    int err = dap_client_send_request(client, DAP_CMD_SET_DATA_BREAKPOINTS, args, &response);
+    cJSON_Delete(args);
+
+    if (err != DAP_ERROR_NONE) {
+        free(response);
+        return err;
+    }
+
+    if (!response) return DAP_ERROR_INVALID_RESPONSE;
+
+    cJSON* root = cJSON_Parse(response);
+    free(response);
+    if (!root) return DAP_ERROR_INVALID_RESPONSE;
+
+    cJSON* success = cJSON_GetObjectItem(root, "success");
+    if (!success || !cJSON_IsTrue(success)) {
+        cJSON* msg = cJSON_GetObjectItem(root, "message");
+        if (msg && msg->valuestring)
+            result->base.message = strdup(msg->valuestring);
+        cJSON_Delete(root);
+        return DAP_ERROR_INVALID_RESPONSE;
+    }
+    result->base.success = true;
+
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    cJSON* bps = body ? cJSON_GetObjectItem(body, "breakpoints") : NULL;
+    int num_bps = (bps && cJSON_IsArray(bps)) ? cJSON_GetArraySize(bps) : 0;
+
+    if (num_bps > 0) {
+        result->breakpoints = calloc(num_bps, sizeof(DAPDataBreakpoint));
+        if (!result->breakpoints) {
+            cJSON_Delete(root);
+            return DAP_ERROR_MEMORY;
+        }
+        result->num_breakpoints = num_bps;
+
+        for (int i = 0; i < num_bps; i++) {
+            cJSON* b = cJSON_GetArrayItem(bps, i);
+            if (!b) continue;
+
+            cJSON* id_j = cJSON_GetObjectItem(b, "id");
+            if (id_j) result->breakpoints[i].id = id_j->valueint;
+
+            cJSON* v = cJSON_GetObjectItem(b, "verified");
+            result->breakpoints[i].verified = v ? cJSON_IsTrue(v) : false;
+
+            cJSON* msg = cJSON_GetObjectItem(b, "message");
+            if (msg && msg->valuestring)
+                result->breakpoints[i].message = strdup(msg->valuestring);
+
+            // Carry forward request data
+            if (i < count) {
+                if (data_breakpoints[i].data_id)
+                    result->breakpoints[i].data_id = strdup(data_breakpoints[i].data_id);
+                result->breakpoints[i].access_type = data_breakpoints[i].access_type;
+                result->breakpoints[i].address_space = data_breakpoints[i].address_space;
+                result->breakpoints[i].address = data_breakpoints[i].address;
+            }
+        }
+    }
+
+    // Replace client tracking with new set (DAP replaces all data breakpoints)
+    dap_client_clear_data_breakpoints(client);
+    if (num_bps > 0) {
+        client->data_breakpoints = calloc(num_bps, sizeof(DAPDataBreakpoint));
+        if (client->data_breakpoints) {
+            client->num_data_breakpoints = num_bps;
+            for (int i = 0; i < num_bps; i++) {
+                client->data_breakpoints[i].id = result->breakpoints[i].id;
+                client->data_breakpoints[i].verified = result->breakpoints[i].verified;
+                if (result->breakpoints[i].data_id)
+                    client->data_breakpoints[i].data_id = strdup(result->breakpoints[i].data_id);
+                client->data_breakpoints[i].access_type = result->breakpoints[i].access_type;
+                client->data_breakpoints[i].address_space = result->breakpoints[i].address_space;
+                client->data_breakpoints[i].address = result->breakpoints[i].address;
+                if (result->breakpoints[i].message)
+                    client->data_breakpoints[i].message = strdup(result->breakpoints[i].message);
+            }
+        }
+    }
+
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
+}
+
+void dap_set_breakpoints_result_free(DAPSetBreakpointsResult* result) {
+    if (!result) return;
+    for (size_t i = 0; i < result->num_breakpoints; i++) {
+        free(result->breakpoints[i].message);
+        free(result->breakpoints[i].source_path);
+        free(result->breakpoints[i].source_name);
+        free(result->breakpoints[i].condition);
+        free(result->breakpoints[i].hit_condition);
+        free(result->breakpoints[i].log_message);
+    }
+    free(result->breakpoints);
+    free(result->base.message);
+    result->breakpoints = NULL;
+    result->num_breakpoints = 0;
+}
+
+void dap_set_data_breakpoints_result_free(DAPSetDataBreakpointsResult* result) {
+    if (!result) return;
+    for (size_t i = 0; i < result->num_breakpoints; i++) {
+        free(result->breakpoints[i].data_id);
+        free(result->breakpoints[i].condition);
+        free(result->breakpoints[i].hit_condition);
+        free(result->breakpoints[i].message);
+    }
+    free(result->breakpoints);
+    free(result->base.message);
+    result->breakpoints = NULL;
+    result->num_breakpoints = 0;
 }

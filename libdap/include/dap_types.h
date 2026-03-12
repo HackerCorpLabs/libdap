@@ -426,6 +426,47 @@ typedef struct {
 } DAPInstructionBreakpoint;
 
 /**
+ * @brief Data breakpoint access type
+ */
+typedef enum {
+    DAP_DATA_BP_ACCESS_READ,
+    DAP_DATA_BP_ACCESS_WRITE,
+    DAP_DATA_BP_ACCESS_READWRITE
+} DAPDataBreakpointAccessType;
+
+/**
+ * @brief Data breakpoint address space
+ */
+typedef enum {
+    DAP_DATA_BP_ADDR_VIRTUAL,            ///< Virtual address (default)
+    DAP_DATA_BP_ADDR_PHYSICAL            ///< Physical address
+} DAPDataBreakpointAddressSpace;
+
+/**
+ * @brief Data breakpoint (watchpoint) tracking entry
+ */
+typedef struct {
+    int id;                              ///< Breakpoint ID assigned by server
+    bool verified;                       ///< Whether the watchpoint is verified
+    char* data_id;                       ///< Data identifier (address as string)
+    DAPDataBreakpointAccessType access_type; ///< Access type
+    DAPDataBreakpointAddressSpace address_space; ///< Virtual or physical
+    uint32_t address;                    ///< Parsed address for convenience
+    char* condition;                     ///< Optional condition expression
+    char* hit_condition;                 ///< Optional hit condition expression
+    char* message;                       ///< Optional server message
+} DAPDataBreakpoint;
+
+/**
+ * @brief Result for setDataBreakpoints response
+ */
+typedef struct {
+    DAPResult base;
+    DAPDataBreakpoint* breakpoints;
+    size_t num_breakpoints;
+} DAPSetDataBreakpointsResult;
+
+/**
  * @brief Free memory allocated for a scopes result
  * 
  * @param result Result to free

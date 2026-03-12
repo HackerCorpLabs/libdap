@@ -54,7 +54,7 @@ async def list_tools() -> list[Tool]:
                     "program": {"type": "string", "description": "Path to the program to debug"},
                     "stop_on_entry": {"type": "boolean", "default": True, "description": "Stop at program entry point"},
                     "source_file": {"type": "string", "description": "Path to source file for source-level debugging"},
-                    "map_file": {"type": "string", "description": "Path to .map file for source line mapping"},
+                    "map_file": {"type": "string", "description": "Path to .srcmap file for source-level debugging (C and assembly source lines, C functions, parameters, local variables)"},
                 },
                 "required": ["program"],
             },

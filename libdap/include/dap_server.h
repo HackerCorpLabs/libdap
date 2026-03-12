@@ -277,6 +277,38 @@ typedef struct {
 } InstructionBreakpointCommandContext;
 
 /**
+ * @struct DataBreakpointInfoCommandContext
+ * @brief Context for dataBreakpointInfo command (DAP spec)
+ */
+typedef struct {
+    int variables_reference;         /**< Optional variablesReference */
+    const char* name;                /**< Variable name or memory address expression */
+    int frame_id;                    /**< Optional stack frame ID */
+    int bytes;                       /**< Optional byte count for memory range */
+    bool as_address;                 /**< Interpret name as memory address */
+    // Response fields (filled by callback)
+    const char* data_id;             /**< Identifier for the data breakpoint (NULL if not supported) */
+    const char* description;         /**< Human-readable description */
+    bool supports_read;              /**< Access type: read supported */
+    bool supports_write;             /**< Access type: write supported */
+    bool supports_read_write;        /**< Access type: readWrite supported */
+    bool can_persist;                /**< Whether breakpoint can persist across sessions */
+} DataBreakpointInfoCommandContext;
+
+/**
+ * @struct SetDataBreakpointsCommandContext
+ * @brief Context for setDataBreakpoints command (DAP spec)
+ */
+typedef struct {
+    int breakpoint_count;            /**< Number of data breakpoints */
+    char** data_ids;                 /**< Array of dataId strings */
+    char** access_types;             /**< Array of access type strings (read/write/readWrite) */
+    char** conditions;               /**< Array of optional condition expressions */
+    char** hit_conditions;           /**< Array of optional hit condition expressions */
+    DAPBreakpoint* breakpoints;      /**< Array of breakpoint results (filled by callback) */
+} SetDataBreakpointsCommandContext;
+
+/**
  * @struct ExceptionBreakpointCommandContext
  * @brief Context for exception breakpoint commands
  */
@@ -573,6 +605,8 @@ struct DAPServer
             ContinueCommandContext continue_cmd;   /**< Context for continue command */
             BreakpointCommandContext breakpoint;    /**< Context for breakpoint commands */
             InstructionBreakpointCommandContext instruction_breakpoint; /**< Context for instruction breakpoints */
+            DataBreakpointInfoCommandContext data_breakpoint_info; /**< Context for dataBreakpointInfo */
+            SetDataBreakpointsCommandContext set_data_breakpoints; /**< Context for setDataBreakpoints */
             ExceptionBreakpointCommandContext exception; /**< Context for exception breakpoints */
             LaunchCommandContext launch;            /**< Context for launch command */
             RestartCommandContext restart;          /**< Context for restart command */

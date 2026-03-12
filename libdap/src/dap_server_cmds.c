@@ -921,6 +921,299 @@ int handle_set_instruction_breakpoints(DAPServer *server, cJSON *args, DAPRespon
 }
 
 /**
+ * @brief Handle dataBreakpointInfo request
+ *
+ * Per DAP spec: queries whether the debuggee supports a data breakpoint
+ * on a given variable or memory address. Returns a dataId that can be
+ * used with setDataBreakpoints, and which access types are supported.
+ *
+ * @param server Server instance
+ * @param args JSON arguments from client
+ * @param response Response to fill
+ * @return 0 on success, -1 on error
+ */
+int handle_data_breakpoint_info(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!args || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_DATA_BREAKPOINT_INFO;
+    memset(&server->current_command.context.data_breakpoint_info, 0,
+           sizeof(DataBreakpointInfoCommandContext));
+
+    // Parse required field: name (variable name or address expression)
+    cJSON *name = cJSON_GetObjectItem(args, "name");
+    if (name && cJSON_IsString(name))
+    {
+        server->current_command.context.data_breakpoint_info.name = strdup(name->valuestring);
+    }
+
+    // Parse optional field: variablesReference
+    cJSON *var_ref = cJSON_GetObjectItem(args, "variablesReference");
+    if (var_ref && cJSON_IsNumber(var_ref))
+    {
+        server->current_command.context.data_breakpoint_info.variables_reference = var_ref->valueint;
+    }
+
+    // Parse optional field: frameId
+    cJSON *frame_id = cJSON_GetObjectItem(args, "frameId");
+    if (frame_id && cJSON_IsNumber(frame_id))
+    {
+        server->current_command.context.data_breakpoint_info.frame_id = frame_id->valueint;
+    }
+
+    // Parse optional field: bytes (number of bytes to watch)
+    cJSON *bytes = cJSON_GetObjectItem(args, "bytes");
+    if (bytes && cJSON_IsNumber(bytes))
+    {
+        server->current_command.context.data_breakpoint_info.bytes = bytes->valueint;
+    }
+
+    // Parse optional field: asAddress (interpret name as memory address)
+    cJSON *as_address = cJSON_GetObjectItem(args, "asAddress");
+    if (as_address && cJSON_IsBool(as_address))
+    {
+        server->current_command.context.data_breakpoint_info.as_address = cJSON_IsTrue(as_address);
+    }
+
+    // Call implementation callback
+    int result = dap_server_execute_callback(server, DAP_CMD_DATA_BREAKPOINT_INFO);
+
+    // Build response body
+    cJSON *body = cJSON_CreateObject();
+
+    DataBreakpointInfoCommandContext *ctx = &server->current_command.context.data_breakpoint_info;
+
+    // dataId: null if not supported, string identifier if supported
+    if (ctx->data_id)
+    {
+        cJSON_AddStringToObject(body, "dataId", ctx->data_id);
+    }
+    else
+    {
+        cJSON_AddNullToObject(body, "dataId");
+    }
+
+    // description: human-readable description
+    if (ctx->description)
+    {
+        cJSON_AddStringToObject(body, "description", ctx->description);
+    }
+    else
+    {
+        cJSON_AddStringToObject(body, "description", "");
+    }
+
+    // accessTypes: array of supported access types
+    cJSON *access_types = cJSON_CreateArray();
+    if (ctx->supports_read)
+    {
+        cJSON_AddItemToArray(access_types, cJSON_CreateString("read"));
+    }
+    if (ctx->supports_write)
+    {
+        cJSON_AddItemToArray(access_types, cJSON_CreateString("write"));
+    }
+    if (ctx->supports_read_write)
+    {
+        cJSON_AddItemToArray(access_types, cJSON_CreateString("readWrite"));
+    }
+    cJSON_AddItemToObject(body, "accessTypes", access_types);
+
+    // canPersist
+    cJSON_AddBoolToObject(body, "canPersist", ctx->can_persist);
+
+    set_response_success(response, body);
+
+    // Cleanup
+    if (ctx->name)
+    {
+        free((void *)ctx->name);
+        ctx->name = NULL;
+    }
+    if (ctx->data_id)
+    {
+        free((void *)ctx->data_id);
+        ctx->data_id = NULL;
+    }
+    if (ctx->description)
+    {
+        free((void *)ctx->description);
+        ctx->description = NULL;
+    }
+
+    return result;
+}
+
+/**
+ * @brief Handle setDataBreakpoints request
+ *
+ * Per DAP spec: sets data breakpoints (watchpoints). Replaces all
+ * previously set data breakpoints. Each breakpoint is identified by
+ * a dataId obtained from a prior dataBreakpointInfo request.
+ *
+ * @param server Server instance
+ * @param args JSON arguments from client
+ * @param response Response to fill
+ * @return 0 on success, -1 on error
+ */
+int handle_set_data_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!args || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_SET_DATA_BREAKPOINTS;
+    memset(&server->current_command.context.set_data_breakpoints, 0,
+           sizeof(SetDataBreakpointsCommandContext));
+
+    // Parse breakpoints array
+    cJSON *breakpoints = cJSON_GetObjectItem(args, "breakpoints");
+    int count = 0;
+
+    if (breakpoints && cJSON_IsArray(breakpoints))
+    {
+        count = cJSON_GetArraySize(breakpoints);
+    }
+
+    if (count <= 0)
+    {
+        // Empty array = clear all data breakpoints
+        server->current_command.context.set_data_breakpoints.breakpoint_count = 0;
+
+        int result = dap_server_execute_callback(server, DAP_CMD_SET_DATA_BREAKPOINTS);
+
+        cJSON *body = cJSON_CreateObject();
+        cJSON *bp_arr = cJSON_CreateArray();
+        cJSON_AddItemToObject(body, "breakpoints", bp_arr);
+        set_response_success(response, body);
+        return result;
+    }
+
+    // Allocate arrays
+    char **data_ids = calloc(count, sizeof(char *));
+    char **access_types = calloc(count, sizeof(char *));
+    char **conditions = calloc(count, sizeof(char *));
+    char **hit_conditions = calloc(count, sizeof(char *));
+    DAPBreakpoint *bp_results = calloc(count, sizeof(DAPBreakpoint));
+
+    if (!data_ids || !access_types || !conditions || !hit_conditions || !bp_results)
+    {
+        free(data_ids);
+        free(access_types);
+        free(conditions);
+        free(hit_conditions);
+        free(bp_results);
+        set_response_error(response, "Memory allocation failed");
+        return -1;
+    }
+
+    // Parse each breakpoint
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *bp = cJSON_GetArrayItem(breakpoints, i);
+        if (!bp) continue;
+
+        // Required: dataId (string from dataBreakpointInfo)
+        cJSON *data_id = cJSON_GetObjectItem(bp, "dataId");
+        if (data_id && cJSON_IsString(data_id))
+        {
+            data_ids[i] = strdup(data_id->valuestring);
+        }
+
+        // Optional: accessType ("read", "write", "readWrite")
+        cJSON *access = cJSON_GetObjectItem(bp, "accessType");
+        if (access && cJSON_IsString(access))
+        {
+            access_types[i] = strdup(access->valuestring);
+        }
+        else
+        {
+            access_types[i] = strdup("write"); // Default per DAP spec
+        }
+
+        // Optional: condition
+        cJSON *cond = cJSON_GetObjectItem(bp, "condition");
+        if (cond && cJSON_IsString(cond))
+        {
+            conditions[i] = strdup(cond->valuestring);
+        }
+
+        // Optional: hitCondition
+        cJSON *hit_cond = cJSON_GetObjectItem(bp, "hitCondition");
+        if (hit_cond && cJSON_IsString(hit_cond))
+        {
+            hit_conditions[i] = strdup(hit_cond->valuestring);
+        }
+
+        // Pre-fill result
+        bp_results[i].verified = true;
+    }
+
+    // Store in context
+    server->current_command.context.set_data_breakpoints.data_ids = data_ids;
+    server->current_command.context.set_data_breakpoints.access_types = access_types;
+    server->current_command.context.set_data_breakpoints.conditions = conditions;
+    server->current_command.context.set_data_breakpoints.hit_conditions = hit_conditions;
+    server->current_command.context.set_data_breakpoints.breakpoints = bp_results;
+    server->current_command.context.set_data_breakpoints.breakpoint_count = count;
+
+    // Call implementation callback
+    int result = dap_server_execute_callback(server, DAP_CMD_SET_DATA_BREAKPOINTS);
+
+    // Build response
+    cJSON *body = cJSON_CreateObject();
+    cJSON *response_breakpoints = cJSON_CreateArray();
+
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *rbp = cJSON_CreateObject();
+        if (!rbp) continue;
+
+        cJSON_AddNumberToObject(rbp, "id", i + 1);
+        cJSON_AddBoolToObject(rbp, "verified", bp_results[i].verified);
+
+        if (bp_results[i].message)
+        {
+            cJSON_AddStringToObject(rbp, "message", bp_results[i].message);
+        }
+
+        cJSON_AddItemToArray(response_breakpoints, rbp);
+    }
+
+    cJSON_AddItemToObject(body, "breakpoints", response_breakpoints);
+    set_response_success(response, body);
+
+    // Cleanup
+    for (int i = 0; i < count; i++)
+    {
+        free(data_ids[i]);
+        free(access_types[i]);
+        free(conditions[i]);
+        free(hit_conditions[i]);
+        free((void *)bp_results[i].message);
+    }
+    free(data_ids);
+    free(access_types);
+    free(conditions);
+    free(hit_conditions);
+    free(bp_results);
+
+    server->current_command.context.set_data_breakpoints.data_ids = NULL;
+    server->current_command.context.set_data_breakpoints.access_types = NULL;
+    server->current_command.context.set_data_breakpoints.conditions = NULL;
+    server->current_command.context.set_data_breakpoints.hit_conditions = NULL;
+    server->current_command.context.set_data_breakpoints.breakpoints = NULL;
+
+    return result;
+}
+
+/**
  * @brief Helper function to free a breakpoints array and all its contents
  *
  * @param breakpoints Array of breakpoints to free

@@ -81,6 +81,8 @@ int handle_terminate(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_restart(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_set_breakpoints(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_set_instruction_breakpoints(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_data_breakpoint_info(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_set_data_breakpoints(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_source(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_threads(DAPServer* server,   cJSON* args, DAPResponse* response);
 int handle_stack_trace(DAPServer* server, cJSON* args, DAPResponse* response);

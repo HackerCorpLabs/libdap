@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-dap-server"
+version = "0.1.0"
+description = "MCP server for DAP debugging"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+mcp-dap-server = "mcp_dap_server.server:main"

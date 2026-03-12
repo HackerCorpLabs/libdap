@@ -265,6 +265,18 @@ typedef struct {
 } BreakpointCommandContext;
 
 /**
+ * @struct InstructionBreakpointCommandContext
+ * @brief Context for setInstructionBreakpoints command
+ */
+typedef struct {
+    DAPBreakpoint* breakpoints;        /**< Array of breakpoint results */
+    int breakpoint_count;              /**< Number of breakpoints */
+    uint32_t* addresses;               /**< Array of instruction addresses */
+    int* offsets;                      /**< Array of offsets from address */
+    char** conditions;                 /**< Array of condition expressions */
+} InstructionBreakpointCommandContext;
+
+/**
  * @struct ExceptionBreakpointCommandContext
  * @brief Context for exception breakpoint commands
  */
@@ -560,6 +572,7 @@ struct DAPServer
             StepCommandContext step;                /**< Context for step commands */
             ContinueCommandContext continue_cmd;   /**< Context for continue command */
             BreakpointCommandContext breakpoint;    /**< Context for breakpoint commands */
+            InstructionBreakpointCommandContext instruction_breakpoint; /**< Context for instruction breakpoints */
             ExceptionBreakpointCommandContext exception; /**< Context for exception breakpoints */
             LaunchCommandContext launch;            /**< Context for launch command */
             RestartCommandContext restart;          /**< Context for restart command */

@@ -766,6 +766,161 @@ int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response
 }
 
 /**
+ * @brief Handle the setInstructionBreakpoints request
+ *
+ * Parses instruction breakpoint addresses and calls the implementation callback.
+ * DAP spec: breakpoints array contains objects with instructionReference (string),
+ * optional offset (int), and optional condition (string).
+ */
+int handle_set_instruction_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!args || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_SET_INSTRUCTION_BREAKPOINTS;
+    memset(&server->current_command.context.instruction_breakpoint, 0,
+           sizeof(InstructionBreakpointCommandContext));
+
+    // Parse breakpoints array
+    cJSON *breakpoints = cJSON_GetObjectItem(args, "breakpoints");
+    int count = 0;
+
+    if (breakpoints && cJSON_IsArray(breakpoints))
+    {
+        count = cJSON_GetArraySize(breakpoints);
+    }
+
+    if (count <= 0)
+    {
+        // Empty array = clear all instruction breakpoints
+        server->current_command.context.instruction_breakpoint.breakpoint_count = 0;
+        server->current_command.context.instruction_breakpoint.breakpoints = NULL;
+        server->current_command.context.instruction_breakpoint.addresses = NULL;
+
+        int result = dap_server_execute_callback(server, DAP_CMD_SET_INSTRUCTION_BREAKPOINTS);
+
+        cJSON *body = cJSON_CreateObject();
+        cJSON *bp_arr = cJSON_CreateArray();
+        cJSON_AddItemToObject(body, "breakpoints", bp_arr);
+        set_response_success(response, body);
+        return result;
+    }
+
+    // Allocate arrays
+    uint32_t *addresses = calloc(count, sizeof(uint32_t));
+    int *offsets = calloc(count, sizeof(int));
+    char **conditions = calloc(count, sizeof(char *));
+    DAPBreakpoint *bp_results = calloc(count, sizeof(DAPBreakpoint));
+
+    if (!addresses || !offsets || !conditions || !bp_results)
+    {
+        free(addresses);
+        free(offsets);
+        free(conditions);
+        free(bp_results);
+        set_response_error(response, "Memory allocation failed");
+        return -1;
+    }
+
+    // Parse each breakpoint
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *bp = cJSON_GetArrayItem(breakpoints, i);
+        if (!bp) continue;
+
+        // Required: instructionReference (string, e.g. "0x1000")
+        cJSON *ref = cJSON_GetObjectItem(bp, "instructionReference");
+        if (ref && cJSON_IsString(ref))
+        {
+            addresses[i] = (uint32_t)strtoul(ref->valuestring, NULL, 0);
+        }
+
+        // Optional: offset
+        cJSON *off = cJSON_GetObjectItem(bp, "offset");
+        if (off && cJSON_IsNumber(off))
+        {
+            offsets[i] = off->valueint;
+        }
+
+        // Optional: condition
+        cJSON *cond = cJSON_GetObjectItem(bp, "condition");
+        if (cond && cJSON_IsString(cond))
+        {
+            conditions[i] = strdup(cond->valuestring);
+        }
+
+        // Pre-fill result breakpoint
+        bp_results[i].verified = true;
+        bp_results[i].line = 0;
+        bp_results[i].instruction_reference = addresses[i] + offsets[i];
+    }
+
+    // Store in context
+    server->current_command.context.instruction_breakpoint.addresses = addresses;
+    server->current_command.context.instruction_breakpoint.offsets = offsets;
+    server->current_command.context.instruction_breakpoint.conditions = conditions;
+    server->current_command.context.instruction_breakpoint.breakpoints = bp_results;
+    server->current_command.context.instruction_breakpoint.breakpoint_count = count;
+
+    // Call implementation callback
+    int result = dap_server_execute_callback(server, DAP_CMD_SET_INSTRUCTION_BREAKPOINTS);
+
+    // Build response
+    cJSON *body = cJSON_CreateObject();
+    cJSON *response_breakpoints = cJSON_CreateArray();
+
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *rbp = cJSON_CreateObject();
+        if (!rbp) continue;
+
+        cJSON_AddNumberToObject(rbp, "id", i + 1);
+        cJSON_AddBoolToObject(rbp, "verified", bp_results[i].verified);
+
+        // Format address as hex string per DAP spec
+        char addr_str[32];
+        snprintf(addr_str, sizeof(addr_str), "0x%X", bp_results[i].instruction_reference);
+        cJSON_AddStringToObject(rbp, "instructionReference", addr_str);
+
+        if (bp_results[i].message)
+        {
+            cJSON_AddStringToObject(rbp, "message", bp_results[i].message);
+        }
+
+        if (bp_results[i].line > 0)
+        {
+            cJSON_AddNumberToObject(rbp, "line", bp_results[i].line);
+        }
+
+        cJSON_AddItemToArray(response_breakpoints, rbp);
+    }
+
+    cJSON_AddItemToObject(body, "breakpoints", response_breakpoints);
+    set_response_success(response, body);
+
+    // Cleanup
+    for (int i = 0; i < count; i++)
+    {
+        free(conditions[i]);
+        free((void *)bp_results[i].message);
+    }
+    free(addresses);
+    free(offsets);
+    free(conditions);
+    free(bp_results);
+
+    server->current_command.context.instruction_breakpoint.addresses = NULL;
+    server->current_command.context.instruction_breakpoint.offsets = NULL;
+    server->current_command.context.instruction_breakpoint.conditions = NULL;
+    server->current_command.context.instruction_breakpoint.breakpoints = NULL;
+
+    return result;
+}
+
+/**
  * @brief Helper function to free a breakpoints array and all its contents
  *
  * @param breakpoints Array of breakpoints to free

@@ -747,7 +747,7 @@ void initialize_command_handlers(DAPServer *server)
     server->command_handlers[DAP_CMD_EXCEPTION_INFO] = NULL;              // Not implemented
     server->command_handlers[DAP_CMD_DATA_BREAKPOINT_INFO] = NULL;        // Not implemented
     server->command_handlers[DAP_CMD_SET_DATA_BREAKPOINTS] = NULL;        // Not implemented
-    server->command_handlers[DAP_CMD_SET_INSTRUCTION_BREAKPOINTS] = NULL; // Not implemented
+    server->command_handlers[DAP_CMD_SET_INSTRUCTION_BREAKPOINTS] = &handle_set_instruction_breakpoints;
     server->command_handlers[DAP_CMD_MODULES] = NULL;                     // Not implemented
     server->command_handlers[DAP_CMD_STEP_BACK] = NULL;                   // Not implemented
     server->command_handlers[DAP_CMD_REVERSE_CONTINUE] = NULL;            // Not implemented

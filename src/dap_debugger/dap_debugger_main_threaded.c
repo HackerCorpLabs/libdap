@@ -126,9 +126,13 @@ int main(int argc, char* argv[]) {
                file_set->primary_type == FILE_TYPE_ASSEMBLY ? "Assembly" : "C");
         printf("\n");
 
-        // Use the discovered program file
+        // Use the discovered program file (prefer source file for C programs)
         free(program_file);
-        program_file = strdup(file_set->program_file);
+        if (file_set->source_file) {
+            program_file = strdup(file_set->source_file);
+        } else if (file_set->program_file) {
+            program_file = strdup(file_set->program_file);
+        }
     }
 
     // Create thread context

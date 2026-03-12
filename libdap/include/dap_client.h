@@ -27,10 +27,12 @@ typedef struct {
     bool debug_mode;         ///< Debug mode flag
     char* program_path;      ///< Currently loaded program path
     int thread_id;           ///< Current thread ID
-    DAPBreakpoint* breakpoints; ///< Array of breakpoints
-    int num_breakpoints;     ///< Number of breakpoints
+    DAPBreakpoint* breakpoints; ///< Array of tracked source breakpoints
+    int num_breakpoints;     ///< Number of tracked source breakpoints
+    DAPDataBreakpoint* data_breakpoints; ///< Array of tracked data breakpoints (watchpoints)
+    int num_data_breakpoints;            ///< Number of tracked data breakpoints
     DAPTransport* transport; ///< Transport layer for communications
-    
+
 } DAPClient;
 /**
  * @brief Initialize the client structure
@@ -404,6 +406,86 @@ int dap_client_stack_trace(DAPClient* client, int thread_id, DAPStackFrame** fra
  * @return int 0 on success, -1 on failure
  */
 int dap_client_handle_event(DAPClient* client, cJSON* event_json);
+
+/**
+ * @brief Set source breakpoints for a file and track the results
+ *
+ * Sends a setBreakpoints request to the server and stores the verified
+ * breakpoints in the client for later querying.
+ *
+ * @param client Pointer to the client
+ * @param source_path Source file path
+ * @param source_breakpoints Array of source breakpoints to set
+ * @param count Number of breakpoints
+ * @param result Output result structure (caller should free breakpoints array)
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_set_breakpoints(DAPClient* client, const char* source_path,
+                               const DAPSourceBreakpoint* source_breakpoints,
+                               int count, DAPSetBreakpointsResult* result);
+
+/**
+ * @brief Set data breakpoints (watchpoints) and track the results
+ *
+ * Sends a setDataBreakpoints request to the server and stores the verified
+ * watchpoints in the client for later querying.
+ *
+ * @param client Pointer to the client
+ * @param data_breakpoints Array of data breakpoints to set
+ * @param count Number of data breakpoints
+ * @param result Output result structure
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_set_data_breakpoints(DAPClient* client,
+                                    const DAPDataBreakpoint* data_breakpoints,
+                                    int count,
+                                    DAPSetDataBreakpointsResult* result);
+
+/**
+ * @brief Get the list of tracked source breakpoints
+ *
+ * @param client Pointer to the client
+ * @param count Output: number of breakpoints
+ * @return const DAPBreakpoint* Array of breakpoints (owned by client, do not free)
+ */
+const DAPBreakpoint* dap_client_get_breakpoints(DAPClient* client, int* count);
+
+/**
+ * @brief Get the list of tracked data breakpoints (watchpoints)
+ *
+ * @param client Pointer to the client
+ * @param count Output: number of data breakpoints
+ * @return const DAPDataBreakpoint* Array of data breakpoints (owned by client, do not free)
+ */
+const DAPDataBreakpoint* dap_client_get_data_breakpoints(DAPClient* client, int* count);
+
+/**
+ * @brief Clear all tracked source breakpoints
+ *
+ * @param client Pointer to the client
+ */
+void dap_client_clear_breakpoints(DAPClient* client);
+
+/**
+ * @brief Clear all tracked data breakpoints (watchpoints)
+ *
+ * @param client Pointer to the client
+ */
+void dap_client_clear_data_breakpoints(DAPClient* client);
+
+/**
+ * @brief Free a data breakpoint result structure
+ *
+ * @param result Result structure to free
+ */
+void dap_set_data_breakpoints_result_free(DAPSetDataBreakpointsResult* result);
+
+/**
+ * @brief Free a set breakpoints result structure
+ *
+ * @param result Result structure to free
+ */
+void dap_set_breakpoints_result_free(DAPSetBreakpointsResult* result);
 
 /**
  * @brief Set exception breakpoints

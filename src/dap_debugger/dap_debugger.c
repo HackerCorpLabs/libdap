@@ -345,5 +345,39 @@ const DebuggerCommand commands[] = {
         .implemented = true,
         .handler = handle_capabilities_command
     },
+    {
+        .name = "info",
+        .alias = "info",
+        .alias2 = "i",
+        .syntax = "info breakpoints|watchpoints",
+        .description = "List breakpoints or watchpoints",
+        .request_format = NULL,
+        .response_format = NULL,
+        .events = NULL,
+        .has_options = true,
+        .option_types = "topic",
+        .option_descriptions = "breakpoints (b) or watchpoints (w)",
+        .examples = "info breakpoints|List all breakpoints|info watchpoints|List all watchpoints|info b|Short form",
+        .category = CATEGORY_BREAKPOINTS,
+        .implemented = true,
+        .handler = handle_info_command
+    },
+    {
+        .name = "watch",
+        .alias = "watchpoint",
+        .alias2 = "w",
+        .syntax = "watch <address> [read|write|readwrite]",
+        .description = "Set a data breakpoint (watchpoint) on a memory address",
+        .request_format = "{\"breakpoints\": [{\"dataId\": string, \"accessType\": string}]}",
+        .response_format = "{\"breakpoints\": [{\"verified\": boolean, \"id\": number}]}",
+        .events = NULL,
+        .has_options = true,
+        .option_types = "address|access_type",
+        .option_descriptions = "Memory address (octal/hex/decimal) and access type (read, write, readwrite)",
+        .examples = "watch 01000|Watch writes to 01000|watch 01000 read|Watch reads|watch 0x200 readwrite|Watch read/write",
+        .category = CATEGORY_BREAKPOINTS,
+        .implemented = true,
+        .handler = handle_watch_command
+    },
     { NULL } // Terminator
-}; 
+};

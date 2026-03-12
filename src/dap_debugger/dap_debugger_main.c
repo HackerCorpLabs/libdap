@@ -459,8 +459,11 @@ int main(int argc, char* argv[]) {
     }
 
     // File paths - send all discovered files
+    // program is required by the server; use source_file as fallback if no binary found
     if (files->program_file) {
         cJSON_AddStringToObject(launch_args, "program", files->program_file);
+    } else if (files->source_file) {
+        cJSON_AddStringToObject(launch_args, "program", files->source_file);
     }
     if (files->source_file) {
         cJSON_AddStringToObject(launch_args, "sourceFile", files->source_file);

@@ -2,10 +2,22 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Launch dap_mock_server",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/dap_mock_server",            
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build-with-make",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
             "name": "Launch dap_debugger",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/dap_debugger",
+            "program": "${workspaceFolder}/build/bin/dap_debugger",
             "args": ["intr.asm", "-h", "localhost", "--program", "/tmp/a.out"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -13,6 +25,41 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "Debug DAP Debugger Threaded",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/dap_debugger_threaded",
+            "args": [
+                "/home/ronny/repos/ndasm/asm/hello.s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build-with-make",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "logging": {
+                "moduleLoad": false,
+                "trace": false,
+                "engineLogging": false,
+                "programOutput": true,
+                "exceptions": true
+            }
         }
     ]
 }

@@ -92,6 +92,7 @@ int handle_scopes(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_variables(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_set_variable(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_evaluate(DAPServer* server, cJSON* args, DAPResponse* response);
+int handle_set_function_breakpoints(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_configuration_done(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_read_memory(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_write_memory(DAPServer* server, cJSON* args, DAPResponse* response);

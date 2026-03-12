@@ -193,6 +193,12 @@ FileSet* discover_files(const char* primary_file) {
             if (file_exists(temp_path)) {
                 files->program_file = strdup(temp_path);
             }
+
+            // Look for .srcmap file (C debug info: functions, variables, line mappings)
+            snprintf(temp_path, sizeof(temp_path), "%s/%s.srcmap", dir, base);
+            if (file_exists(temp_path)) {
+                files->map_file = strdup(temp_path);
+            }
             break;
 
         case FILE_TYPE_BINARY:

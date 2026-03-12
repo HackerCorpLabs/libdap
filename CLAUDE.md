@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Debug Adapter Protocol (DAP) implementation in C, designed for CPU emulators and debuggers. The core is `libdap` (a protocol library), with two test applications: a mock server and an interactive debugger client.
+A Debug Adapter Protocol (DAP) implementation in C, designed for CPU emulators and debuggers. The core is `libdap` (a protocol library), with two test applications (mock server and interactive debugger client), plus a Python MCP server for AI-assisted debugging.
 
 ## Build Commands
 
@@ -37,6 +37,16 @@ Build outputs go to `build/bin/` (executables) and `build/lib/` (library).
 sudo apt install libcjson-dev libreadline-dev cmake valgrind
 ```
 
+### MCP DAP Server (Python)
+
+```bash
+cd mcp-dap-server
+pip install -e .
+# Run: mcp-dap-server
+```
+
+Requires Python >= 3.10 and the `mcp` package.
+
 ## Running / Testing
 
 There is no automated test suite. Testing is manual using the two executables:
@@ -52,6 +62,15 @@ There is no automated test suite. Testing is manual using the two executables:
 There is also a threaded debugger variant: `./build/bin/dap_debugger_threaded`
 
 ## Architecture
+
+### Directory Layout
+
+- `libdap/` - Core library (protocol handling, transport, message parsing)
+  - `libdap/include/` - Public headers (`dap_server.h`, `dap_server_cmds.h`, `dap_client.h`, `dap_transport.h`, `dap_message.h`, `dap_types.h`, `dap_protocol.h`, `dap_error.h`)
+  - `libdap/src/` - Library implementation. **Note**: `error.c` is excluded from build (duplicate of `dap_error.c`) via CMakeLists.txt filter.
+- `src/dap_debugger/` - Interactive debugger client (both single-threaded and threaded variants)
+- `src/dap_mock_server/` - Mock server simulating an ND-100 8-register architecture
+- `mcp-dap-server/` - Python MCP server that bridges AI tools to DAP (connects to mock server or real debugger)
 
 ### Two-Layer Callback System
 
@@ -95,7 +114,7 @@ Three special callbacks control CPU emulator integration:
 - Default port: 4711
 - C99 standard, compiled with `-Wall -Wextra -pedantic`
 - Platform flags: `_GNU_SOURCE` (Linux), `_CRT_SECURE_NO_WARNINGS` (Windows)
-- Mock server simulates an ND-100 8-register architecture with scope IDs: LOCALS (1000), REGISTERS (1001), MEMORY (1002)
+- Mock server scope IDs: LOCALS (1000), REGISTERS (1001), MEMORY (1002)
 
 ### Embedding as a Subproject
 

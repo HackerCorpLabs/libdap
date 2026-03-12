@@ -496,6 +496,37 @@ typedef struct {
 } ScopesCommandContext;
 
 /**
+ * @struct EvaluateCommandContext
+ * @brief Context for evaluate command
+ */
+typedef struct {
+    const char* expression;         /**< Expression to evaluate (required) */
+    int frame_id;                   /**< Stack frame context for evaluation (optional, -1 if not set) */
+    const char* context;            /**< Context in which evaluate is called: "watch", "repl", "hover", "variables" */
+
+    // Results - populated by the command handler
+    const char* result;             /**< String representation of the result */
+    const char* type;               /**< Type of the result (optional) */
+    int variables_reference;        /**< Reference to children if result is structured (0 = none) */
+    uint32_t memory_reference;      /**< Memory address if result is addressable (-1 = not present) */
+} EvaluateCommandContext;
+
+/**
+ * @struct FunctionBreakpointCommandContext
+ * @brief Context for setFunctionBreakpoints command
+ */
+typedef struct {
+    char **names;                   /**< Array of function names (required) */
+    char **conditions;              /**< Array of condition expressions (optional, may be NULL) */
+    char **hit_conditions;          /**< Array of hit condition expressions (optional, may be NULL) */
+    int count;                      /**< Number of function breakpoints */
+
+    // Results - populated by the command handler
+    DAPBreakpoint *breakpoints;     /**< Array of verified breakpoints */
+    int breakpoint_count;           /**< Number of breakpoints in array */
+} FunctionBreakpointCommandContext;
+
+/**
  * @struct SetVariableCommandContext
  * @brief Context for setVariable command
  */
@@ -617,8 +648,9 @@ struct DAPServer
             ScopesCommandContext scopes;            /**< Context for scopes command */
             VariablesCommandContext variables;       /**< Context for variables command */
             SetVariableCommandContext set_variable; /**< Context for setVariable command */
+            EvaluateCommandContext evaluate;        /**< Context for evaluate command */
+            FunctionBreakpointCommandContext function_breakpoint; /**< Context for function breakpoints */
             StackTraceCommandContext stack_trace;   /**< Context for stack trace command */
-            // Add more command-specific contexts as needed
         } context;
     } current_command;
 

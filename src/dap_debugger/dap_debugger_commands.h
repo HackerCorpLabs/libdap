@@ -47,5 +47,7 @@ int handle_debugmode_command(DAPClient* client, const char* args);
 int handle_pause_command(DAPClient* client, const char* args);
 int handle_launch_command(DAPClient* client, const char* args);
 int handle_capabilities_command(DAPClient* client, const char* args);
+int handle_watch_command(DAPClient* client, const char* args);
+int handle_info_command(DAPClient* client, const char* args);
 
-#endif // DAP_DEBUGGER_COMMANDS_H 
+#endif // DAP_DEBUGGER_COMMANDS_H

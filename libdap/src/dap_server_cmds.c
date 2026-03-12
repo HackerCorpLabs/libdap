@@ -1945,8 +1945,7 @@ int handle_configuration_done(DAPServer *server, cJSON *args, DAPResponse *respo
  */
 int handle_evaluate(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)server; // Mark as unused
-    if (!args || !response)
+    if (!server || !args || !response)
         return -1;
 
     // Extract the expression from arguments
@@ -1957,31 +1956,135 @@ int handle_evaluate(DAPServer *server, cJSON *args, DAPResponse *response)
         return 0;
     }
 
-    // For mock server, just echo back the expression with a mock evaluation
+    // Store command context
+    server->current_command.type = DAP_CMD_EVALUATE;
+    server->current_command.context.evaluate.expression = strdup(expression->valuestring);
+    server->current_command.context.evaluate.result = NULL;
+    server->current_command.context.evaluate.type = NULL;
+    server->current_command.context.evaluate.variables_reference = 0;
+    server->current_command.context.evaluate.memory_reference = (uint32_t)-1;
+
+    // Parse optional frameId
+    cJSON *frame_id = cJSON_GetObjectItem(args, "frameId");
+    server->current_command.context.evaluate.frame_id = frame_id ? frame_id->valueint : -1;
+
+    // Parse optional context
+    cJSON *ctx = cJSON_GetObjectItem(args, "context");
+    server->current_command.context.evaluate.context = (ctx && cJSON_IsString(ctx)) ? strdup(ctx->valuestring) : NULL;
+
+    // Call the implementation callback
+    int result = dap_server_execute_callback(server, DAP_CMD_EVALUATE);
+    if (result != 0)
+    {
+        set_response_error(response, "Evaluate callback failed");
+        cleanup_command_context(server);
+        return 0;
+    }
+
+    // Build response from context results
     cJSON *body = cJSON_CreateObject();
     if (!body)
     {
+        cleanup_command_context(server);
         set_response_error(response, "Failed to create response body");
         return 0;
     }
 
-    // In a real implementation, this would actually evaluate the expression
-    cJSON_AddStringToObject(body, "result", expression->valuestring);
-    cJSON_AddStringToObject(body, "type", "string");
-    cJSON_AddNumberToObject(body, "variablesReference", 0);
+    const char *res_str = server->current_command.context.evaluate.result;
+    cJSON_AddStringToObject(body, "result", res_str ? res_str : expression->valuestring);
 
+    if (server->current_command.context.evaluate.type)
+        cJSON_AddStringToObject(body, "type", server->current_command.context.evaluate.type);
+
+    cJSON_AddNumberToObject(body, "variablesReference",
+                            server->current_command.context.evaluate.variables_reference);
+
+    if (server->current_command.context.evaluate.memory_reference != (uint32_t)-1) {
+        char memref[32];
+        snprintf(memref, sizeof(memref), "%u", server->current_command.context.evaluate.memory_reference);
+        cJSON_AddStringToObject(body, "memoryReference", memref);
+    }
+
+    cleanup_command_context(server);
     set_response_success(response, body);
-    // body is freed by set_response_success
     return 0;
 }
 
-// static int handle_set_variable(cJSON* args, DAPResponse* response) { ... }
-// static int handle_set_expression(cJSON* args, DAPResponse* response) { ... }
-// static int handle_modules(cJSON* args, DAPResponse* response) { ... }
-// static int handle_step_back(cJSON* args, DAPResponse* response) { ... }
-// static int handle_set_instruction_breakpoints(cJSON* args, DAPResponse* response) { ... }
-// static int handle_set_data_breakpoints(cJSON* args, DAPResponse* response) { ... }
-// static int handle_exception_info(cJSON* args, DAPResponse* response) { ... }
+/**
+ * @brief Handle setFunctionBreakpoints request
+ *
+ * Parses function breakpoint names and calls the implementation callback.
+ */
+int handle_set_function_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !args || !response)
+        return -1;
+
+    cJSON *breakpoints = cJSON_GetObjectItem(args, "breakpoints");
+    if (!breakpoints || !cJSON_IsArray(breakpoints))
+    {
+        set_response_error(response, "Missing or invalid breakpoints array");
+        return 0;
+    }
+
+    int count = cJSON_GetArraySize(breakpoints);
+
+    server->current_command.type = DAP_CMD_SET_FUNCTION_BREAKPOINTS;
+    server->current_command.context.function_breakpoint.count = count;
+    server->current_command.context.function_breakpoint.names = calloc(count, sizeof(char *));
+    server->current_command.context.function_breakpoint.conditions = calloc(count, sizeof(char *));
+    server->current_command.context.function_breakpoint.hit_conditions = calloc(count, sizeof(char *));
+    server->current_command.context.function_breakpoint.breakpoints = NULL;
+    server->current_command.context.function_breakpoint.breakpoint_count = 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *bp = cJSON_GetArrayItem(breakpoints, i);
+        cJSON *name = cJSON_GetObjectItem(bp, "name");
+        if (name && cJSON_IsString(name))
+            server->current_command.context.function_breakpoint.names[i] = strdup(name->valuestring);
+
+        cJSON *condition = cJSON_GetObjectItem(bp, "condition");
+        if (condition && cJSON_IsString(condition))
+            server->current_command.context.function_breakpoint.conditions[i] = strdup(condition->valuestring);
+
+        cJSON *hit_cond = cJSON_GetObjectItem(bp, "hitCondition");
+        if (hit_cond && cJSON_IsString(hit_cond))
+            server->current_command.context.function_breakpoint.hit_conditions[i] = strdup(hit_cond->valuestring);
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_SET_FUNCTION_BREAKPOINTS);
+    if (result != 0)
+    {
+        cleanup_command_context(server);
+        set_response_error(response, "Function breakpoints callback failed");
+        return 0;
+    }
+
+    /* Build response */
+    cJSON *body = cJSON_CreateObject();
+    cJSON *bp_array = cJSON_CreateArray();
+
+    int bp_count = server->current_command.context.function_breakpoint.breakpoint_count;
+    DAPBreakpoint *bps = server->current_command.context.function_breakpoint.breakpoints;
+
+    for (int i = 0; i < bp_count; i++)
+    {
+        cJSON *bp_obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(bp_obj, "verified", bps[i].verified);
+        if (bps[i].line > 0)
+            cJSON_AddNumberToObject(bp_obj, "line", bps[i].line);
+        if (bps[i].source_path)
+            cJSON_AddStringToObject(bp_obj, "message", bps[i].source_path);
+        cJSON_AddNumberToObject(bp_obj, "id", bps[i].id);
+        cJSON_AddItemToArray(bp_array, bp_obj);
+    }
+
+    cJSON_AddItemToObject(body, "breakpoints", bp_array);
+    cleanup_command_context(server);
+    set_response_success(response, body);
+    return 0;
+}
 
 int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
 {
@@ -3739,20 +3842,18 @@ int handle_set_variable(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Add required fields
-    cJSON_AddStringToObject(body, "value", value->valuestring);
+    // Use callback result if available, otherwise echo input
+    const char *result_value = server->current_command.context.set_variable.new_value;
+    cJSON_AddStringToObject(body, "value", result_value ? result_value : value->valuestring);
 
-    // Add optional fields if available
-    if (format)
-    {
-        cJSON_AddStringToObject(body, "type", "string"); // Example type
-        cJSON_AddNumberToObject(body, "variablesReference", 0);
-        cJSON_AddNumberToObject(body, "namedVariables", 0);
-        cJSON_AddNumberToObject(body, "indexedVariables", 0);
-        cJSON_AddStringToObject(body, "memoryReference", "");
-    }
+    if (server->current_command.context.set_variable.type)
+        cJSON_AddStringToObject(body, "type", server->current_command.context.set_variable.type);
 
-    set_response_success(response, body);    
+    cJSON_AddNumberToObject(body, "variablesReference",
+                            server->current_command.context.set_variable.variables_reference_return);
+
+    cleanup_command_context(server);
+    set_response_success(response, body);
     return 0;
 }
 

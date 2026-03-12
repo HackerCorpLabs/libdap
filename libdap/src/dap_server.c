@@ -444,6 +444,53 @@ void cleanup_command_context(DAPServer *server)
         }
         break;
 
+    case DAP_CMD_EVALUATE:
+        if (server->current_command.context.evaluate.expression)
+        {
+            free((void *)server->current_command.context.evaluate.expression);
+            server->current_command.context.evaluate.expression = NULL;
+        }
+        if (server->current_command.context.evaluate.context)
+        {
+            free((void *)server->current_command.context.evaluate.context);
+            server->current_command.context.evaluate.context = NULL;
+        }
+        if (server->current_command.context.evaluate.result)
+        {
+            free((void *)server->current_command.context.evaluate.result);
+            server->current_command.context.evaluate.result = NULL;
+        }
+        if (server->current_command.context.evaluate.type)
+        {
+            free((void *)server->current_command.context.evaluate.type);
+            server->current_command.context.evaluate.type = NULL;
+        }
+        break;
+
+    case DAP_CMD_SET_FUNCTION_BREAKPOINTS:
+        if (server->current_command.context.function_breakpoint.names)
+        {
+            for (int i = 0; i < server->current_command.context.function_breakpoint.count; i++)
+            {
+                free(server->current_command.context.function_breakpoint.names[i]);
+                if (server->current_command.context.function_breakpoint.conditions &&
+                    server->current_command.context.function_breakpoint.conditions[i])
+                    free(server->current_command.context.function_breakpoint.conditions[i]);
+                if (server->current_command.context.function_breakpoint.hit_conditions &&
+                    server->current_command.context.function_breakpoint.hit_conditions[i])
+                    free(server->current_command.context.function_breakpoint.hit_conditions[i]);
+            }
+            free(server->current_command.context.function_breakpoint.names);
+            free(server->current_command.context.function_breakpoint.conditions);
+            free(server->current_command.context.function_breakpoint.hit_conditions);
+        }
+        if (server->current_command.context.function_breakpoint.breakpoints)
+        {
+            free(server->current_command.context.function_breakpoint.breakpoints);
+            server->current_command.context.function_breakpoint.breakpoints = NULL;
+        }
+        break;
+
     default:
         // No cleanup needed for other command types
         break;
@@ -721,7 +768,7 @@ void initialize_command_handlers(DAPServer *server)
     server->command_handlers[DAP_CMD_RESTART] = &handle_restart;
     server->command_handlers[DAP_CMD_SET_BREAKPOINTS] = &handle_set_breakpoints;
     server->command_handlers[DAP_CMD_CLEAR_BREAKPOINTS] = NULL;        // Not implemented
-    server->command_handlers[DAP_CMD_SET_FUNCTION_BREAKPOINTS] = NULL; // Not implemented
+    server->command_handlers[DAP_CMD_SET_FUNCTION_BREAKPOINTS] = &handle_set_function_breakpoints;
     server->command_handlers[DAP_CMD_SET_EXCEPTION_BREAKPOINTS] = &handle_set_exception_breakpoints;
     server->command_handlers[DAP_CMD_CONTINUE] = &handle_continue;
     server->command_handlers[DAP_CMD_NEXT] = &handle_next;

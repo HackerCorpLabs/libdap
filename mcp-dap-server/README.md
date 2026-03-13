@@ -290,6 +290,61 @@ Disassemble instructions at a memory address.
 
 Returns: Array of instructions with address, mnemonic, bytes, symbol, and source location.
 
+### Console I/O
+
+These tools allow interaction with the debuggee's terminal I/O. When a program writes to the terminal (e.g., via `printf`), console capture intercepts the output and makes it available to the MCP client. Input can be sent to the program as keyboard input.
+
+Terminal addresses are IOX base addresses in decimal:
+- Console (default): 192 (octal 0300)
+- Terminal 5: 224 (octal 0340)
+
+#### `debug_console_enable`
+Enable or disable console capture on a terminal device. When enabled, program output is intercepted and buffered for retrieval via `debug_console_read`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `terminal` | integer | `192` | Terminal IOX base address (decimal) |
+| `enable` | boolean | `true` | `true` to start capture, `false` to stop |
+
+#### `debug_console_write`
+Send keyboard input to a terminal. Characters are queued as if typed on the physical keyboard.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `input` | string | Yes | Text to send, or `"hex:AABB..."` for raw bytes |
+| `terminal` | integer | No (default: 192) | Terminal IOX address (decimal) |
+
+**Text mode** (default): Standard JSON escape sequences work: `\r` (Enter), `\n` (LF), `\t` (Tab), `\\` (backslash).
+
+**Hex mode**: Prefix with `hex:` to send raw byte values. Example: `"hex:1B5B41"` sends ESC `[` A (arrow up).
+
+| Character | Text mode | Hex mode |
+|-----------|-----------|----------|
+| Enter/CR | `\r` | `hex:0D` |
+| Escape | `\u001b` | `hex:1B` |
+| Ctrl-C | `\u0003` | `hex:03` |
+| Ctrl-D (EOF) | `\u0004` | `hex:04` |
+| Backspace | `\u0008` | `hex:08` |
+| Arrow Up | - | `hex:1B5B41` |
+
+#### `debug_console_read`
+Read buffered console output. Returns text captured since the last read (or since capture was enabled). Waits up to `timeout` seconds for additional output.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `timeout` | number | `2.0` | Seconds to wait for additional output |
+
+Returns:
+```json
+{
+  "terminal": 192,
+  "output": "Hello, World!\r\n",
+  "raw_hex": "48656C6C6F2C20576F726C64210D0A"
+}
+```
+
+Both text and hex representations are provided. The `output` field has printable text (non-printable characters replaced with `.`), while `raw_hex` has exact byte values for detecting control characters and escape sequences.
+
 ## File Structure
 
 ```
@@ -395,6 +450,27 @@ Monitor memory locations to detect reads and writes. Useful for tracking when an
 ```
 
 **Note**: The stop occurs at the instruction *after* the memory access, since the CPU has already executed the read/write instruction when the watchpoint fires. Check the `EA` (Effective Address) register to confirm which address was accessed.
+
+### Console I/O session
+
+Interact with a program's terminal output and input. Useful for debugging programs that use `printf` or read keyboard input.
+
+```
+1. debug_connect(host="127.0.0.1", port=4711)
+2. debug_launch(
+     program="/path/to/hello",
+     source_file="/path/to/hello.c",
+     map_file="/path/to/hello.srcmap"
+   )
+3. debug_console_enable(terminal=192)        -- start capturing console output
+4. debug_continue()                           -- run the program
+5. debug_console_read(timeout=3.0)            -- read program's printf output:
+   -> {"output": "Hello, World!\r\n", "raw_hex": "48656C6C6F..."}
+6. debug_console_write(input="test\r")        -- send "test" + Enter as keyboard input
+7. debug_console_read()                       -- read any response output
+8. debug_console_enable(enable=False)         -- stop capturing
+9. debug_disconnect()
+```
 
 ## ND-100 Specific Notes
 

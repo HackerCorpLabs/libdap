@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -581,3 +582,131 @@ class DAPDebugger:
         if "error" in err:
             return err
         return {"instructions": fmt.format_disassembly(response)}
+
+    # -- Console I/O -------------------------------------------------------
+
+    async def console_enable(
+        self, terminal: int = 192, enable: bool = True
+    ) -> dict[str, Any]:
+        """Enable or disable console capture on a terminal."""
+        self._check_connected()
+        response = await self.conn.send_request("consoleEnable", {
+            "terminal": terminal,
+            "enable": enable,
+        })
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+        body = response.get("body", {})
+        action = "enabled" if enable else "disabled"
+        return {
+            "status": f"console capture {action}",
+            "terminal": body.get("terminal", terminal),
+        }
+
+    async def console_write(
+        self, input: str, terminal: int = 192
+    ) -> dict[str, Any]:
+        """Send input to a terminal.
+
+        Text mode (default): input is sent as-is. Use standard escape
+        sequences like \\r for Enter, \\t for Tab.
+
+        Hex mode: prefix with "hex:" to send raw bytes, e.g. "hex:1B5B41"
+        sends ESC [ A (arrow up).
+        """
+        self._check_connected()
+        hex_mode = False
+        data = input
+        if input.startswith("hex:"):
+            hex_mode = True
+            data = input[4:]
+
+        response = await self.conn.send_request("consoleWrite", {
+            "terminal": terminal,
+            "input": data,
+            "hex": hex_mode,
+        })
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+        return {"status": "input sent", "terminal": terminal}
+
+    async def console_read(
+        self, timeout: float = 2.0
+    ) -> dict[str, Any]:
+        """Read buffered console output.
+
+        Collects output events that have been sent since the last read
+        (or since console capture was enabled). Waits up to *timeout*
+        seconds for additional output before returning.
+        """
+        self._check_connected()
+
+        collected_text: list[str] = []
+        collected_hex: list[str] = []
+        terminal_addr: int | None = None
+
+        # First drain any already-queued output events
+        events = await self.conn.drain_events()
+        for ev in events:
+            if ev.get("event") == "output":
+                body = ev.get("body", {})
+                if body.get("category") == "stdout":
+                    collected_text.append(body.get("output", ""))
+                    data = body.get("data")
+                    if data:
+                        try:
+                            d = json.loads(data)
+                            if d.get("hex"):
+                                collected_hex.append(d["hex"])
+                            if terminal_addr is None and "terminal" in d:
+                                terminal_addr = d["terminal"]
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+            else:
+                # Put non-output events back
+                await self.conn._event_queue.put(ev)
+
+        # Wait a bit for more output
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                ev = await asyncio.wait_for(
+                    self.conn._event_queue.get(), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                break
+
+            if ev.get("event") == "output":
+                body = ev.get("body", {})
+                if body.get("category") == "stdout":
+                    collected_text.append(body.get("output", ""))
+                    data = body.get("data")
+                    if data:
+                        try:
+                            d = json.loads(data)
+                            if d.get("hex"):
+                                collected_hex.append(d["hex"])
+                            if terminal_addr is None and "terminal" in d:
+                                terminal_addr = d["terminal"]
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                else:
+                    # Non-stdout output event, put back
+                    await self.conn._event_queue.put(ev)
+            else:
+                await self.conn._event_queue.put(ev)
+
+        result: dict[str, Any] = {
+            "output": "".join(collected_text),
+            "raw_hex": "".join(collected_hex),
+        }
+        if terminal_addr is not None:
+            result["terminal"] = terminal_addr
+        if not collected_text:
+            result["note"] = "No console output received. Is console capture enabled?"
+        return result

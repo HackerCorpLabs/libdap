@@ -1393,3 +1393,60 @@ int handle_info_command(DAPClient* client, const char* args) {
     printf("Use: info breakpoints, info watchpoints\n");
     return 0;
 }
+
+int handle_console_command(DAPClient* client, const char* args) {
+    if (!client) return 0;
+
+    if (!args || !*args) {
+        printf("Usage: console enable|disable|write <text> [terminal_address]\n");
+        printf("  console enable [address]  - Enable console capture (default: 192/0300)\n");
+        printf("  console disable [address] - Disable console capture\n");
+        printf("  console write <text>      - Send text to terminal input\n");
+        return 0;
+    }
+
+    int terminal = 192; /* Default: 0300 octal = console */
+
+    if (strncmp(args, "enable", 6) == 0) {
+        const char *rest = args + 6;
+        while (*rest == ' ') rest++;
+        if (*rest) terminal = atoi(rest);
+
+        int err = dap_client_console_enable(client, terminal, true);
+        if (err != DAP_ERROR_NONE) {
+            fprintf(stderr, "Error enabling console capture: %d\n", err);
+        } else {
+            printf("Console capture enabled on terminal %d (0%o)\n", terminal, terminal);
+        }
+    } else if (strncmp(args, "disable", 7) == 0) {
+        const char *rest = args + 7;
+        while (*rest == ' ') rest++;
+        if (*rest) terminal = atoi(rest);
+
+        int err = dap_client_console_enable(client, terminal, false);
+        if (err != DAP_ERROR_NONE) {
+            fprintf(stderr, "Error disabling console capture: %d\n", err);
+        } else {
+            printf("Console capture disabled on terminal %d (0%o)\n", terminal, terminal);
+        }
+    } else if (strncmp(args, "write ", 6) == 0) {
+        const char *text = args + 6;
+        while (*text == ' ') text++;
+        if (!*text) {
+            printf("Usage: console write <text>\n");
+            return 0;
+        }
+
+        int err = dap_client_console_write(client, terminal, text, false);
+        if (err != DAP_ERROR_NONE) {
+            fprintf(stderr, "Error writing to console: %d\n", err);
+        } else {
+            printf("Sent to terminal %d: \"%s\"\n", terminal, text);
+        }
+    } else {
+        printf("Unknown console subcommand: %s\n", args);
+        printf("Use: console enable|disable|write\n");
+    }
+
+    return 0;
+}

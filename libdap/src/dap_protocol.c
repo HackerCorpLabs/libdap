@@ -78,7 +78,9 @@ static const char* command_strings[] = {
     "reverseContinue",
     "restartFrame",
     "goto",
-    "setExceptionFilters"
+    "setExceptionFilters",
+    "consoleEnable",
+    "consoleWrite"
 };
 
 /**

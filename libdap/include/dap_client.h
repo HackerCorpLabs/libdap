@@ -500,5 +500,26 @@ int dap_client_set_exception_breakpoints(DAPClient* client,
                                        const char** filters, size_t num_filters,
                                        DAPSetExceptionBreakpointsResult* result);
 
-#endif /* DAP_CLIENT_H */ 
+/**
+ * @brief Enable or disable console capture on a terminal
+ *
+ * @param client Pointer to the client
+ * @param terminal IOX base address (decimal), default 192 (0300 octal = console)
+ * @param enable true to enable capture, false to disable
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_console_enable(DAPClient* client, int terminal, bool enable);
+
+/**
+ * @brief Send input to a terminal
+ *
+ * @param client Pointer to the client
+ * @param terminal IOX base address (decimal), default 192
+ * @param input String to send as keyboard input
+ * @param hex If true, input is hex-encoded bytes
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_console_write(DAPClient* client, int terminal, const char* input, bool hex);
+
+#endif /* DAP_CLIENT_H */
 

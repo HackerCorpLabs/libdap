@@ -379,5 +379,22 @@ const DebuggerCommand commands[] = {
         .implemented = true,
         .handler = handle_watch_command
     },
+    {
+        .name = "console",
+        .alias = "con",
+        .alias2 = NULL,
+        .syntax = "console enable|disable|write <text> [terminal_address]",
+        .description = "Control terminal console I/O capture and input",
+        .request_format = NULL,
+        .response_format = NULL,
+        .events = "output (category: stdout)",
+        .has_options = true,
+        .option_types = "enable|disable|write",
+        .option_descriptions = "Enable console capture|Disable console capture|Send text to terminal",
+        .examples = "console enable|Enable console capture on default terminal|console disable|Disable capture|console write hello\\r|Send text with Enter|console enable 224|Enable on terminal at IOX 0340",
+        .category = CATEGORY_OTHER,
+        .implemented = true,
+        .handler = handle_console_command
+    },
     { NULL } // Terminator
 };

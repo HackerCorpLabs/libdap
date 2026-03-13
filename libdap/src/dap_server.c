@@ -491,6 +491,14 @@ void cleanup_command_context(DAPServer *server)
         }
         break;
 
+    case DAP_CMD_CONSOLE_WRITE:
+        if (server->current_command.context.console_write.input)
+        {
+            free(server->current_command.context.console_write.input);
+            server->current_command.context.console_write.input = NULL;
+        }
+        break;
+
     default:
         // No cleanup needed for other command types
         break;
@@ -801,6 +809,8 @@ void initialize_command_handlers(DAPServer *server)
     server->command_handlers[DAP_CMD_RESTART_FRAME] = NULL;               // Not implemented
     server->command_handlers[DAP_CMD_GOTO] = NULL;                        // Not implemented
     server->command_handlers[DAP_CMD_SET_EXCEPTION_FILTERS] = NULL;       // Not implemented
+    server->command_handlers[DAP_CMD_CONSOLE_ENABLE] = &handle_console_enable;
+    server->command_handlers[DAP_CMD_CONSOLE_WRITE] = &handle_console_write;
 }
 
 /**

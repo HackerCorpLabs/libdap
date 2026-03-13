@@ -4015,3 +4015,106 @@ void free_variable_array(DAPVariable *variables, int count)
     // Free the array itself
     free(variables);
 }
+
+/* ================================================================
+ * Console I/O handlers (custom DAP extension)
+ * ================================================================ */
+
+int handle_console_enable(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!args || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_CONSOLE_ENABLE;
+    memset(&server->current_command.context.console_enable, 0,
+           sizeof(ConsoleEnableContext));
+
+    /* Default terminal address: 192 (0300 octal = console) */
+    server->current_command.context.console_enable.terminal = 192;
+    server->current_command.context.console_enable.enable = true;
+
+    cJSON *terminal = cJSON_GetObjectItem(args, "terminal");
+    if (terminal && cJSON_IsNumber(terminal))
+    {
+        server->current_command.context.console_enable.terminal = terminal->valueint;
+    }
+
+    cJSON *enable = cJSON_GetObjectItem(args, "enable");
+    if (enable && cJSON_IsBool(enable))
+    {
+        server->current_command.context.console_enable.enable = cJSON_IsTrue(enable);
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_CONSOLE_ENABLE);
+
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddBoolToObject(body, "success", result == 0);
+    cJSON_AddNumberToObject(body, "terminal",
+                            server->current_command.context.console_enable.terminal);
+    cJSON_AddBoolToObject(body, "enabled",
+                          server->current_command.context.console_enable.enable);
+
+    response->success = (result == 0);
+    dap_server_send_response(server, DAP_CMD_CONSOLE_ENABLE,
+                             server->sequence++,
+                             server->current_command.request_seq,
+                             response->success, body);
+    return 0;
+}
+
+int handle_console_write(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!args || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_CONSOLE_WRITE;
+    memset(&server->current_command.context.console_write, 0,
+           sizeof(ConsoleWriteContext));
+
+    /* Default terminal address: 192 (0300 octal = console) */
+    server->current_command.context.console_write.terminal = 192;
+
+    cJSON *terminal = cJSON_GetObjectItem(args, "terminal");
+    if (terminal && cJSON_IsNumber(terminal))
+    {
+        server->current_command.context.console_write.terminal = terminal->valueint;
+    }
+
+    cJSON *input = cJSON_GetObjectItem(args, "input");
+    if (input && cJSON_IsString(input))
+    {
+        server->current_command.context.console_write.input = strdup(input->valuestring);
+    }
+
+    cJSON *hex = cJSON_GetObjectItem(args, "hex");
+    if (hex && cJSON_IsBool(hex))
+    {
+        server->current_command.context.console_write.hex = cJSON_IsTrue(hex);
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_CONSOLE_WRITE);
+
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddBoolToObject(body, "success", result == 0);
+
+    response->success = (result == 0);
+    dap_server_send_response(server, DAP_CMD_CONSOLE_WRITE,
+                             server->sequence++,
+                             server->current_command.request_seq,
+                             response->success, body);
+
+    /* Clean up allocated input string */
+    if (server->current_command.context.console_write.input)
+    {
+        free(server->current_command.context.console_write.input);
+        server->current_command.context.console_write.input = NULL;
+    }
+
+    return 0;
+}

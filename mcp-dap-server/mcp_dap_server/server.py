@@ -265,6 +265,40 @@ async def list_tools() -> list[Tool]:
                 "required": ["address"],
             },
         ),
+        # Console I/O
+        Tool(
+            name="debug_console_enable",
+            description="Enable or disable console capture on a terminal device. When enabled, program output (characters written by the CPU) is captured and available via debug_console_read. Default terminal 192 (octal 0300 = system console).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "terminal": {"type": "integer", "default": 192, "description": "Terminal IOX base address in decimal. Console=192 (0300 octal), Terminal 5=224 (0340 octal)"},
+                    "enable": {"type": "boolean", "default": True, "description": "true to enable capture, false to disable"},
+                },
+            },
+        ),
+        Tool(
+            name="debug_console_write",
+            description="Send keyboard input to a terminal. Use \\r for Enter, \\n for LF, \\t for Tab. For raw bytes prefix with 'hex:' e.g. 'hex:1B5B41' sends ESC[A (arrow up). Special chars: Enter=\\r, Escape=\\u001b, Ctrl-C=\\u0003, Ctrl-D=\\u0004.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": "Text to send, or 'hex:AABB...' for raw bytes"},
+                    "terminal": {"type": "integer", "default": 192, "description": "Terminal IOX address (decimal)"},
+                },
+                "required": ["input"],
+            },
+        ),
+        Tool(
+            name="debug_console_read",
+            description="Read buffered console output. Returns text captured since last read (or since console capture was enabled). Call debug_console_enable first. Returns both printable text and raw hex bytes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout": {"type": "number", "default": 2.0, "description": "Seconds to wait for additional output"},
+                },
+            },
+        ),
     ]
 
 
@@ -380,6 +414,22 @@ async def _dispatch(name: str, args: dict) -> dict | list:
             return await debugger.disassemble(
                 address=args["address"],
                 count=args.get("count", 20),
+            )
+
+        # Console I/O
+        case "debug_console_enable":
+            return await debugger.console_enable(
+                terminal=args.get("terminal", 192),
+                enable=args.get("enable", True),
+            )
+        case "debug_console_write":
+            return await debugger.console_write(
+                input=args["input"],
+                terminal=args.get("terminal", 192),
+            )
+        case "debug_console_read":
+            return await debugger.console_read(
+                timeout=args.get("timeout", 2.0),
             )
 
         case _:

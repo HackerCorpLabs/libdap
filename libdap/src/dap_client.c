@@ -2696,3 +2696,36 @@ void dap_set_data_breakpoints_result_free(DAPSetDataBreakpointsResult* result) {
     result->breakpoints = NULL;
     result->num_breakpoints = 0;
 }
+
+int dap_client_console_enable(DAPClient* client, int terminal, bool enable)
+{
+    if (!client) return DAP_ERROR_INVALID_ARG;
+
+    cJSON *args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "terminal", terminal);
+    cJSON_AddBoolToObject(args, "enable", enable);
+
+    char *response_body = NULL;
+    int result = dap_client_send_request(client, DAP_CMD_CONSOLE_ENABLE, args, &response_body);
+    cJSON_Delete(args);
+    free(response_body);
+    return result;
+}
+
+int dap_client_console_write(DAPClient* client, int terminal, const char* input, bool hex)
+{
+    if (!client || !input) return DAP_ERROR_INVALID_ARG;
+
+    cJSON *args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "terminal", terminal);
+    cJSON_AddStringToObject(args, "input", input);
+    if (hex) {
+        cJSON_AddBoolToObject(args, "hex", true);
+    }
+
+    char *response_body = NULL;
+    int result = dap_client_send_request(client, DAP_CMD_CONSOLE_WRITE, args, &response_body);
+    cJSON_Delete(args);
+    free(response_body);
+    return result;
+}

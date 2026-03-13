@@ -546,6 +546,25 @@ typedef struct {
 } SetVariableCommandContext;
 
 /**
+ * @struct ConsoleEnableContext
+ * @brief Context for consoleEnable command (custom)
+ */
+typedef struct {
+    int terminal;               /**< IOX base address (decimal), default 192 (0300 octal) */
+    bool enable;                /**< true to enable capture, false to disable */
+} ConsoleEnableContext;
+
+/**
+ * @struct ConsoleWriteContext
+ * @brief Context for consoleWrite command (custom)
+ */
+typedef struct {
+    int terminal;               /**< IOX base address (decimal), default 192 */
+    char *input;                /**< String to send as keyboard input */
+    bool hex;                   /**< If true, input is hex-encoded bytes */
+} ConsoleWriteContext;
+
+/**
  * @typedef DAPCommandCallback
  * @brief Function signature for command implementation callbacks
  * 
@@ -651,6 +670,8 @@ struct DAPServer
             EvaluateCommandContext evaluate;        /**< Context for evaluate command */
             FunctionBreakpointCommandContext function_breakpoint; /**< Context for function breakpoints */
             StackTraceCommandContext stack_trace;   /**< Context for stack trace command */
+            ConsoleEnableContext console_enable;    /**< Context for consoleEnable command */
+            ConsoleWriteContext console_write;      /**< Context for consoleWrite command */
         } context;
     } current_command;
 

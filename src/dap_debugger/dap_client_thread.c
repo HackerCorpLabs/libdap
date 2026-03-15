@@ -270,8 +270,21 @@ static void handle_dap_event(DAPThreadContext* ctx, cJSON* message) {
         ctx->debuggee_running = false;
         pthread_mutex_unlock(&ctx->state_mutex);
 
+        // Build event message with hit breakpoint IDs if present
         char event_msg[256];
-        snprintf(event_msg, sizeof(event_msg), "Stopped (reason: %s)", reason ? reason : "unknown");
+        int written = snprintf(event_msg, sizeof(event_msg), "Stopped (reason: %s)", reason ? reason : "unknown");
+        if (body) {
+            cJSON* hit_ids = cJSON_GetObjectItem(body, "hitBreakpointIds");
+            if (hit_ids && cJSON_IsArray(hit_ids) && cJSON_GetArraySize(hit_ids) > 0) {
+                written += snprintf(event_msg + written, sizeof(event_msg) - written, ", breakpoint(s):");
+                cJSON* id_item;
+                cJSON_ArrayForEach(id_item, hit_ids) {
+                    if (cJSON_IsNumber(id_item)) {
+                        written += snprintf(event_msg + written, sizeof(event_msg) - written, " %d", id_item->valueint);
+                    }
+                }
+            }
+        }
 
         DAPUIEvent* ui_event = dap_ui_event_create(DAP_UI_EVENT_STOPPED, event_msg);
         if (ui_event) {

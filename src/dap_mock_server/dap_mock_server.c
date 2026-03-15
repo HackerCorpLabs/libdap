@@ -261,33 +261,28 @@ static int cmd_read_memory(DAPServer *server) {
               bytes_to_read, address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
     
-    // Generate some mock memory data
-    char *data = (char *)malloc(bytes_to_read * 2 + 1);
-    if (!data) {
+    // Generate mock memory data as raw bytes
+    uint8_t *raw_data = (uint8_t *)malloc(bytes_to_read);
+    if (!raw_data) {
         return -1;
     }
-    
+
     for (size_t i = 0; i < bytes_to_read; i++) {
-        uint8_t value = (uint8_t)((address + i) % 256);
-        sprintf(data + (i * 2), "%02x", value);
+        raw_data[i] = (uint8_t)((address + i) % 256);
     }
-    data[bytes_to_read * 2] = '\0';
-    
-    // Create the response body
-    cJSON *body = cJSON_CreateObject();
-    
-    char address_str[32];
-    snprintf(address_str, sizeof(address_str), "0x%08x", address);
-    cJSON_AddStringToObject(body, "address", address_str);
-    cJSON_AddNumberToObject(body, "unreadableBytes", 0);
-    cJSON_AddStringToObject(body, "data", data);
-    
-    free(data);
-    
-    // Send the response
-    dap_server_send_response(server, DAP_CMD_READ_MEMORY, server->sequence++, 
-                            server->current_command.request_seq, true, body);
-    
+
+    // Encode as base64 per DAP spec
+    char *b64_data = base64_encode(raw_data, bytes_to_read);
+    free(raw_data);
+
+    if (!b64_data) {
+        return -1;
+    }
+
+    // Store in context for framework response
+    server->current_command.context.read_memory.base64_data = b64_data;
+    server->current_command.context.read_memory.unreadable_bytes = 0;
+
     return 0;
 }
 
@@ -512,7 +507,10 @@ static int cmd_continue(DAPServer *server) {
     
     // Set the debugger state to not stopped
     server->debugger_state.has_stopped = false;
-    
+
+    // Set context for the framework response (allThreadsContinued field)
+    server->current_command.context.continue_cmd.all_threads_continue = !single_thread;
+
     // Per DAP spec, we need to send a continued event
     cJSON *event_body = cJSON_CreateObject();
     if (event_body) {
@@ -765,12 +763,11 @@ static int cmd_set_breakpoints(DAPServer* server) {
         int bp_idx = mock_debugger.breakpoint_count;
         memset(&mock_debugger.breakpoints[bp_idx], 0, sizeof(MockBreakpoint));
         
-        // Set basic properties
-        mock_debugger.breakpoints[bp_idx].id = bp_idx + 1; // 1-based IDs
+        // Set basic properties - use stable monotonic IDs (server assigns via next_breakpoint_id)
         mock_debugger.breakpoints[bp_idx].verified = true; // Mock always verifies
-        
+
         // Get the line number from the breakpoints array in the current command context
-        const DAPBreakpoint* bp = &server->current_command.context.breakpoint.breakpoints[i];
+        DAPBreakpoint* bp = &server->current_command.context.breakpoint.breakpoints[i];
         mock_debugger.breakpoints[bp_idx].line = bp->line;
         mock_debugger.breakpoints[bp_idx].column = bp->column > 0 ? bp->column : 0;
         
@@ -791,11 +788,15 @@ static int cmd_set_breakpoints(DAPServer* server) {
             mock_debugger.breakpoints[bp_idx].log_message = strdup(bp->log_message);
         }
         
+        mock_debugger.breakpoints[bp_idx].id = bp_idx + 1;
         mock_debugger.breakpoint_count++;
-        
+
+        // Write verified status back to context so framework includes it in response
+        bp->verified = true;
+
         // Send console output about the new breakpoint
         char output_msg[256];
-        snprintf(output_msg, sizeof(output_msg), "Added breakpoint %d at line %d in %s\n", 
+        snprintf(output_msg, sizeof(output_msg), "Added breakpoint %d at line %d in %s\n",
                  mock_debugger.breakpoints[bp_idx].id,
                  mock_debugger.breakpoints[bp_idx].line,
                  source_name);
@@ -1872,9 +1873,9 @@ int dbg_mock_set_default_capabilities(DAPServer *server) {
         DAP_CAP_DISASSEMBLE_REQUEST, true, // Support for disassemble command
         DAP_CAP_SINGLE_THREAD_EXECUTION_REQUESTS, true, // Support for thread-specific execution control
         DAP_CAP_READ_MEMORY_REQUEST, true, // Support for readMemory
+        DAP_CAP_WRITE_MEMORY_REQUEST, true, // Support for writeMemory
         DAP_CAP_SET_VARIABLE, true,        // Support for variables
         DAP_CAP_VALUE_FORMATTING_OPTIONS, true, // Support for formatting options in variables
-        DAP_CAP_DISASSEMBLE_REQUEST, true, // Support for disassemble command
         DAP_CAP_COUNT  // Terminator
     );
 }
@@ -1920,7 +1921,7 @@ int setup_server_callbacks(DAPServer *server) {
     dap_server_register_command_callback(server, DAP_CMD_WRITE_MEMORY, cmd_write_memory);
     dap_server_register_command_callback(server, DAP_CMD_SCOPES, cmd_scopes);
     dap_server_register_command_callback(server, DAP_CMD_VARIABLES, cmd_variables);
-    dap_server_register_command_callback(server, DAP_CMD_EXCEPTION_INFO, on_set_exception_breakpoints);
+    dap_server_register_command_callback(server, DAP_CMD_SET_EXCEPTION_BREAKPOINTS, on_set_exception_breakpoints);
     dap_server_register_command_callback(server, DAP_CMD_SET_BREAKPOINTS, cmd_set_breakpoints);
     dap_server_register_command_callback(server, DAP_CMD_LAUNCH, cmd_launch);
     dap_server_register_command_callback(server, DAP_CMD_RESTART, cmd_restart);

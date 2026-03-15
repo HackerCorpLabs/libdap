@@ -916,15 +916,26 @@ int handle_evaluate_command(DAPClient* client, const char* args) {
 
     if (!args || !*args) {
         printf("Usage: eval <expression>\n");
-        printf("  eval A + B        - Evaluate register expression\n");
-        printf("  eval [0x100]      - Read memory at address\n");
-        printf("  eval A == 5       - Boolean expression\n");
+        printf("       eval -f <frame_id> <expression>\n");
+        printf("  eval A + B          - Evaluate register expression (frame 0)\n");
+        printf("  eval [0x100]        - Read memory at address\n");
+        printf("  eval -f 2 myvar     - Evaluate in frame 2\n");
         return 0;
     }
 
-    // The entire args string is the expression (supports spaces)
+    // Parse optional frame ID: "eval <expr>" or "eval -f <frame_id> <expr>"
+    int frame_id = 0;
+    const char* expression = args;
+    if (strncmp(args, "-f ", 3) == 0) {
+        char* endptr;
+        frame_id = (int)strtol(args + 3, &endptr, 10);
+        if (endptr > args + 3 && *endptr == ' ') {
+            expression = endptr + 1;
+        }
+    }
+
     DAPEvaluateResult result = {0};
-    DAPError error = dap_client_evaluate(client, args, 0, "repl", &result);
+    DAPError error = dap_client_evaluate(client, expression, frame_id, "repl", &result);
 
     if (error != DAP_ERROR_NONE) {
         printf("Error evaluating expression: %d\n", error);

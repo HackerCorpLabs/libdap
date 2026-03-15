@@ -162,11 +162,21 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     if (ImGui::BeginPopupModal("Launch Program", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText("Program path", launch_program_, sizeof(launch_program_));
         ImGui::TextDisabled("Leave empty to run without loading (e.g. boot from floppy)");
+        ImGui::Separator();
+        ImGui::InputText("Source file", launch_source_, sizeof(launch_source_));
+        ImGui::InputText("Map file", launch_map_, sizeof(launch_map_));
+        ImGui::InputText("Working directory", launch_cwd_, sizeof(launch_cwd_));
+        ImGui::Checkbox("Stop on entry", &launch_stop_on_entry_);
 
+        ImGui::Separator();
         if (ImGui::Button("Launch", ImVec2(120, 0))) {
-            std::string prog = launch_program_;
-            if (prog.empty()) prog = "boot";
-            client.launch(prog);
+            DebuggerClient::LaunchArgs largs;
+            largs.program = launch_program_[0] ? launch_program_ : "boot";
+            largs.source_file = launch_source_;
+            largs.map_file = launch_map_;
+            largs.cwd = launch_cwd_;
+            largs.stop_on_entry = launch_stop_on_entry_;
+            client.launch(largs);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();

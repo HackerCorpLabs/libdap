@@ -103,15 +103,15 @@ void App::run()
 
     UIMain ui;
 
-    // Auto-connect before entering the frame loop (blocks briefly)
-    if (!config_.program.empty()) {
-        fprintf(stderr, "Connecting to %s:%d ...\n", config_.host.c_str(), config_.port);
-        client.connect(config_.host, config_.port);
-        if (client.state() == ClientState::Connected) {
-            client.initialize();
-            if (client.state() == ClientState::Initialized) {
-                client.launch(config_.program);
-            }
+    // Auto-connect before entering the frame loop (blocks briefly).
+    // Always connect when a port is specified (which it is by default),
+    // matching the console debugger's behavior.
+    fprintf(stderr, "Connecting to %s:%d ...\n", config_.host.c_str(), config_.port);
+    client.connect(config_.host, config_.port);
+    if (client.state() == ClientState::Connected) {
+        client.initialize();
+        if (client.state() == ClientState::Initialized && !config_.program.empty()) {
+            client.launch(config_.program);
         }
     }
 

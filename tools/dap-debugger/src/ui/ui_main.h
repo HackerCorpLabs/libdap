@@ -46,6 +46,10 @@ private:
     char connect_host_[256] = "localhost";
     int connect_port_ = 5555;
     char launch_program_[512] = {};
+    char launch_source_[512] = {};
+    char launch_map_[512] = {};
+    char launch_cwd_[512] = {};
+    bool launch_stop_on_entry_ = true;
 };
 
 // Panel classes
@@ -75,6 +79,10 @@ public:
 class PanelSource {
 public:
     void render(DebuggerClient& client);
+private:
+    std::string loaded_source_path_;
+    std::vector<std::string> source_lines_;
+    void load_source_file(const std::string& path);
 };
 
 class PanelBreakpoints {

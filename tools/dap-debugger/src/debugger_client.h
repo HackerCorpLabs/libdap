@@ -127,7 +127,15 @@ public:
     // Connection
     void connect(const std::string& host, int port);
     void initialize();
+    struct LaunchArgs {
+        std::string program;
+        std::string source_file;
+        std::string map_file;
+        std::string cwd;
+        bool stop_on_entry = true;
+    };
     void launch(const std::string& program);
+    void launch(const LaunchArgs& args);
     void disconnect();
     void force_close();  // Close socket immediately without sending disconnect request
 
@@ -256,6 +264,7 @@ private:
     bool debug_ = false;
     bool auto_disassemble_ = true;
     int disassemble_count_ = 20;
+    bool needs_refresh_ = false;
 
     // Process state
     std::string process_name_;

@@ -1,6 +1,55 @@
 #include "ui_main.h"
 #include <imgui.h>
 #include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <fstream>
+
+// Base64 decode table
+static const unsigned char b64_table[256] = {
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,62,64,64,64,63,
+    52,53,54,55,56,57,58,59,60,61,64,64,64, 0,64,64,
+    64, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+    15,16,17,18,19,20,21,22,23,24,25,64,64,64,64,64,
+    64,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+    41,42,43,44,45,46,47,48,49,50,51,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+    64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+};
+
+static std::vector<uint8_t> base64_decode(const std::string& input)
+{
+    std::vector<uint8_t> out;
+    if (input.empty()) return out;
+
+    out.reserve(input.size() * 3 / 4);
+    uint32_t accum = 0;
+    int bits = 0;
+
+    for (char c : input) {
+        if (c == '=' || c == '\n' || c == '\r') continue;
+        unsigned char v = b64_table[(unsigned char)c];
+        if (v >= 64) continue;
+        accum = (accum << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back((uint8_t)(accum >> bits));
+            accum &= (1u << bits) - 1;
+        }
+    }
+    return out;
+}
 
 void PanelSource::render(DebuggerClient& client)
 {
@@ -17,7 +66,74 @@ void PanelSource::render(DebuggerClient& client)
 
     const auto& frames = client.stack_frames();
 
+    // Auto-load source file when stack frame changes
+    if (!frames.empty() && !frames[0].source_path.empty()) {
+        if (frames[0].source_path != loaded_source_path_) {
+            load_source_file(frames[0].source_path);
+        }
+    }
+
     if (ImGui::BeginTabBar("##source_tabs")) {
+        // --- Source Code Tab ---
+        if (ImGui::BeginTabItem("Source")) {
+            if (source_lines_.empty()) {
+                if (loaded_source_path_.empty()) {
+                    ImGui::TextDisabled("No source file available");
+                } else {
+                    ImGui::TextDisabled("Could not load: %s", loaded_source_path_.c_str());
+                }
+            } else {
+                // Current line from top stack frame
+                int current_line = (!frames.empty() && frames[0].line > 0) ? frames[0].line : -1;
+
+                ImGui::TextDisabled("%s", loaded_source_path_.c_str());
+                ImGui::Separator();
+
+                ImGui::BeginChild("##srccode", ImVec2(0, 0), ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_HorizontalScrollbar);
+
+                // Auto-scroll to current line
+                if (current_line > 0) {
+                    float line_height = ImGui::GetTextLineHeightWithSpacing();
+                    float scroll_target = (current_line - 5) * line_height;
+                    if (scroll_target < 0) scroll_target = 0;
+                    ImGui::SetScrollY(scroll_target);
+                }
+
+                ImGuiListClipper clipper;
+                clipper.Begin((int)source_lines_.size());
+                while (clipper.Step()) {
+                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                        int line_num = i + 1;
+                        bool is_current = (line_num == current_line);
+
+                        if (is_current) {
+                            // Highlight current execution line
+                            ImVec2 pos = ImGui::GetCursorScreenPos();
+                            ImVec2 size(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight());
+                            ImGui::GetWindowDrawList()->AddRectFilled(
+                                pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                                IM_COL32(80, 80, 0, 128));
+                        }
+
+                        ImVec4 color = is_current ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f)
+                                                  : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+                        ImVec4 num_color = is_current ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f)
+                                                      : ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+
+                        ImGui::TextColored(num_color, "%4d", line_num);
+                        ImGui::SameLine();
+                        ImGui::TextColored(color, " %s%s",
+                            is_current ? ">" : " ",
+                            source_lines_[i].c_str());
+                    }
+                }
+                clipper.End();
+                ImGui::EndChild();
+            }
+            ImGui::EndTabItem();
+        }
+
         // --- Location Tab ---
         if (ImGui::BeginTabItem("Location")) {
             if (frames.empty()) {
@@ -163,7 +279,42 @@ void PanelSource::render(DebuggerClient& client)
             if (mem_data.empty()) {
                 ImGui::TextDisabled("No memory data (press Read)");
             } else {
-                ImGui::TextWrapped("Data (base64): %s", mem_data.c_str());
+                // Decode base64 and display as hex dump
+                std::vector<uint8_t> bytes = base64_decode(mem_data);
+                if (bytes.empty()) {
+                    ImGui::TextDisabled("(empty or invalid data)");
+                } else {
+                    // Monospaced hex dump: address | hex bytes | ASCII
+                    ImGui::BeginChild("##hexdump", ImVec2(0, 0), ImGuiChildFlags_None,
+                                      ImGuiWindowFlags_HorizontalScrollbar);
+                    for (size_t offset = 0; offset < bytes.size(); offset += 16) {
+                        char line[128];
+                        int pos = snprintf(line, sizeof(line), "%06X  ", (unsigned)(mem_addr + offset));
+
+                        // Hex bytes
+                        for (size_t j = 0; j < 16; j++) {
+                            if (j == 8) line[pos++] = ' ';
+                            if (offset + j < bytes.size()) {
+                                pos += snprintf(line + pos, sizeof(line) - pos, "%02X ", bytes[offset + j]);
+                            } else {
+                                pos += snprintf(line + pos, sizeof(line) - pos, "   ");
+                            }
+                        }
+
+                        // ASCII
+                        line[pos++] = ' ';
+                        line[pos++] = '|';
+                        for (size_t j = 0; j < 16 && (offset + j) < bytes.size(); j++) {
+                            uint8_t b = bytes[offset + j];
+                            line[pos++] = (b >= 0x20 && b < 0x7F) ? (char)b : '.';
+                        }
+                        line[pos++] = '|';
+                        line[pos] = '\0';
+
+                        ImGui::TextUnformatted(line);
+                    }
+                    ImGui::EndChild();
+                }
             }
             ImGui::EndTabItem();
         }
@@ -209,4 +360,18 @@ void PanelSource::render(DebuggerClient& client)
     }
 
     ImGui::End();
+}
+
+void PanelSource::load_source_file(const std::string& path)
+{
+    loaded_source_path_ = path;
+    source_lines_.clear();
+
+    std::ifstream file(path);
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        source_lines_.push_back(line);
+    }
 }

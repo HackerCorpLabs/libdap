@@ -179,6 +179,14 @@ void DebuggerClient::initialize()
 
 void DebuggerClient::launch(const std::string& program)
 {
+    LaunchArgs args;
+    args.program = program;
+    args.stop_on_entry = true;
+    launch(args);
+}
+
+void DebuggerClient::launch(const LaunchArgs& largs)
+{
     if (!impl_->client || state_ != ClientState::Initialized) return;
 
     // Send launch request asynchronously (fire-and-forget), matching the
@@ -190,8 +198,38 @@ void DebuggerClient::launch(const std::string& program)
     cJSON_AddStringToObject(request, "command", "launch");
 
     cJSON* args = cJSON_CreateObject();
-    cJSON_AddStringToObject(args, "program", program.c_str());
-    cJSON_AddBoolToObject(args, "stopOnEntry", true);
+
+    // Core DAP fields
+    cJSON_AddStringToObject(args, "request", "launch");
+
+    // Program path (required)
+    if (!largs.program.empty()) {
+        cJSON_AddStringToObject(args, "program", largs.program.c_str());
+    }
+
+    // Source file
+    if (!largs.source_file.empty()) {
+        cJSON_AddStringToObject(args, "sourceFile", largs.source_file.c_str());
+    }
+
+    // Map file
+    if (!largs.map_file.empty()) {
+        cJSON_AddStringToObject(args, "mapFile", largs.map_file.c_str());
+    }
+
+    // Working directory
+    if (!largs.cwd.empty()) {
+        cJSON_AddStringToObject(args, "cwd", largs.cwd.c_str());
+    }
+
+    // Launch options
+    cJSON_AddBoolToObject(args, "stopOnEntry", largs.stop_on_entry);
+    cJSON_AddBoolToObject(args, "noDebug", false);
+
+    // Configuration identification
+    cJSON_AddStringToObject(args, "name", "GUI Debug Session");
+    cJSON_AddStringToObject(args, "type", "nd100");
+
     cJSON_AddItemToObject(request, "arguments", args);
 
     log_protocol_sent("launch", args);
@@ -227,7 +265,7 @@ void DebuggerClient::launch(const std::string& program)
     // Don't set state to Stopped here -- let the stopped event do that
     // via poll(). The server will send process + stopped events.
     state_ = ClientState::Running;
-    log(ConsoleEntry::Info, "Launch sent: " + program);
+    log(ConsoleEntry::Info, "Launch sent: " + largs.program);
 }
 
 void DebuggerClient::disconnect()
@@ -274,16 +312,42 @@ void DebuggerClient::force_close()
 // Execution control
 // ---------------------------------------------------------------------------
 
+// Helper: send a DAP request asynchronously via transport (no blocking wait)
+static bool send_async_request(DAPClient* client, const char* command, cJSON* args,
+                               DebuggerClient* self)
+{
+    cJSON* request = cJSON_CreateObject();
+    cJSON_AddStringToObject(request, "type", "request");
+    cJSON_AddNumberToObject(request, "seq", client->seq++);
+    cJSON_AddStringToObject(request, "command", command);
+    if (args) {
+        cJSON_AddItemToObject(request, "arguments", args);
+    }
+
+    char* msg_str = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+
+    if (!msg_str) return false;
+
+    int rc = dap_transport_send(client->transport, msg_str);
+    free(msg_str);
+
+    return rc == 0;
+}
+
 void DebuggerClient::do_continue()
 {
     if (!impl_->client) return;
     if (state_ != ClientState::Stopped && state_ != ClientState::Initialized) return;
 
-    log_protocol_sent("continue", nullptr);
-    DAPContinueResult result = {};
-    int rc = dap_client_continue(impl_->client, thread_id_, false, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Continue failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+    cJSON_AddBoolToObject(args, "singleThread", false);
+
+    log_protocol_sent("continue", args);
+
+    if (!send_async_request(impl_->client, "continue", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send continue request");
         return;
     }
     state_ = ClientState::Running;
@@ -294,11 +358,13 @@ void DebuggerClient::step_over()
 {
     if (!impl_->client || state_ != ClientState::Stopped) return;
 
-    log_protocol_sent("next", nullptr);
-    DAPStepResult result = {};
-    int rc = dap_client_next(impl_->client, thread_id_, nullptr, false, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Step over failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+
+    log_protocol_sent("next", args);
+
+    if (!send_async_request(impl_->client, "next", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send step over request");
         return;
     }
     state_ = ClientState::Running;
@@ -309,11 +375,13 @@ void DebuggerClient::step_in()
 {
     if (!impl_->client || state_ != ClientState::Stopped) return;
 
-    log_protocol_sent("stepIn", nullptr);
-    DAPStepInResult result = {};
-    int rc = dap_client_step_in(impl_->client, thread_id_, nullptr, nullptr, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Step in failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+
+    log_protocol_sent("stepIn", args);
+
+    if (!send_async_request(impl_->client, "stepIn", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send step in request");
         return;
     }
     state_ = ClientState::Running;
@@ -324,11 +392,13 @@ void DebuggerClient::step_out()
 {
     if (!impl_->client || state_ != ClientState::Stopped) return;
 
-    log_protocol_sent("stepOut", nullptr);
-    DAPStepOutResult result = {};
-    int rc = dap_client_step_out(impl_->client, thread_id_, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Step out failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+
+    log_protocol_sent("stepOut", args);
+
+    if (!send_async_request(impl_->client, "stepOut", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send step out request");
         return;
     }
     state_ = ClientState::Running;
@@ -339,11 +409,13 @@ void DebuggerClient::step_back()
 {
     if (!impl_->client || state_ != ClientState::Stopped) return;
 
-    log_protocol_sent("stepBack", nullptr);
-    DAPStepBackResult result = {};
-    int rc = dap_client_step_back(impl_->client, thread_id_, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Step back failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+
+    log_protocol_sent("stepBack", args);
+
+    if (!send_async_request(impl_->client, "stepBack", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send step back request");
         return;
     }
     state_ = ClientState::Running;
@@ -354,11 +426,13 @@ void DebuggerClient::pause()
 {
     if (!impl_->client || state_ != ClientState::Running) return;
 
-    log_protocol_sent("pause", nullptr);
-    DAPPauseResult result = {};
-    int rc = dap_client_pause(impl_->client, thread_id_, &result);
-    if (rc != DAP_ERROR_NONE) {
-        log(ConsoleEntry::Error, std::string("Pause failed: ") + dap_error_message((DAPError)rc));
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(args, "threadId", thread_id_);
+
+    log_protocol_sent("pause", args);
+
+    if (!send_async_request(impl_->client, "pause", args, this)) {
+        log(ConsoleEntry::Error, "Failed to send pause request");
         return;
     }
     log(ConsoleEntry::Info, "Pause requested");
@@ -974,57 +1048,97 @@ void DebuggerClient::poll()
 {
     if (!impl_->client || state_ == ClientState::Disconnected) return;
 
-    // Use short timeout for polling so the UI frame loop stays responsive
+    // Drain all available messages with a short timeout so the UI stays responsive
     int saved_timeout = impl_->client->timeout_ms;
     impl_->client->timeout_ms = 10;
 
-    cJSON* message = nullptr;
-    int rc = dap_client_receive_message(impl_->client, &message);
+    for (;;) {
+        cJSON* message = nullptr;
+        int rc = dap_client_receive_message(impl_->client, &message);
+
+        if (rc != 0 || !message) {
+            // Check for transport error (server died)
+            if (rc == DAP_ERROR_TRANSPORT && impl_->client && !impl_->client->connected) {
+                log(ConsoleEntry::Error, "Connection lost (server died)");
+                impl_->client->timeout_ms = saved_timeout;
+                force_close();
+                return;
+            }
+            break;  // No more messages available
+        }
+
+        log_protocol_received(message);
+
+        const char* type_str = cJSON_GetStringValue(cJSON_GetObjectItem(message, "type"));
+        if (!type_str) {
+            cJSON_Delete(message);
+            continue;
+        }
+
+        if (strcmp(type_str, "event") == 0) {
+            const char* event = cJSON_GetStringValue(cJSON_GetObjectItem(message, "event"));
+            cJSON* body = cJSON_GetObjectItem(message, "body");
+            if (event) {
+                handle_event(event, body);
+            }
+        } else if (strcmp(type_str, "response") == 0) {
+            const char* cmd = cJSON_GetStringValue(cJSON_GetObjectItem(message, "command"));
+            bool success = cJSON_IsTrue(cJSON_GetObjectItem(message, "success"));
+
+            // Always log responses
+            if (cmd) {
+                cJSON* msg_j = cJSON_GetObjectItem(message, "message");
+                std::string detail;
+                if (!success && msg_j && msg_j->valuestring) {
+                    detail = std::string(" - ") + msg_j->valuestring;
+                }
+                log(ConsoleEntry::DapResponse,
+                    std::string("Response: ") + cmd + (success ? " [ok]" : " [FAIL]") + detail);
+            }
+
+            // Capture server capabilities from initialize response
+            if (cmd && strcmp(cmd, "initialize") == 0 && success) {
+                cJSON* body = cJSON_GetObjectItem(message, "body");
+                if (body) {
+                    parse_capabilities(body, server_capabilities_);
+                    log(ConsoleEntry::Info, "Server capabilities: " +
+                        std::to_string(server_capabilities_.size()) + " entries");
+                }
+            }
+
+            // Handle launch failure
+            if (cmd && strcmp(cmd, "launch") == 0 && !success) {
+                state_ = ClientState::Initialized;
+                log(ConsoleEntry::Error, "Launch failed");
+            }
+
+            // Handle disconnect response
+            if (cmd && strcmp(cmd, "disconnect") == 0) {
+                state_ = ClientState::Disconnected;
+            }
+        }
+
+        cJSON_Delete(message);
+    }
 
     impl_->client->timeout_ms = saved_timeout;
 
-    if (rc != 0 || !message) {
-        // Check for transport error (server died)
-        if (rc == DAP_ERROR_TRANSPORT && impl_->client && !impl_->client->connected) {
-            log(ConsoleEntry::Error, "Connection lost (server died)");
-            force_close();
-        }
-        return;
-    }
+    // Now that all pending messages are drained, do deferred data queries.
+    // This avoids the problem where blocking queries inside on_stopped()
+    // would consume pending async responses (launch, configurationDone, etc.)
+    if (needs_refresh_ && state_ == ClientState::Stopped) {
+        needs_refresh_ = false;
 
-    log_protocol_received(message);
+        refresh_threads();
+        refresh_stack_trace();
 
-    const char* type_str = cJSON_GetStringValue(cJSON_GetObjectItem(message, "type"));
-    if (!type_str) {
-        cJSON_Delete(message);
-        return;
-    }
-
-    if (strcmp(type_str, "event") == 0) {
-        const char* event = cJSON_GetStringValue(cJSON_GetObjectItem(message, "event"));
-        cJSON* body = cJSON_GetObjectItem(message, "body");
-        if (event) {
-            handle_event(event, body);
-        }
-    } else if (strcmp(type_str, "response") == 0) {
-        const char* cmd = cJSON_GetStringValue(cJSON_GetObjectItem(message, "command"));
-        bool success = cJSON_IsTrue(cJSON_GetObjectItem(message, "success"));
-        if (cmd && debug_) {
-            log(ConsoleEntry::DapResponse,
-                std::string("Response: ") + cmd + (success ? " [ok]" : " [fail]"));
-        }
-        // Capture server capabilities from initialize response
-        if (cmd && strcmp(cmd, "initialize") == 0 && success) {
-            cJSON* body = cJSON_GetObjectItem(message, "body");
-            if (body) {
-                parse_capabilities(body, server_capabilities_);
-                log(ConsoleEntry::Info, "Server capabilities: " +
-                    std::to_string(server_capabilities_.size()) + " entries");
+        if (auto_disassemble_ && !stack_frames_.empty()) {
+            uint32_t ip = (uint32_t)stack_frames_[0].instruction_pointer;
+            if (ip > 0) {
+                disassemble(ip, disassemble_count_);
             }
         }
     }
-
-    cJSON_Delete(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -1429,19 +1543,10 @@ void DebuggerClient::refresh_threads()
 
 void DebuggerClient::on_stopped()
 {
-    // 1. Refresh thread list
-    refresh_threads();
-
-    // 2. Get stack trace for the stopped thread
-    refresh_stack_trace();
-
-    // 3. Auto-disassemble at current IP
-    if (auto_disassemble_ && !stack_frames_.empty()) {
-        uint32_t ip = (uint32_t)stack_frames_[0].instruction_pointer;
-        if (ip > 0) {
-            disassemble(ip, disassemble_count_);
-        }
-    }
+    // Don't do blocking queries here -- there may be pending async responses
+    // (launch, configurationDone, continue, etc.) in the transport buffer that
+    // would interfere. Set a flag and let poll() drain everything first.
+    needs_refresh_ = true;
 }
 
 const char* DebuggerClient::state_string() const

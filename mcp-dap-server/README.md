@@ -129,7 +129,7 @@ Step out of the current function.
 Returns: New location after returning from the function.
 
 #### `debug_step_back`
-Step back to the previous execution point (requires reverse execution support from the DAP server).
+Step back to the previous execution point. Requires reverse execution support from the DAP server (`supportsStepBack` capability). Returns an error if the server does not advertise this capability.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -472,6 +472,51 @@ Interact with a program's terminal output and input. Useful for debugging progra
 9. debug_disconnect()
 ```
 
+### Console I/O: Wait for prompt and login
+
+A common pattern for interactive programs: wait for a specific prompt, send input, then wait for the next prompt. Each `debug_console_read` drains the buffer, so check the returned `output` text for your expected string and call it again if not yet present.
+
+```
+1. debug_connect(host="127.0.0.1", port=4711)
+2. debug_launch(program="/path/to/system")
+3. debug_console_enable(terminal=192)          -- capture console output
+4. debug_continue()                             -- start the system
+
+   -- Wait for login prompt --
+5. debug_console_read(timeout=10.0)             -- wait for boot to complete
+   -> {"output": "SINTRAN III\r\nlogin: ", ...}
+   -- Check: does output contain "login:"? Yes -> proceed
+
+   -- Send username --
+6. debug_console_write(input="root\r")          -- type "root" + Enter
+
+   -- Wait for password prompt --
+7. debug_console_read(timeout=3.0)
+   -> {"output": "password: ", ...}
+
+8. debug_console_write(input="secret\r")        -- type password + Enter
+
+   -- Wait for shell prompt --
+9. debug_console_read(timeout=3.0)
+   -> {"output": "\r\n# ", ...}
+   -- Check: does output contain "#"? Yes -> logged in
+
+   -- Send a command --
+10. debug_console_write(input="who\r")
+11. debug_console_read(timeout=2.0)
+    -> {"output": "root     console\r\n# ", ...}
+
+12. debug_disconnect()
+```
+
+**Tips for the wait-and-respond pattern:**
+- **Program must be running**: Call `debug_continue()` before expecting output. Console capture works while the CPU executes.
+- **Each read drains the buffer**: Output is consumed on read. Subsequent reads return only new output.
+- **Use appropriate timeouts**: Long for slow operations (boot: 5-10s), short for fast responses (1-2s).
+- **`\r` is Enter**: ND-100 terminals use CR for input. Always append `\r` to commands.
+- **Check output for target text**: If the expected prompt hasn't appeared yet, call `debug_console_read` again.
+- **Use `raw_hex`** to detect non-printable characters the text field replaces with `.`.
+
 ## ND-100 Specific Notes
 
 When debugging ND-100 programs (via the nd100x emulator):
@@ -488,6 +533,20 @@ When debugging ND-100 programs (via the nd100x emulator):
   - **Physical**: Monitors physical addresses (up to 21+ bits for extended memory) after MMS translation, checked in `ReadPhysicalMemory`/`WritePhysicalMemoryWM`. Catches all accesses including DMA, aliased virtual mappings, and page table operations. Up to 32 simultaneous physical watchpoints.
 
   Variables can be specified by symbol name (looked up across all loaded symbol tables) or by numeric address. The `dataId` used internally encodes the address space and octal address (e.g., `"V:000040"` for virtual, `"P:000040"` for physical).
+
+## Multiple LLM Sessions
+
+Multiple AI assistants can debug different DAP servers simultaneously with no extra configuration. MCP's stdio transport is inherently 1:1 -- each MCP client spawns its own `mcp-dap-server` process with an independent `DAPDebugger` instance.
+
+```
+LLM-A  -->  MCP process A  -->  debug_connect(port=4711)  -->  DAP server #1
+LLM-B  -->  MCP process B  -->  debug_connect(port=4712)  -->  DAP server #2
+LLM-C  -->  MCP process C  -->  debug_connect(port=4713)  -->  DAP server #3
+```
+
+Each LLM uses the same MCP server configuration. At connect time, each specifies the port of its assigned DAP server. Sessions are fully isolated -- breakpoints, execution state, memory, and console I/O do not interfere across sessions.
+
+**Setup**: Start multiple DAP servers on different ports, then have each LLM call `debug_connect(port=XXXX)` with the appropriate port.
 
 ## Troubleshooting
 

@@ -709,8 +709,9 @@ int handle_set_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response
         if (!response_bp)
             continue;
 
-        // Required fields
-        cJSON_AddNumberToObject(response_bp, "id", i + 1);
+        // Required fields - use stable monotonic IDs per DAP spec
+        int bp_id = bp->id > 0 ? bp->id : ++server->next_breakpoint_id;
+        cJSON_AddNumberToObject(response_bp, "id", bp_id);
         cJSON_AddBoolToObject(response_bp, "verified", bp->verified);
         cJSON_AddNumberToObject(response_bp, "line", bp->line);
 
@@ -877,7 +878,9 @@ int handle_set_instruction_breakpoints(DAPServer *server, cJSON *args, DAPRespon
         cJSON *rbp = cJSON_CreateObject();
         if (!rbp) continue;
 
-        cJSON_AddNumberToObject(rbp, "id", i + 1);
+        // Use stable monotonic IDs per DAP spec
+        int bp_id = bp_results[i].id > 0 ? bp_results[i].id : ++server->next_breakpoint_id;
+        cJSON_AddNumberToObject(rbp, "id", bp_id);
         cJSON_AddBoolToObject(rbp, "verified", bp_results[i].verified);
 
         // Format address as hex string per DAP spec
@@ -1175,7 +1178,9 @@ int handle_set_data_breakpoints(DAPServer *server, cJSON *args, DAPResponse *res
         cJSON *rbp = cJSON_CreateObject();
         if (!rbp) continue;
 
-        cJSON_AddNumberToObject(rbp, "id", i + 1);
+        // Use stable monotonic IDs per DAP spec
+        int bp_id = bp_results[i].id > 0 ? bp_results[i].id : ++server->next_breakpoint_id;
+        cJSON_AddNumberToObject(rbp, "id", bp_id);
         cJSON_AddBoolToObject(rbp, "verified", bp_results[i].verified);
 
         if (bp_results[i].message)
@@ -1464,11 +1469,9 @@ int handle_continue(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    if (server->current_command.context.continue_cmd.all_threads_continue)
-    {
-        cJSON_AddBoolToObject(body, "allThreadsContinued", true);
-    }
-
+    // Always include per DAP spec best practice
+    cJSON_AddBoolToObject(body, "allThreadsContinued",
+                          server->current_command.context.continue_cmd.all_threads_continue ? true : false);
 
     set_response_success(response, body);
     // body is freed by set_response_success
@@ -2134,6 +2137,18 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         server->debugger_state.args_count = 0;
     }
 
+    // Free any previous source paths
+    if (server->debugger_state.source_paths)
+    {
+        for (int i = 0; i < server->debugger_state.source_paths_count; i++)
+        {
+            free(server->debugger_state.source_paths[i]);
+        }
+        free(server->debugger_state.source_paths);
+        server->debugger_state.source_paths = NULL;
+        server->debugger_state.source_paths_count = 0;
+    }
+
     // Parse required field: program (executable path)
     cJSON *program_json = cJSON_GetObjectItem(args, "program");
     if (!program_json || !cJSON_IsString(program_json))
@@ -2290,6 +2305,48 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
             server->debugger_state.args = cmd_args;
             server->debugger_state.args_count = args_count;
             DAP_SERVER_DEBUG_LOG("Command line arguments: %d provided", args_count);
+        }
+    }
+
+    // Optional field - sourcePaths (directories to search for source files)
+    cJSON *source_paths_json = cJSON_GetObjectItem(args, "sourcePaths");
+    if (source_paths_json && cJSON_IsArray(source_paths_json))
+    {
+        int paths_count = cJSON_GetArraySize(source_paths_json);
+        if (paths_count > 0)
+        {
+            char **source_paths_arr = calloc(paths_count, sizeof(char *));
+            if (!source_paths_arr)
+            {
+                set_response_error(response, "Failed to allocate memory for source paths");
+                goto cleanup;
+            }
+
+            int valid_count = 0;
+            for (int i = 0; i < paths_count; i++)
+            {
+                cJSON *sp = cJSON_GetArrayItem(source_paths_json, i);
+                if (sp && cJSON_IsString(sp) && sp->valuestring)
+                {
+                    source_paths_arr[valid_count] = strdup(sp->valuestring);
+                    if (!source_paths_arr[valid_count])
+                    {
+                        for (int j = 0; j < valid_count; j++)
+                        {
+                            free(source_paths_arr[j]);
+                        }
+                        free(source_paths_arr);
+                        set_response_error(response, "Failed to allocate memory for source path entry");
+                        goto cleanup;
+                    }
+                    DAP_SERVER_DEBUG_LOG("Source path[%d]: %s", valid_count, source_paths_arr[valid_count]);
+                    valid_count++;
+                }
+            }
+
+            server->debugger_state.source_paths = source_paths_arr;
+            server->debugger_state.source_paths_count = valid_count;
+            DAP_SERVER_DEBUG_LOG("Source paths: %d directories configured", valid_count);
         }
     }
 
@@ -3566,8 +3623,7 @@ void free_filter_arrays(const char **filter_ids, const char **filter_conditions,
 
 int handle_source(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    (void)server; // Mark as unused
-    if (!args || !response)
+    if (!server || !args || !response)
     {
         set_response_error(response, "Invalid arguments");
         return -1;
@@ -3614,6 +3670,35 @@ int handle_source(DAPServer *server, cJSON *args, DAPResponse *response)
         }
 
         FILE *f = fopen(file_path, "r");
+
+        // If file not found at exact path, search source_paths directories
+        if (!f && server->debugger_state.source_paths_count > 0)
+        {
+            // Extract basename from the path
+            const char *basename = file_path;
+            const char *slash = strrchr(file_path, '/');
+            if (slash)
+            {
+                basename = slash + 1;
+            }
+
+            DAP_SERVER_DEBUG_LOG("Source file not found at '%s', searching source_paths for '%s'", file_path, basename);
+
+            for (int i = 0; i < server->debugger_state.source_paths_count; i++)
+            {
+                char search_path[4096];
+                snprintf(search_path, sizeof(search_path), "%s/%s",
+                         server->debugger_state.source_paths[i], basename);
+
+                DAP_SERVER_DEBUG_LOG("Trying source path: %s", search_path);
+                f = fopen(search_path, "r");
+                if (f)
+                {
+                    DAP_SERVER_DEBUG_LOG("Found source file at: %s", search_path);
+                    break;
+                }
+            }
+        }
 
         if (f)
         {

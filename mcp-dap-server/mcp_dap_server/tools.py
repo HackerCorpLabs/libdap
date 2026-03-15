@@ -268,7 +268,9 @@ class DAPDebugger:
         return await self._execute_and_wait("stepOut", {"threadId": thread_id})
 
     async def step_back(self, thread_id: int = 1) -> dict[str, Any]:
-        """Step back."""
+        """Step back (requires server supportsStepBack capability)."""
+        if not self.capabilities.get("supportsStepBack", False):
+            return {"error": True, "message": "Server does not support stepBack"}
         return await self._execute_and_wait("stepBack", {"threadId": thread_id})
 
     async def pause(self, thread_id: int = 1) -> dict[str, Any]:
@@ -523,7 +525,7 @@ class DAPDebugger:
             "expression": expression,
             "context": context,
         }
-        if frame_id:
+        if frame_id is not None and frame_id >= 0:
             args["frameId"] = frame_id
 
         response = await self.conn.send_request("evaluate", args)

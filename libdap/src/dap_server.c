@@ -327,6 +327,16 @@ void cleanup_command_context(DAPServer *server)
             free(server->current_command.context.launch.args);
             server->current_command.context.launch.args = NULL;
         }
+        // Free source paths array
+        if (server->current_command.context.launch.source_paths)
+        {
+            for (int i = 0; i < server->current_command.context.launch.source_paths_count; i++)
+            {
+                free((void *)server->current_command.context.launch.source_paths[i]);
+            }
+            free(server->current_command.context.launch.source_paths);
+            server->current_command.context.launch.source_paths = NULL;
+        }
         break;
 
     case DAP_CMD_RESTART:
@@ -1187,7 +1197,9 @@ int dap_server_send_thread_event(DAPServer *server, const char *reason, int thre
     return dap_server_send_event(server, "thread", body);
 }
 
-int dap_server_send_stopped_event(DAPServer *server, const char *reason, const char *description)
+int dap_server_send_stopped_event_ex(DAPServer *server, const char *reason,
+                                      const char *description,
+                                      const int *hit_bp_ids, int hit_bp_count)
 {
     if (!server || !reason)
     {
@@ -1200,22 +1212,26 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
     {
         cJSON_AddNumberToObject(event_body, "threadId", server->debugger_state.current_thread_id);
 
-        // REQUIRED by the spec!!!
+        // REQUIRED by the spec
         cJSON_AddStringToObject(event_body, "reason", reason);
 
         if (description)
         {
-            // Add description
             cJSON_AddStringToObject(event_body, "description", description);
         }
 
-        // Optional by the spec
-        //      description?: string;             // OPTIONAL
-        //      threadId?: number;                // OPTIONAL
-        //      preserveFocusHint?: boolean;      // OPTIONAL
-        //      text?: string;                    // OPTIONAL
-        //      allThreadsStopped?: boolean;      // OPTIONAL
-        //      hitBreakpointIds?: number[];      // OPTIONAL
+        // Single-threaded emulator: all threads are always stopped together
+        cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
+
+        // Include hit breakpoint IDs when stopping at a breakpoint
+        if (hit_bp_ids && hit_bp_count > 0)
+        {
+            cJSON *ids_array = cJSON_CreateIntArray(hit_bp_ids, hit_bp_count);
+            if (ids_array)
+            {
+                cJSON_AddItemToObject(event_body, "hitBreakpointIds", ids_array);
+            }
+        }
 
         // Send the event
         dap_server_send_event(server, "stopped", event_body);
@@ -1224,6 +1240,11 @@ int dap_server_send_stopped_event(DAPServer *server, const char *reason, const c
     }
 
     return -1;
+}
+
+int dap_server_send_stopped_event(DAPServer *server, const char *reason, const char *description)
+{
+    return dap_server_send_stopped_event_ex(server, reason, description, NULL, 0);
 }
 
 /// @brief Send a terminated event to the client

@@ -410,6 +410,8 @@ typedef struct {
     char** args;                    /**< Command line arguments array */
     int args_count;                 /**< Number of command line arguments */
     void* launch_args;              /**< Additional language-specific launch args */
+    char** source_paths;            /**< Array of directories to search for source files */
+    int source_paths_count;         /**< Number of source path entries */
 } LaunchCommandContext;
 
 /**
@@ -610,7 +612,11 @@ typedef struct {
     // Command line arguments
     char** args;                  /**< Command line arguments array */
     int args_count;               /**< Number of command line arguments */
-    
+
+    // Source search paths for multi-file debugging
+    char** source_paths;          /**< Array of directories to search for source files */
+    int source_paths_count;       /**< Number of source path entries */
+
     // User data
     void* user_data;              /**< User-defined data for the current state */
 } DebuggerState;
@@ -634,8 +640,9 @@ struct DAPServer
 
     int breakpoint_count;
     DAPBreakpoint *breakpoints;
+    int next_breakpoint_id;      /**< Monotonically increasing breakpoint ID counter (DAP spec: stable IDs) */
 
-    
+
     // Generic callback array for command implementations. MUST be set up the the DEBUGGER implementation.
     DAPCommandCallback command_callbacks[DAP_CMD_MAX]; /**< Callback functions for command implementation */
     
@@ -877,6 +884,19 @@ int dap_server_send_output_category(DAPServer *server, DAPOutputCategory categor
  *       Used directly in launch_wrapper but could be extracted to this utility function.
  */
 int dap_server_send_stopped_event(DAPServer *server, const char *reason, const char *description);
+
+/**
+ * @brief Send a stopped event with hit breakpoint IDs
+ * @param server Server instance
+ * @param reason Stop reason string (e.g., "breakpoint", "step")
+ * @param description Optional description text
+ * @param hit_bp_ids Array of breakpoint IDs that triggered the stop (may be NULL)
+ * @param hit_bp_count Number of entries in hit_bp_ids
+ * @return 0 on success, non-zero on failure
+ */
+int dap_server_send_stopped_event_ex(DAPServer *server, const char *reason,
+                                      const char *description,
+                                      const int *hit_bp_ids, int hit_bp_count);
 
 /**
  * @brief Add a line mapping entry

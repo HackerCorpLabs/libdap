@@ -333,6 +333,150 @@ Physical addresses can be larger than 16 bits (up to 21+ bits for extended memor
 - Variable names are resolved by searching all loaded symbol tables (a.out binary symbols, .map file symbols, STABS debug symbols). If no symbol matches, the name is parsed as a numeric address. Symbol resolution works with both virtual and physical address spaces.
 - To clear all watchpoints: `debug_set_data_breakpoints(variables=[])`
 
+## Console I/O
+
+The console I/O tools let you interact with the program's terminal -- capture output and send keyboard input. This is essential for debugging interactive programs, automated login sequences, or verifying program output.
+
+### Enabling Console Capture
+
+Before reading any output, enable capture on the terminal device:
+
+```
+debug_console_enable(terminal=192)
+```
+
+Terminal 192 (octal 0300) is the system console. Other terminals use different addresses (e.g., 224 for terminal 5).
+
+### Reading Output
+
+After continuing execution, read what the program has printed:
+
+```
+debug_console_read(timeout=3.0)
+-> {"output": "Hello, World!\r\n", "raw_hex": "48656C6C6F..."}
+```
+
+The `timeout` parameter controls how long to wait for additional output. Use a longer timeout if the program takes time to produce output (e.g., during boot).
+
+The response contains both `output` (printable text, with non-printable chars replaced by `.`) and `raw_hex` (exact byte values). Use `raw_hex` to detect control characters and escape sequences.
+
+### Sending Input
+
+Send keyboard input to the terminal:
+
+```
+debug_console_write(input="root\r")
+```
+
+Use `\r` for Enter. For special keys, use hex mode:
+
+```
+debug_console_write(input="hex:1B5B41")   # Arrow Up (ESC [ A)
+debug_console_write(input="hex:03")        # Ctrl-C
+```
+
+### Waiting for a Specific Prompt
+
+A common pattern is waiting for a program to print a specific string (like a login prompt) before sending input. Since `debug_console_read` returns all buffered output, check for the expected text in a loop:
+
+**Example: Automated login sequence**
+
+```
+# 1. Connect and launch
+debug_connect(port=4711)
+debug_launch(program="/path/to/system", stop_on_entry=true)
+
+# 2. Enable console capture
+debug_console_enable(terminal=192)
+
+# 3. Let the system boot
+debug_continue()
+
+# 4. Wait for "login:" prompt
+#    Call debug_console_read repeatedly until the output contains "login:"
+debug_console_read(timeout=5.0)
+-> {"output": "ND-100 SINTRAN III\r\nlogin: ", ...}
+#    Found "login:" in output -- proceed
+
+# 5. Send username + Enter
+debug_console_write(input="root\r")
+
+# 6. Wait for password prompt (if any) or shell prompt
+debug_console_read(timeout=3.0)
+-> {"output": "password: ", ...}
+
+debug_console_write(input="secret\r")
+
+# 7. Wait for shell prompt "#"
+debug_console_read(timeout=3.0)
+-> {"output": "\r\n# ", ...}
+#    Found "#" -- logged in successfully
+
+# 8. Now send commands to the shell
+debug_console_write(input="who\r")
+debug_console_read(timeout=2.0)
+-> {"output": "root     console\r\n# ", ...}
+```
+
+**Key points for the wait-and-respond pattern:**
+
+1. **Use `debug_continue()` first** -- the program must be running to produce output. Console capture works while the CPU is executing.
+2. **Check output text for your target string** -- `debug_console_read` returns whatever has been buffered. If the expected text hasn't appeared yet, call it again with a timeout.
+3. **Each read drains the buffer** -- once read, output is consumed. Subsequent reads return only new output since the last read.
+4. **Timeout is important** -- set it long enough for slow operations (boot: 5-10s) and short for fast responses (command output: 1-2s).
+5. **`\r` is Enter** -- ND-100 terminals use CR (`\r`) as the line terminator for input. Always append `\r` when sending commands.
+
+### Disabling Console Capture
+
+When done, disable capture to restore normal terminal operation:
+
+```
+debug_console_enable(terminal=192, enable=false)
+```
+
+## Multiple LLM Sessions (Parallel Debugging)
+
+Multiple AI assistants can debug different nd100x emulators simultaneously. Each MCP client (e.g. separate terminal sessions) spawns its own MCP server process, so sessions are fully isolated.
+
+### How It Works
+
+MCP uses stdio transport, which is inherently 1:1. Each MCP client spawns its own `mcp-dap-server` process with an independent `DAPDebugger` instance:
+
+```
+LLM-A  -->  MCP process A  -->  debug_connect(port=4711)  -->  nd100x #1
+LLM-B  -->  MCP process B  -->  debug_connect(port=4712)  -->  nd100x #2
+LLM-C  -->  MCP process C  -->  debug_connect(port=4713)  -->  nd100x #3
+```
+
+No code changes or special configuration needed -- this works out of the box.
+
+### Setup
+
+1. Start multiple nd100x emulators on different ports:
+
+```bash
+# Terminal 1
+~/repos/nd100x/build/bin/nd100x --debugger -p 4711
+
+# Terminal 2
+~/repos/nd100x/build/bin/nd100x --debugger -p 4712
+
+# Terminal 3
+~/repos/nd100x/build/bin/nd100x --debugger -p 4713
+```
+
+2. Each LLM uses the same MCP server configuration (from `~/.claude.json`). No per-LLM config changes needed.
+
+3. Each LLM connects to its assigned emulator by specifying the port:
+
+```
+debug_connect(port=4711)   # LLM-A connects to emulator #1
+debug_connect(port=4712)   # LLM-B connects to emulator #2
+debug_connect(port=4713)   # LLM-C connects to emulator #3
+```
+
+Each session is completely independent -- breakpoints, execution state, memory writes, and console I/O are isolated per emulator.
+
 ## Ending a Session
 
 ```
@@ -364,4 +508,8 @@ To fully stop the emulator, kill the nd100x process separately.
 | Disassemble | `debug_disassemble(address="0x00D5", count=20)` |
 | Read memory | `debug_read_memory(address="0x0100", count=32)` |
 | Write memory | `debug_write_memory(address="0x0100", data="00FF")` |
+| Console enable | `debug_console_enable(terminal=192)` |
+| Console read | `debug_console_read(timeout=3.0)` |
+| Console write | `debug_console_write(input="root\r")` |
+| Console disable | `debug_console_enable(terminal=192, enable=false)` |
 | Disconnect | `debug_disconnect()` |

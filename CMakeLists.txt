@@ -99,17 +99,26 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Collect cJSON link info for executables (OBJECT libs don't propagate transitively)
+if(CJSON_METHOD STREQUAL "INTERNAL")
+    set(CJSON_LINK_LIBS cjson_objects)
+elseif(CJSON_METHOD STREQUAL "PKG_CONFIG")
+    set(CJSON_LINK_LIBS ${CJSON_LIBRARIES})
+else()
+    set(CJSON_LINK_LIBS cjson)
+endif()
+
 # Build the DAP test tools if requested
 if(BUILD_EXECUTABLES)
     message(STATUS "Building DAP test tools: dap_debugger and dap_mock_server")
-    
+
     # DAP Debugger executable (original)
     file(GLOB DAP_DEBUGGER_SOURCES "src/dap_debugger/*.c")
     # Exclude the threaded sources from the original debugger
     list(FILTER DAP_DEBUGGER_SOURCES EXCLUDE REGEX ".*_thread.*")
     list(FILTER DAP_DEBUGGER_SOURCES EXCLUDE REGEX ".*main_threaded.*")
     add_executable(dap_debugger ${DAP_DEBUGGER_SOURCES})
-    target_link_libraries(dap_debugger PRIVATE dap_objects)
+    target_link_libraries(dap_debugger PRIVATE dap_objects ${CJSON_LINK_LIBS})
     # Include both libdap/include for headers and src/dap_debugger for local headers
     target_include_directories(dap_debugger PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_debugger
@@ -130,18 +139,18 @@ if(BUILD_EXECUTABLES)
         src/dap_debugger/dap_response_formatter.c
     )
     add_executable(dap_debugger_threaded ${DAP_DEBUGGER_THREADED_SOURCES})
-    target_link_libraries(dap_debugger_threaded PRIVATE dap_objects Threads::Threads readline)
+    target_link_libraries(dap_debugger_threaded PRIVATE dap_objects ${CJSON_LINK_LIBS} Threads::Threads readline)
     target_include_directories(dap_debugger_threaded PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_debugger
         ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
     )
-    
+
     # DAP Mock Server executable
     file(GLOB DAP_MOCK_SERVER_SOURCES "src/dap_mock_server/*.c")
     add_executable(dap_mock_server ${DAP_MOCK_SERVER_SOURCES})
-    target_link_libraries(dap_mock_server PRIVATE dap_objects)
+    target_link_libraries(dap_mock_server PRIVATE dap_objects ${CJSON_LINK_LIBS})
     # Include both libdap/include for headers and src/dap_mock_server for local headers
-    target_include_directories(dap_mock_server PRIVATE 
+    target_include_directories(dap_mock_server PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dap_mock_server
         ${CMAKE_CURRENT_SOURCE_DIR}/libdap/include
     )

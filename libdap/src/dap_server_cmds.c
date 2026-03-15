@@ -4203,3 +4203,80 @@ int handle_console_write(DAPServer *server, cJSON *args, DAPResponse *response)
 
     return 0;
 }
+
+/**
+ * @brief Handle symbolList request (custom DAP extension)
+ *
+ * Returns a list of symbols from the debug target.
+ * The integrator callback is expected to build a JSON array of symbols
+ * and send the response via dap_server_send_response().
+ *
+ * Request arguments:
+ *   filter     (string, optional) - filter symbols by name substring
+ *   symbolType (int, optional)    - 0=all, 1=functions, 2=labels, 3=variables
+ *   offset     (int, optional)    - start index for paging
+ *   count      (int, optional)    - max symbols to return (0=all)
+ *
+ * Response body:
+ *   symbols (array) - array of symbol objects:
+ *     name    (string) - symbol name
+ *     address (int)    - memory address
+ *     type    (string) - "function", "label", "variable"
+ *     sourcePath (string, optional) - source file
+ *     line    (int, optional)       - source line
+ */
+int handle_symbol_list(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!response)
+    {
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_SYMBOL_LIST;
+    memset(&server->current_command.context.symbol_list, 0,
+           sizeof(SymbolListContext));
+
+    if (args)
+    {
+        cJSON *filter = cJSON_GetObjectItem(args, "filter");
+        if (filter && cJSON_IsString(filter) && filter->valuestring)
+        {
+            server->current_command.context.symbol_list.filter = strdup(filter->valuestring);
+        }
+
+        cJSON *offset = cJSON_GetObjectItem(args, "offset");
+        if (offset && cJSON_IsNumber(offset))
+        {
+            server->current_command.context.symbol_list.offset = offset->valueint;
+        }
+
+        cJSON *count = cJSON_GetObjectItem(args, "count");
+        if (count && cJSON_IsNumber(count))
+        {
+            server->current_command.context.symbol_list.count = count->valueint;
+        }
+
+        cJSON *sym_type = cJSON_GetObjectItem(args, "symbolType");
+        if (sym_type && cJSON_IsNumber(sym_type))
+        {
+            server->current_command.context.symbol_list.symbol_type = sym_type->valueint;
+        }
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_SYMBOL_LIST);
+
+    /* Default response if callback did not send one */
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddBoolToObject(body, "success", result == 0);
+    if (!cJSON_GetObjectItem(body, "symbols"))
+    {
+        cJSON_AddItemToObject(body, "symbols", cJSON_CreateArray());
+    }
+
+    response->success = (result == 0);
+    dap_server_send_response(server, DAP_CMD_SYMBOL_LIST,
+                             server->sequence++,
+                             server->current_command.request_seq,
+                             response->success, body);
+    return 0;
+}

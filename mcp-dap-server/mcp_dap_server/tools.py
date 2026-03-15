@@ -654,7 +654,7 @@ class DAPDebugger:
         for ev in events:
             if ev.get("event") == "output":
                 body = ev.get("body", {})
-                if body.get("category") == "stdout":
+                if body.get("category") in ("stdout", "console"):
                     collected_text.append(body.get("output", ""))
                     data = body.get("data")
                     if data:
@@ -685,7 +685,7 @@ class DAPDebugger:
 
             if ev.get("event") == "output":
                 body = ev.get("body", {})
-                if body.get("category") == "stdout":
+                if body.get("category") in ("stdout", "console"):
                     collected_text.append(body.get("output", ""))
                     data = body.get("data")
                     if data:
@@ -712,3 +712,39 @@ class DAPDebugger:
         if not collected_text:
             result["note"] = "No console output received. Is console capture enabled?"
         return result
+
+    async def symbol_list(
+        self,
+        filter: str = "",
+        symbol_type: int = 0,
+        offset: int = 0,
+        count: int = 0,
+    ) -> dict[str, Any]:
+        """Request symbol list from the debug target (custom DAP extension).
+
+        Returns a list of symbols with names, addresses, types, and source locations.
+        Requires server-side support for the symbolList command.
+        """
+        self._check_connected()
+
+        args: dict[str, Any] = {}
+        if filter:
+            args["filter"] = filter
+        if symbol_type > 0:
+            args["symbolType"] = symbol_type
+        if offset > 0:
+            args["offset"] = offset
+        if count > 0:
+            args["count"] = count
+
+        response = await self.conn.send_request("symbolList", args)
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+
+        body = response.get("body", {})
+        symbols = body.get("symbols", [])
+        return {
+            "symbols": symbols,
+            "count": len(symbols),
+        }

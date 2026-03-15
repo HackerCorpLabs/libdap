@@ -1,24 +1,8 @@
 #include "ui_main.h"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <cstring>
-
-static ImVec4 direction_color(ProtocolEntry::Direction dir)
-{
-    switch (dir) {
-    case ProtocolEntry::Sent:     return ImVec4(0.4f, 0.8f, 1.0f, 1.0f);
-    case ProtocolEntry::Received: return ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
-    }
-    return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-}
-
-static const char* direction_label(ProtocolEntry::Direction dir)
-{
-    switch (dir) {
-    case ProtocolEntry::Sent:     return ">>>";
-    case ProtocolEntry::Received: return "<<<";
-    }
-    return "???";
-}
+#include <algorithm>
 
 void PanelProtocol::render(DebuggerClient& client)
 {
@@ -27,84 +11,85 @@ void PanelProtocol::render(DebuggerClient& client)
         return;
     }
 
-    // Controls
+    // Controls row 1
     if (ImGui::Button("Clear")) {
         client.clear_protocol_log();
+        text_buf_.clear();
+        last_count_ = 0;
     }
     ImGui::SameLine();
     ImGui::Checkbox("Auto-scroll", &auto_scroll_);
+
+    // Controls row 2: direction + type filters
+    bool filter_changed = false;
+    filter_changed |= ImGui::Checkbox("Sent", &show_sent_);
     ImGui::SameLine();
-    ImGui::Checkbox("Sent", &show_sent_);
+    filter_changed |= ImGui::Checkbox("Received", &show_received_);
     ImGui::SameLine();
-    ImGui::Checkbox("Received", &show_received_);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+    filter_changed |= ImGui::Checkbox("Requests", &show_requests_);
+    ImGui::SameLine();
+    filter_changed |= ImGui::Checkbox("Responses", &show_responses_);
+    ImGui::SameLine();
+    filter_changed |= ImGui::Checkbox("Events", &show_events_);
+
+    // Controls row 3: text search
+    ImGui::SetNextItemWidth(300.0f);
+    if (ImGui::InputText("Search", search_buf_, sizeof(search_buf_))) {
+        filter_changed = true;
+    }
 
     ImGui::Separator();
 
-    // Log area
-    if (ImGui::BeginChild("##ProtocolLog", ImVec2(0, 0), ImGuiChildFlags_None,
-                          ImGuiWindowFlags_HorizontalScrollbar)) {
-        const auto& log = client.protocol_log();
-        for (size_t i = 0; i < log.size(); i++) {
-            const auto& entry = log[i];
+    // Rebuild text buffer when log changes or filter changes
+    const auto& log = client.protocol_log();
+    if (log.size() != last_count_ || filter_changed) {
+        text_buf_.clear();
 
-            // Filter
+        std::string search_lower;
+        if (search_buf_[0]) {
+            search_lower = search_buf_;
+            std::transform(search_lower.begin(), search_lower.end(), search_lower.begin(),
+                           [](unsigned char c) { return (char)tolower(c); });
+        }
+
+        for (const auto& entry : log) {
+            // Direction filter
             if (entry.direction == ProtocolEntry::Sent && !show_sent_) continue;
             if (entry.direction == ProtocolEntry::Received && !show_received_) continue;
 
-            ImGui::PushID((int)i);
+            // Type filter: detect message type from JSON content
+            bool is_request = entry.json.find("\"type\":\t\"request\"") != std::string::npos
+                           || entry.json.find("\"type\": \"request\"") != std::string::npos;
+            bool is_response = entry.json.find("\"type\":\t\"response\"") != std::string::npos
+                            || entry.json.find("\"type\": \"response\"") != std::string::npos;
+            bool is_event = entry.json.find("\"type\":\t\"event\"") != std::string::npos
+                         || entry.json.find("\"type\": \"event\"") != std::string::npos;
 
-            ImVec4 color = direction_color(entry.direction);
-            ImGui::TextColored(color, "%s", direction_label(entry.direction));
-            ImGui::SameLine();
+            if (is_request && !show_requests_) continue;
+            if (is_response && !show_responses_) continue;
+            if (is_event && !show_events_) continue;
 
-            // Show as collapsible tree for long entries, inline for short
-            if (entry.json.size() > 120) {
-                // Extract a summary: type + command/event
-                std::string summary;
-                // Quick parse for display label
-                auto find_field = [&entry](const char* key) -> std::string {
-                    std::string needle = std::string("\"") + key + "\"";
-                    size_t pos = entry.json.find(needle);
-                    if (pos == std::string::npos) return "";
-                    pos = entry.json.find(':', pos);
-                    if (pos == std::string::npos) return "";
-                    pos = entry.json.find('"', pos);
-                    if (pos == std::string::npos) return "";
-                    size_t end = entry.json.find('"', pos + 1);
-                    if (end == std::string::npos) return "";
-                    return entry.json.substr(pos + 1, end - pos - 1);
-                };
-
-                std::string type = find_field("type");
-                std::string cmd = find_field("command");
-                std::string evt = find_field("event");
-                if (!cmd.empty())
-                    summary = type + ": " + cmd;
-                else if (!evt.empty())
-                    summary = type + ": " + evt;
-                else
-                    summary = type;
-
-                if (ImGui::TreeNode(summary.c_str())) {
-                    ImGui::TextWrapped("%s", entry.json.c_str());
-                    ImGui::TreePop();
-                }
-            } else {
-                ImGui::TextColored(color, "%s", entry.json.c_str());
+            // Text search filter
+            if (!search_lower.empty()) {
+                std::string json_lower = entry.json;
+                std::transform(json_lower.begin(), json_lower.end(), json_lower.begin(),
+                               [](unsigned char c) { return (char)tolower(c); });
+                if (json_lower.find(search_lower) == std::string::npos) continue;
             }
 
-            ImGui::PopID();
+            text_buf_ += (entry.direction == ProtocolEntry::Sent) ? ">>> " : "<<< ";
+            text_buf_ += entry.json;
+            text_buf_ += "\n\n";
         }
-
-        // Auto-scroll
-        if (log.size() != last_count_) {
-            if (auto_scroll_) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-            last_count_ = log.size();
-        }
+        last_count_ = log.size();
     }
-    ImGui::EndChild();
+
+    // Selectable multiline text (supports Ctrl+C copy)
+    ImVec2 size = ImGui::GetContentRegionAvail();
+    ImGui::InputTextMultiline("##ProtocolLog", &text_buf_[0], text_buf_.size() + 1,
+                              size, ImGuiInputTextFlags_ReadOnly);
 
     ImGui::End();
 }

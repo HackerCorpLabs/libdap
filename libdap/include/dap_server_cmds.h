@@ -100,6 +100,7 @@ int handle_pause(DAPServer* server, cJSON* args, DAPResponse* response);
 int handle_set_exception_breakpoints(DAPServer *server, cJSON *args, DAPResponse *response);
 int handle_console_enable(DAPServer *server, cJSON *args, DAPResponse *response);
 int handle_console_write(DAPServer *server, cJSON *args, DAPResponse *response);
+int handle_symbol_list(DAPServer *server, cJSON *args, DAPResponse *response);
 
 
 // Callback function for handling DAP commands

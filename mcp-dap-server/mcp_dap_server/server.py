@@ -299,6 +299,20 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        # Symbol listing (custom DAP extension)
+        Tool(
+            name="debug_symbol_list",
+            description="List symbols from the debug target. Returns symbol names, addresses, types (function/label/variable), and optional source locations. Use filter to search by name substring. Custom DAP extension - requires server support.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string", "default": "", "description": "Filter symbols by name (case-insensitive substring match)"},
+                    "symbolType": {"type": "integer", "default": 0, "description": "0=all, 1=functions, 2=labels, 3=variables"},
+                    "offset": {"type": "integer", "default": 0, "description": "Start offset for paging"},
+                    "count": {"type": "integer", "default": 0, "description": "Max symbols to return (0=all)"},
+                },
+            },
+        ),
     ]
 
 
@@ -430,6 +444,14 @@ async def _dispatch(name: str, args: dict) -> dict | list:
         case "debug_console_read":
             return await debugger.console_read(
                 timeout=args.get("timeout", 2.0),
+            )
+
+        case "debug_symbol_list":
+            return await debugger.symbol_list(
+                filter=args.get("filter", ""),
+                symbol_type=args.get("symbolType", 0),
+                offset=args.get("offset", 0),
+                count=args.get("count", 0),
             )
 
         case _:

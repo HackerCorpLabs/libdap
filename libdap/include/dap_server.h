@@ -567,6 +567,17 @@ typedef struct {
 } ConsoleWriteContext;
 
 /**
+ * @struct SymbolListContext
+ * @brief Context for symbolList command (custom)
+ */
+typedef struct {
+    char *filter;               /**< Optional filter string for symbol names */
+    int offset;                 /**< Start offset for paging (default 0) */
+    int count;                  /**< Max symbols to return (default 0 = all) */
+    int symbol_type;            /**< 0=all, 1=functions, 2=labels, 3=variables */
+} SymbolListContext;
+
+/**
  * @typedef DAPCommandCallback
  * @brief Function signature for command implementation callbacks
  * 
@@ -679,6 +690,7 @@ struct DAPServer
             StackTraceCommandContext stack_trace;   /**< Context for stack trace command */
             ConsoleEnableContext console_enable;    /**< Context for consoleEnable command */
             ConsoleWriteContext console_write;      /**< Context for consoleWrite command */
+            SymbolListContext symbol_list;          /**< Context for symbolList command */
         } context;
     } current_command;
 

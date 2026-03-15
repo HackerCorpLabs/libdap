@@ -100,6 +100,19 @@ struct ThreadInfo {
     std::string name;
 };
 
+struct SymbolInfo {
+    std::string name;
+    uint32_t address;
+    std::string type;       // "function", "label", "variable"
+    std::string source_path;
+    int line;
+};
+
+struct ServerCapability {
+    std::string name;
+    bool supported;
+};
+
 struct ScopeInfo {
     std::string name;
     int variables_reference;
@@ -116,6 +129,7 @@ public:
     void initialize();
     void launch(const std::string& program);
     void disconnect();
+    void force_close();  // Close socket immediately without sending disconnect request
 
     // Execution control
     void do_continue();
@@ -170,6 +184,13 @@ public:
 
     // Set variable
     void set_variable(int variables_reference, const std::string& name, const std::string& value);
+
+    // Symbol list (custom DAP extension)
+    void fetch_symbols(const std::string& filter = "", int symbol_type = 0);
+    const std::vector<SymbolInfo>& symbols() const { return symbols_; }
+
+    // Server capabilities
+    const std::vector<ServerCapability>& server_capabilities() const { return server_capabilities_; }
 
     // Terminal console I/O
     void console_enable(int terminal, bool enable);
@@ -250,6 +271,8 @@ private:
     std::vector<DataBreakpointInfo> data_breakpoints_;
     std::vector<DisassemblyLine> disassembly_;
     std::vector<ThreadInfo> threads_;
+    std::vector<SymbolInfo> symbols_;
+    std::vector<ServerCapability> server_capabilities_;
     std::vector<ModuleInfo> modules_;
     std::vector<ConsoleEntry> console_log_;
     std::vector<ProtocolEntry> protocol_log_;

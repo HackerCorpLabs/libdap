@@ -104,6 +104,7 @@ set(GUI_SOURCES
     src/ui/panel_threads.cpp
     src/ui/panel_protocol.cpp
     src/ui/panel_symbols.cpp
+    src/ui/panel_server_info.cpp
 )
 
 add_executable(dap_gui_debugger ${GUI_SOURCES})

@@ -2729,3 +2729,20 @@ int dap_client_console_write(DAPClient* client, int terminal, const char* input,
     free(response_body);
     return result;
 }
+
+int dap_client_symbol_list(DAPClient* client, const char* filter,
+                           int symbol_type, int offset, int count,
+                           char** response_body)
+{
+    if (!client) return DAP_ERROR_INVALID_ARG;
+
+    cJSON* args = cJSON_CreateObject();
+    if (filter) cJSON_AddStringToObject(args, "filter", filter);
+    if (symbol_type > 0) cJSON_AddNumberToObject(args, "symbolType", symbol_type);
+    if (offset > 0) cJSON_AddNumberToObject(args, "offset", offset);
+    if (count > 0) cJSON_AddNumberToObject(args, "count", count);
+
+    int result = dap_client_send_request(client, DAP_CMD_SYMBOL_LIST, args, response_body);
+    cJSON_Delete(args);
+    return result;
+}

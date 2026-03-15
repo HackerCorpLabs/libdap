@@ -80,7 +80,8 @@ static const char* command_strings[] = {
     "goto",
     "setExceptionFilters",
     "consoleEnable",
-    "consoleWrite"
+    "consoleWrite",
+    "symbolList"
 };
 
 /**

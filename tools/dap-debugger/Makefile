@@ -8,9 +8,9 @@ MOCK_SERVER = $(ROOT_BUILD)/bin/dap_mock_server
 TEST_PROG   = ../../tests/test_program.exe
 
 HOST = localhost
-PORT = 4711
+PORT = 5555
 
-.PHONY: all clean run server debug rebuild
+.PHONY: all clean run run-mock server debug rebuild
 
 all: $(BINARY)
 
@@ -23,11 +23,16 @@ clean:
 
 rebuild: clean all
 
+# Connect to nd100x (or any DAP server on PORT)
 run: $(BINARY)
-	./$(BINARY) --port $(PORT) --program $(TEST_PROG)
+	./$(BINARY) --port $(PORT)
+
+# Connect to mock server with test program
+run-mock: $(BINARY)
+	./$(BINARY) --port 4711 --program $(TEST_PROG)
 
 debug: $(BINARY)
-	./$(BINARY) --port $(PORT) --program $(TEST_PROG) --debug
+	./$(BINARY) --port $(PORT) --debug
 
 server:
 	$(MOCK_SERVER) --debug

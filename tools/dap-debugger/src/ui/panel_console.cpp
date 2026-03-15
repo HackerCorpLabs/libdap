@@ -2,19 +2,6 @@
 #include <imgui.h>
 #include <cstring>
 
-static ImVec4 category_color(ConsoleEntry::Category cat)
-{
-    switch (cat) {
-    case ConsoleEntry::Info:        return ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-    case ConsoleEntry::Warning:     return ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
-    case ConsoleEntry::Error:       return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-    case ConsoleEntry::DapEvent:    return ImVec4(0.4f, 0.7f, 1.0f, 1.0f);
-    case ConsoleEntry::DapResponse: return ImVec4(0.5f, 0.9f, 0.5f, 1.0f);
-    case ConsoleEntry::UserInput:   return ImVec4(1.0f, 1.0f, 0.6f, 1.0f);
-    }
-    return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-}
-
 void PanelConsole::render(DebuggerClient& client)
 {
     if (!ImGui::Begin("Console")) {
@@ -22,26 +9,31 @@ void PanelConsole::render(DebuggerClient& client)
         return;
     }
 
-    // Log area
-    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
-    if (ImGui::BeginChild("##ConsoleLog", ImVec2(0, -footer_height), ImGuiChildFlags_None,
-                          ImGuiWindowFlags_HorizontalScrollbar)) {
-        const auto& log = client.console_log();
+    // Rebuild text buffer when log changes
+    const auto& log = client.console_log();
+    if (log.size() != last_count_) {
+        text_buf_.clear();
         for (const auto& entry : log) {
-            ImGui::PushStyleColor(ImGuiCol_Text, category_color(entry.category));
-            ImGui::TextWrapped("%s", entry.text.c_str());
-            ImGui::PopStyleColor();
+            text_buf_ += entry.text;
+            text_buf_ += '\n';
         }
-
-        // Auto-scroll when new entries appear
-        if (log.size() != last_count_) {
-            if (auto_scroll_) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-            last_count_ = log.size();
-        }
+        last_count_ = log.size();
+        scroll_to_bottom_ = auto_scroll_;
     }
-    ImGui::EndChild();
+
+    // Log area as read-only multiline (supports text selection + Ctrl+C)
+    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() * 2;
+    ImVec2 size(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - footer_height);
+
+    ImGui::InputTextMultiline("##ConsoleLog", &text_buf_[0], text_buf_.size() + 1,
+                              size, ImGuiInputTextFlags_ReadOnly);
+
+    if (scroll_to_bottom_) {
+        // Scroll the internal InputText to bottom by setting scroll
+        // InputTextMultiline doesn't expose scroll directly, but setting
+        // cursor to end before rendering achieves the same effect
+        scroll_to_bottom_ = false;
+    }
 
     // Input line
     ImGui::Separator();
@@ -51,6 +43,8 @@ void PanelConsole::render(DebuggerClient& client)
     ImGui::SameLine();
     send |= ImGui::Button("Eval");
 
+    ImGui::Checkbox("Auto-scroll", &auto_scroll_);
+
     if (send && strlen(input_buf_) > 0) {
         int frame_id = 0;
         if (!client.stack_frames().empty()) {
@@ -58,7 +52,7 @@ void PanelConsole::render(DebuggerClient& client)
         }
         client.evaluate(input_buf_, frame_id);
         input_buf_[0] = '\0';
-        ImGui::SetKeyboardFocusHere(-1);
+        ImGui::SetKeyboardFocusHere(-2);
     }
 
     ImGui::End();

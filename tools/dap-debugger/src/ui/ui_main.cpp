@@ -16,6 +16,7 @@ UIMain::UIMain()
     panel_threads_ = new PanelThreads();
     panel_protocol_ = new PanelProtocol();
     panel_symbols_ = new PanelSymbols();
+    panel_server_info_ = new PanelServerInfo();
 }
 
 UIMain::~UIMain()
@@ -29,6 +30,7 @@ UIMain::~UIMain()
     delete panel_threads_;
     delete panel_protocol_;
     delete panel_symbols_;
+    delete panel_server_info_;
 }
 
 void UIMain::setup_docking()
@@ -68,7 +70,8 @@ void UIMain::setup_docking()
     ImGui::DockBuilderDockWindow("Console", dock_bottom);
     ImGui::DockBuilderDockWindow("Terminal I/O", dock_bottom);
     ImGui::DockBuilderDockWindow("DAP Protocol Log", dock_bottom);
-    ImGui::DockBuilderDockWindow("Symbols", dock_right_top);
+    ImGui::DockBuilderDockWindow("Symbols", dock_main);
+    ImGui::DockBuilderDockWindow("Server Info", dock_right_top);
 
     ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -114,9 +117,13 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     panel_threads_->render(client);
     panel_protocol_->render(client);
     panel_symbols_->render(client);
+    panel_server_info_->render(client);
 
     // Status bar
     render_status_bar(client);
+
+    // Keyboard shortcuts
+    handle_keyboard_shortcuts(client, config);
 
     // Connect dialog
     if (show_connect_dialog_) {
@@ -126,12 +133,40 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     if (ImGui::BeginPopupModal("Connect to Server", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText("Host", connect_host_, sizeof(connect_host_));
         ImGui::InputInt("Port", &connect_port_);
+        ImGui::Separator();
+        ImGui::InputText("Program (optional)", launch_program_, sizeof(launch_program_));
+        ImGui::TextDisabled("Leave empty to connect without launching");
 
-        if (ImGui::Button("Connect", ImVec2(120, 0))) {
+        if (ImGui::Button("Connect", ImVec2(200, 0))) {
             client.connect(connect_host_, connect_port_);
             if (client.state() == ClientState::Connected) {
                 client.initialize();
+                if (client.state() == ClientState::Initialized && launch_program_[0]) {
+                    client.launch(launch_program_);
+                }
             }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Launch dialog
+    if (show_launch_dialog_) {
+        ImGui::OpenPopup("Launch Program");
+        show_launch_dialog_ = false;
+    }
+    if (ImGui::BeginPopupModal("Launch Program", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Program path", launch_program_, sizeof(launch_program_));
+        ImGui::TextDisabled("Leave empty to run without loading (e.g. boot from floppy)");
+
+        if (ImGui::Button("Launch", ImVec2(120, 0))) {
+            std::string prog = launch_program_;
+            if (prog.empty()) prog = "boot";
+            client.launch(prog);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -142,6 +177,23 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     }
 }
 
+void UIMain::handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config)
+{
+    // Don't process shortcuts when typing in an input field
+    if (ImGui::GetIO().WantTextInput) return;
+
+    bool stopped = client.state() == ClientState::Stopped;
+    bool running = client.state() == ClientState::Running;
+    bool can_run = stopped || client.state() == ClientState::Initialized;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_F5) && can_run)  client.do_continue();
+    if (ImGui::IsKeyPressed(ImGuiKey_F6) && running)   client.pause();
+    if (ImGui::IsKeyPressed(ImGuiKey_F9) && stopped)   client.step_back();
+    if (ImGui::IsKeyPressed(ImGuiKey_F10) && stopped)  client.step_over();
+    if (ImGui::IsKeyPressed(ImGuiKey_F11) && stopped)  client.step_in();
+    if (ImGui::IsKeyPressed(ImGuiKey_F11) && ImGui::GetIO().KeyShift && stopped) client.step_out();
+}
+
 void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
 {
     if (ImGui::BeginMenuBar()) {
@@ -149,6 +201,10 @@ void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
             if (ImGui::MenuItem("Connect...", nullptr, false,
                                 client.state() == ClientState::Disconnected)) {
                 show_connect_dialog_ = true;
+            }
+            if (ImGui::MenuItem("Launch...", nullptr, false,
+                                client.state() == ClientState::Initialized)) {
+                show_launch_dialog_ = true;
             }
             if (ImGui::MenuItem("Disconnect", nullptr, false,
                                 client.state() != ClientState::Disconnected)) {
@@ -165,9 +221,10 @@ void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
         if (ImGui::BeginMenu("Debug")) {
             bool stopped = client.state() == ClientState::Stopped;
             bool running = client.state() == ClientState::Running;
+            bool can_run = stopped || client.state() == ClientState::Initialized;
 
-            if (ImGui::MenuItem("Continue", "F5", false, stopped)) client.do_continue();
-            if (ImGui::MenuItem("Pause", "F6", false, running)) client.pause();
+            if (ImGui::MenuItem("Run", "F5", false, can_run)) client.do_continue();
+            if (ImGui::MenuItem("Break", "F6", false, running)) client.pause();
             ImGui::Separator();
             if (ImGui::MenuItem("Step Over", "F10", false, stopped)) client.step_over();
             if (ImGui::MenuItem("Step In", "F11", false, stopped)) client.step_in();
@@ -187,6 +244,7 @@ void UIMain::render_toolbar(DebuggerClient& client)
     bool disconnected = client.state() == ClientState::Disconnected;
     bool stopped = client.state() == ClientState::Stopped;
     bool running = client.state() == ClientState::Running;
+    bool can_run = stopped || client.state() == ClientState::Initialized;
 
     if (disconnected) {
         if (ImGui::Button("Connect")) {
@@ -202,9 +260,21 @@ void UIMain::render_toolbar(DebuggerClient& client)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine();
 
-    ImGui::BeginDisabled(!stopped);
-    if (ImGui::Button("Continue")) client.do_continue();
+    // Run / Break
+    ImGui::BeginDisabled(!can_run);
+    if (ImGui::Button("Run (F5)")) client.do_continue();
+    ImGui::EndDisabled();
     ImGui::SameLine();
+    ImGui::BeginDisabled(!running);
+    if (ImGui::Button("Break (F6)")) client.pause();
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+
+    // Stepping
+    ImGui::BeginDisabled(!stopped);
     if (ImGui::Button("Step Over")) client.step_over();
     ImGui::SameLine();
     if (ImGui::Button("Step In")) client.step_in();
@@ -212,12 +282,6 @@ void UIMain::render_toolbar(DebuggerClient& client)
     if (ImGui::Button("Step Out")) client.step_out();
     ImGui::SameLine();
     if (ImGui::Button("Step Back")) client.step_back();
-    ImGui::EndDisabled();
-
-    ImGui::SameLine();
-
-    ImGui::BeginDisabled(!running);
-    if (ImGui::Button("Pause")) client.pause();
     ImGui::EndDisabled();
 
     ImGui::End();

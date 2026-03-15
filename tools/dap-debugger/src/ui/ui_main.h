@@ -13,6 +13,7 @@ class PanelTerminal;
 class PanelThreads;
 class PanelProtocol;
 class PanelSymbols;
+class PanelServerInfo;
 
 class UIMain {
 public:
@@ -36,10 +37,15 @@ private:
     PanelThreads* panel_threads_;
     PanelProtocol* panel_protocol_;
     PanelSymbols* panel_symbols_;
+    PanelServerInfo* panel_server_info_;
+
+    void handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config);
 
     bool show_connect_dialog_ = false;
+    bool show_launch_dialog_ = false;
     char connect_host_[256] = "localhost";
-    int connect_port_ = 4711;
+    int connect_port_ = 5555;
+    char launch_program_[512] = {};
 };
 
 // Panel classes
@@ -49,7 +55,9 @@ public:
 private:
     char input_buf_[512] = {};
     bool auto_scroll_ = true;
+    bool scroll_to_bottom_ = false;
     size_t last_count_ = 0;
+    std::string text_buf_;
 };
 
 class PanelStack {
@@ -92,10 +100,17 @@ public:
     };
     void render(DebuggerClient& client);
 private:
-    std::vector<SymbolEntry> symbols_;
+    std::vector<SymbolEntry> scan_symbols_;
     char filter_buf_[128] = {};
+    int symbol_type_ = 0;
     uint32_t scan_start_ = 0;
     uint32_t scan_end_ = 0x1000;
+    bool use_dap_symbols_ = true;
+};
+
+class PanelServerInfo {
+public:
+    void render(DebuggerClient& client);
 };
 
 class PanelProtocol {
@@ -105,7 +120,12 @@ private:
     bool auto_scroll_ = true;
     bool show_sent_ = true;
     bool show_received_ = true;
+    bool show_requests_ = true;
+    bool show_responses_ = true;
+    bool show_events_ = true;
+    char search_buf_[256] = {};
     size_t last_count_ = 0;
+    std::string text_buf_;
 };
 
 class PanelTerminal {

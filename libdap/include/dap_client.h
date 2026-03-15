@@ -521,5 +521,20 @@ int dap_client_console_enable(DAPClient* client, int terminal, bool enable);
  */
 int dap_client_console_write(DAPClient* client, int terminal, const char* input, bool hex);
 
+/**
+ * @brief Request symbol list from the server (custom extension)
+ *
+ * @param client Pointer to the client
+ * @param filter Optional filter string (NULL for all)
+ * @param symbol_type 0=all, 1=functions, 2=labels, 3=variables
+ * @param offset Start offset for paging
+ * @param count Max symbols to return (0 = all)
+ * @param response_body Output JSON string (caller must free)
+ * @return int DAP_ERROR_NONE on success, error code on failure
+ */
+int dap_client_symbol_list(DAPClient* client, const char* filter,
+                           int symbol_type, int offset, int count,
+                           char** response_body);
+
 #endif /* DAP_CLIENT_H */
 

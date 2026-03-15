@@ -9,7 +9,11 @@
 
 #include <cstdio>
 #include <cstring>
+#include <csignal>
 #include <getopt.h>
+
+static volatile bool g_quit = false;
+static void signal_handler(int) { g_quit = true; }
 
 AppConfig parse_args(int argc, char* argv[])
 {
@@ -83,6 +87,9 @@ bool App::init()
     ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
     ImGui_ImplSDLRenderer3_Init(renderer_);
 
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
     running_ = true;
     return true;
 }
@@ -96,10 +103,19 @@ void App::run()
 
     UIMain ui;
 
-    // Auto-connect if program was specified
-    bool auto_connect = !config_.program.empty();
+    // Auto-connect before entering the frame loop (blocks briefly)
+    if (!config_.program.empty()) {
+        fprintf(stderr, "Connecting to %s:%d ...\n", config_.host.c_str(), config_.port);
+        client.connect(config_.host, config_.port);
+        if (client.state() == ClientState::Connected) {
+            client.initialize();
+            if (client.state() == ClientState::Initialized) {
+                client.launch(config_.program);
+            }
+        }
+    }
 
-    while (running_) {
+    while (running_ && !g_quit) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
@@ -115,18 +131,6 @@ void App::run()
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
-        // Auto-connect on first opportunity
-        if (auto_connect && client.state() == ClientState::Disconnected) {
-            client.connect(config_.host, config_.port);
-            if (client.state() == ClientState::Connected) {
-                client.initialize();
-                if (client.state() == ClientState::Initialized) {
-                    client.launch(config_.program);
-                }
-            }
-            auto_connect = false;
-        }
-
         client.poll();
         ui.render(client, config_);
 
@@ -138,7 +142,12 @@ void App::run()
     }
 
     if (client.state() != ClientState::Disconnected) {
-        client.disconnect();
+        if (g_quit) {
+            // Signal-triggered exit: just close the socket, don't try to send
+            client.force_close();
+        } else {
+            client.disconnect();
+        }
     }
 }
 

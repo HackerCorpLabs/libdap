@@ -5,7 +5,7 @@
 
 struct AppConfig {
     std::string host = "localhost";
-    int port = 4711;
+    int port = 5555;
     std::string program;
     bool debug = false;
 };

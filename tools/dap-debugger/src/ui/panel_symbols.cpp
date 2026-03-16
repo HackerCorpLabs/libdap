@@ -32,7 +32,7 @@ void PanelSymbols::render(DebuggerClient& client)
     ImGui::SameLine();
     ImGui::BeginDisabled(!stopped);
     if (ImGui::Button("Fetch Symbols")) {
-        client.fetch_symbols(filter_buf_, symbol_type_);
+        client.fetch_symbols();
         use_dap_symbols_ = true;
     }
     ImGui::EndDisabled();
@@ -123,6 +123,12 @@ void PanelSymbols::render(DebuggerClient& client)
                        [](unsigned char c) { return (char)tolower(c); });
     }
 
+    // Type filter: 0=all, 1=function, 2=label, 3=variable
+    const char* type_filter = nullptr;
+    if (symbol_type_ == 1) type_filter = "function";
+    else if (symbol_type_ == 2) type_filter = "label";
+    else if (symbol_type_ == 3) type_filter = "variable";
+
     if (ImGui::BeginTable("##symbols", 5,
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable)) {
@@ -139,7 +145,7 @@ void PanelSymbols::render(DebuggerClient& client)
 
         if (showing_dap) {
             for (const auto& sym : dap_syms) {
-                // Apply filter
+                // Apply name filter
                 if (!filter_lower.empty()) {
                     std::string name_lower = sym.name;
                     std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(),
@@ -147,6 +153,9 @@ void PanelSymbols::render(DebuggerClient& client)
                     if (name_lower.find(filter_lower) == std::string::npos)
                         continue;
                 }
+                // Apply type filter
+                if (type_filter && sym.type != type_filter)
+                    continue;
 
                 bool is_current = (sym.address == current_ip && current_ip != 0);
                 ImVec4 color = is_current ? ImVec4(1.0f, 1.0f, 0.4f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);

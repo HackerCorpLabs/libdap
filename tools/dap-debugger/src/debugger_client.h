@@ -173,7 +173,10 @@ public:
 
     // Disassembly
     void disassemble(uint32_t address, int count, bool resolve_symbols = true);
+    void disassemble_extend(uint32_t address, int count, bool resolve_symbols = true);
     const std::vector<DisassemblyLine>& disassembly() const { return disassembly_; }
+    uint32_t disasm_cache_start() const { return disasm_cache_start_; }
+    uint32_t disasm_cache_end() const { return disasm_cache_end_; }
 
     // Memory
     std::string read_memory(uint32_t address, uint32_t offset, size_t count);
@@ -194,7 +197,7 @@ public:
     void set_variable(int variables_reference, const std::string& name, const std::string& value);
 
     // Symbol list (custom DAP extension)
-    void fetch_symbols(const std::string& filter = "", int symbol_type = 0);
+    void fetch_symbols();
     const std::vector<SymbolInfo>& symbols() const { return symbols_; }
 
     // Server capabilities
@@ -265,6 +268,10 @@ private:
     bool auto_disassemble_ = true;
     int disassemble_count_ = 20;
     bool needs_refresh_ = false;
+
+    // Disassembly cache range tracking
+    uint32_t disasm_cache_start_ = 0;  // First address in cached disassembly
+    uint32_t disasm_cache_end_ = 0;    // Last address in cached disassembly
 
     // Process state
     std::string process_name_;

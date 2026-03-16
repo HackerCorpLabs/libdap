@@ -285,6 +285,8 @@ void DebuggerClient::disconnect()
     instruction_breakpoints_.clear();
     data_breakpoints_.clear();
     disassembly_.clear();
+    disasm_cache_start_ = 0;
+    disasm_cache_end_ = 0;
     threads_.clear();
     modules_.clear();
     process_name_.clear();
@@ -808,6 +810,9 @@ void DebuggerClient::disassemble(uint32_t address, int count, bool resolve_symbo
     }
 
     disassembly_.clear();
+    disasm_cache_start_ = 0;
+    disasm_cache_end_ = 0;
+
     for (size_t i = 0; i < result.num_instructions; i++) {
         DisassemblyLine dl;
         dl.address = result.instructions[i].address ? result.instructions[i].address : "";
@@ -817,6 +822,59 @@ void DebuggerClient::disassemble(uint32_t address, int count, bool resolve_symbo
         dl.source_path = result.instructions[i].source_path ? result.instructions[i].source_path : "";
         dl.line = result.instructions[i].line;
         disassembly_.push_back(dl);
+    }
+
+    // Track cache range
+    if (!disassembly_.empty()) {
+        disasm_cache_start_ = (uint32_t)strtoul(disassembly_.front().address.c_str(), nullptr, 0);
+        disasm_cache_end_ = (uint32_t)strtoul(disassembly_.back().address.c_str(), nullptr, 0);
+    }
+
+    dap_disassemble_result_free(&result);
+}
+
+// Append disassembly to the end of the cache (for extending when stepping forward)
+void DebuggerClient::disassemble_extend(uint32_t address, int count, bool resolve_symbols)
+{
+    if (!impl_->client) return;
+
+    DAPDisassembleResult result = {};
+    int rc = dap_client_disassemble(impl_->client, address, 0, 0, (size_t)count, resolve_symbols, &result);
+    if (rc != DAP_ERROR_NONE) {
+        return;
+    }
+
+    size_t old_size = disassembly_.size();
+
+    for (size_t i = 0; i < result.num_instructions; i++) {
+        uint32_t addr = (uint32_t)strtoul(
+            result.instructions[i].address ? result.instructions[i].address : "0", nullptr, 0);
+
+        // Skip if already in cache
+        if (addr <= disasm_cache_end_ && !disassembly_.empty()) continue;
+
+        DisassemblyLine dl;
+        dl.address = result.instructions[i].address ? result.instructions[i].address : "";
+        dl.instruction = result.instructions[i].instruction ? result.instructions[i].instruction : "";
+        dl.instruction_bytes = result.instructions[i].instruction_bytes ? result.instructions[i].instruction_bytes : "";
+        dl.symbol = result.instructions[i].symbol ? result.instructions[i].symbol : "";
+        dl.source_path = result.instructions[i].source_path ? result.instructions[i].source_path : "";
+        dl.line = result.instructions[i].line;
+        disassembly_.push_back(dl);
+    }
+
+    // Trim equal number of lines from the top to keep cache size stable
+    size_t added = disassembly_.size() - old_size;
+    if (added > 0 && disassembly_.size() > 120) {
+        size_t trim = added;
+        if (trim > disassembly_.size() - 20) trim = disassembly_.size() - 20;
+        disassembly_.erase(disassembly_.begin(), disassembly_.begin() + (int)trim);
+    }
+
+    // Update cache range
+    if (!disassembly_.empty()) {
+        disasm_cache_start_ = (uint32_t)strtoul(disassembly_.front().address.c_str(), nullptr, 0);
+        disasm_cache_end_ = (uint32_t)strtoul(disassembly_.back().address.c_str(), nullptr, 0);
     }
 
     dap_disassemble_result_free(&result);
@@ -988,13 +1046,11 @@ void DebuggerClient::console_write(int terminal, const std::string& input)
 // Symbol list (custom DAP extension)
 // ---------------------------------------------------------------------------
 
-void DebuggerClient::fetch_symbols(const std::string& filter, int symbol_type)
+void DebuggerClient::fetch_symbols()
 {
     if (!impl_->client) return;
 
     cJSON* args = cJSON_CreateObject();
-    if (!filter.empty()) cJSON_AddStringToObject(args, "filter", filter.c_str());
-    if (symbol_type > 0) cJSON_AddNumberToObject(args, "symbolType", symbol_type);
 
     log_protocol_sent("symbolList", args);
 
@@ -1135,7 +1191,25 @@ void DebuggerClient::poll()
         if (auto_disassemble_ && !stack_frames_.empty()) {
             uint32_t ip = (uint32_t)stack_frames_[0].instruction_pointer;
             if (ip > 0) {
-                disassemble(ip, disassemble_count_);
+                if (disassembly_.empty() || ip < disasm_cache_start_ || ip > disasm_cache_end_) {
+                    // IP is outside cached range -- full re-fetch centered on IP
+                    uint32_t start = (ip > 20) ? ip - 20 : 0;
+                    disassemble(start, 120);
+                } else {
+                    // IP is within cache -- check if we're near the end
+                    // Count how many lines remain after the current IP
+                    int lines_after = 0;
+                    for (size_t i = 0; i < disassembly_.size(); i++) {
+                        uint32_t addr = (uint32_t)strtoul(disassembly_[i].address.c_str(), nullptr, 0);
+                        if (addr > ip) lines_after++;
+                    }
+                    if (lines_after < 5) {
+                        // Near the end -- extend the cache forward
+                        uint32_t extend_from = disasm_cache_end_ + 1;
+                        disassemble_extend(extend_from, 100, true);
+                    }
+                    // Otherwise: IP is well within cache, no fetch needed
+                }
             }
         }
     }
@@ -1161,6 +1235,8 @@ void DebuggerClient::handle_event(const char* event_name, void* body_json)
         scopes_.clear();
         variables_.clear();
         disassembly_.clear();
+        disasm_cache_start_ = 0;
+        disasm_cache_end_ = 0;
         stop_reason_.clear();
         hit_breakpoint_ids_.clear();
         log(ConsoleEntry::Info, "Program terminated");

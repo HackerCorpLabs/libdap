@@ -571,10 +571,9 @@ typedef struct {
  * @brief Context for symbolList command (custom)
  */
 typedef struct {
-    char *filter;               /**< Optional filter string for symbol names */
-    int offset;                 /**< Start offset for paging (default 0) */
-    int count;                  /**< Max symbols to return (default 0 = all) */
-    int symbol_type;            /**< 0=all, 1=functions, 2=labels, 3=variables */
+    /* Response fields - populated by callback */
+    DAPSymbol *symbols;         /**< Response array, allocated by callback */
+    int symbol_count;           /**< Number of symbols in array */
 } SymbolListContext;
 
 /**

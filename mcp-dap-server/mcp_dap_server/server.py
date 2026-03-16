@@ -302,7 +302,7 @@ async def list_tools() -> list[Tool]:
         # Symbol listing (custom DAP extension)
         Tool(
             name="debug_symbol_list",
-            description="List symbols from the debug target. Returns symbol names, addresses, types (function/label/variable), and optional source locations. Use filter to search by name substring. Custom DAP extension - requires server support.",
+            description="List symbols from the debug target. Returns symbol names, addresses, types (function/label/variable), and optional source locations. Symbols are cached locally after first fetch; filtering and paging are applied client-side.",
             inputSchema={
                 "type": "object",
                 "properties": {

@@ -4207,15 +4207,11 @@ int handle_console_write(DAPServer *server, cJSON *args, DAPResponse *response)
 /**
  * @brief Handle symbolList request (custom DAP extension)
  *
- * Returns a list of symbols from the debug target.
- * The integrator callback is expected to build a JSON array of symbols
- * and send the response via dap_server_send_response().
+ * Returns all symbols from the debug target. No server-side filtering;
+ * clients should cache the result and filter/page locally.
  *
- * Request arguments:
- *   filter     (string, optional) - filter symbols by name substring
- *   symbolType (int, optional)    - 0=all, 1=functions, 2=labels, 3=variables
- *   offset     (int, optional)    - start index for paging
- *   count      (int, optional)    - max symbols to return (0=all)
+ * The callback populates context.symbol_list.symbols[] and symbol_count.
+ * The handler serializes to JSON and cleans up.
  *
  * Response body:
  *   symbols (array) - array of symbol objects:
@@ -4224,59 +4220,108 @@ int handle_console_write(DAPServer *server, cJSON *args, DAPResponse *response)
  *     type    (string) - "function", "label", "variable"
  *     sourcePath (string, optional) - source file
  *     line    (int, optional)       - source line
+ *   totalSymbols (int) - total number of symbols returned
  */
 int handle_symbol_list(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    if (!response)
+    if (!server || !response)
     {
+        set_response_error(response, "Invalid arguments");
         return -1;
     }
 
+    /* Set up command context - no input fields, callback just dumps all symbols */
     server->current_command.type = DAP_CMD_SYMBOL_LIST;
+    server->current_command.request_seq = response->request_seq;
     memset(&server->current_command.context.symbol_list, 0,
            sizeof(SymbolListContext));
 
-    if (args)
-    {
-        cJSON *filter = cJSON_GetObjectItem(args, "filter");
-        if (filter && cJSON_IsString(filter) && filter->valuestring)
-        {
-            server->current_command.context.symbol_list.filter = strdup(filter->valuestring);
-        }
-
-        cJSON *offset = cJSON_GetObjectItem(args, "offset");
-        if (offset && cJSON_IsNumber(offset))
-        {
-            server->current_command.context.symbol_list.offset = offset->valueint;
-        }
-
-        cJSON *count = cJSON_GetObjectItem(args, "count");
-        if (count && cJSON_IsNumber(count))
-        {
-            server->current_command.context.symbol_list.count = count->valueint;
-        }
-
-        cJSON *sym_type = cJSON_GetObjectItem(args, "symbolType");
-        if (sym_type && cJSON_IsNumber(sym_type))
-        {
-            server->current_command.context.symbol_list.symbol_type = sym_type->valueint;
-        }
-    }
+    (void)args; /* No input args used - filtering is done client-side */
 
     int result = dap_server_execute_callback(server, DAP_CMD_SYMBOL_LIST);
-
-    /* Default response if callback did not send one */
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddBoolToObject(body, "success", result == 0);
-    if (!cJSON_GetObjectItem(body, "symbols"))
+    if (result == 0)
     {
-        cJSON_AddItemToObject(body, "symbols", cJSON_CreateArray());
-    }
+        cJSON *body = cJSON_CreateObject();
+        if (!body)
+        {
+            /* Clean up on allocation failure */
+            DAPSymbol *syms = server->current_command.context.symbol_list.symbols;
+            int count = server->current_command.context.symbol_list.symbol_count;
+            for (int i = 0; i < count; i++)
+            {
+                free(syms[i].name);
+                free(syms[i].type);
+                if (syms[i].source_path)
+                    free(syms[i].source_path);
+            }
+            free(syms);
+            server->current_command.context.symbol_list.symbols = NULL;
+            server->current_command.context.symbol_list.symbol_count = 0;
+            set_response_error(response, "Failed to create response body");
+            return -1;
+        }
 
-    response->success = (result == 0);
-    dap_server_send_response(server, DAP_CMD_SYMBOL_LIST,
-                             server->sequence++,
-                             server->current_command.request_seq,
-                             response->success, body);
-    return 0;
+        cJSON *symbols_array = cJSON_CreateArray();
+        if (!symbols_array)
+        {
+            cJSON_Delete(body);
+            DAPSymbol *syms = server->current_command.context.symbol_list.symbols;
+            int count = server->current_command.context.symbol_list.symbol_count;
+            for (int i = 0; i < count; i++)
+            {
+                free(syms[i].name);
+                free(syms[i].type);
+                if (syms[i].source_path)
+                    free(syms[i].source_path);
+            }
+            free(syms);
+            server->current_command.context.symbol_list.symbols = NULL;
+            server->current_command.context.symbol_list.symbol_count = 0;
+            set_response_error(response, "Failed to create symbols array");
+            return -1;
+        }
+
+        DAPSymbol *syms = server->current_command.context.symbol_list.symbols;
+        int count = server->current_command.context.symbol_list.symbol_count;
+
+        for (int i = 0; i < count; i++)
+        {
+            cJSON *sym_obj = cJSON_CreateObject();
+            if (!sym_obj)
+                continue;
+
+            cJSON_AddStringToObject(sym_obj, "name", syms[i].name);
+            cJSON_AddNumberToObject(sym_obj, "address", syms[i].address);
+            cJSON_AddStringToObject(sym_obj, "type", syms[i].type);
+            if (syms[i].source_path)
+                cJSON_AddStringToObject(sym_obj, "sourcePath", syms[i].source_path);
+            if (syms[i].line > 0)
+                cJSON_AddNumberToObject(sym_obj, "line", syms[i].line);
+
+            cJSON_AddItemToArray(symbols_array, sym_obj);
+        }
+
+        cJSON_AddItemToObject(body, "symbols", symbols_array);
+        cJSON_AddNumberToObject(body, "totalSymbols", count);
+        set_response_success(response, body);
+
+        /* Clean up symbol data */
+        for (int i = 0; i < count; i++)
+        {
+            free(syms[i].name);
+            free(syms[i].type);
+            if (syms[i].source_path)
+                free(syms[i].source_path);
+        }
+        free(syms);
+        server->current_command.context.symbol_list.symbols = NULL;
+        server->current_command.context.symbol_list.symbol_count = 0;
+
+        return 0;
+    }
+    else
+    {
+        set_response_error(response, "symbolList callback failed");
+        return -1;
+    }
 }

@@ -55,6 +55,7 @@ static int cmd_set_variable(DAPServer *server);
 static int on_set_exception_breakpoints(DAPServer *server);
 static bool on_should_break_on_exception(DAPServer *server, const char* exception_id, bool is_uncaught, void* user_data);
 static int clear_breakpoints_for_source(const char* source_path);
+static int cmd_symbol_list(DAPServer *server);
 static int setup_server_callbacks(DAPServer *server);
 
 
@@ -1883,8 +1884,48 @@ int dbg_mock_set_default_capabilities(DAPServer *server) {
 
 
 /**
+ * @brief Symbol list callback - returns hardcoded demo symbols for testing
+ */
+static int cmd_symbol_list(DAPServer *server) {
+    if (!server) return -1;
+
+    DBG_MOCK_LOG("Handling symbolList command");
+
+    /* Demo symbols matching the mock's ND-100 theme */
+    struct { const char *name; uint32_t addr; const char *type; const char *src; int line; } demo[] = {
+        { "_main",        0x0100, "function", "test_program.c", 10 },
+        { "_printf",      0x0200, "function", "stdio.c",        42 },
+        { "_init_hw",     0x0050, "function", "startup.s",        1 },
+        { "_counter",     0x0300, "variable", "test_program.c",   5 },
+        { "_buffer",      0x0400, "variable", "test_program.c",   6 },
+        { "LOOP",         0x0110, "label",    "test_program.s",  15 },
+        { "EXIT",         0x01F0, "label",    "test_program.s",  30 },
+        { "_isr_handler", 0x0010, "function", "interrupts.s",     1 },
+        { "_stack_top",   0xFFFF, "variable", NULL,               0 },
+        { "START",        0x0000, "label",    "startup.s",        0 },
+    };
+    int n = (int)(sizeof(demo) / sizeof(demo[0]));
+
+    DAPSymbol *syms = calloc((size_t)n, sizeof(DAPSymbol));
+    if (!syms) return -1;
+
+    for (int i = 0; i < n; i++) {
+        syms[i].name        = strdup(demo[i].name);
+        syms[i].address     = demo[i].addr;
+        syms[i].type        = strdup(demo[i].type);
+        syms[i].source_path = demo[i].src ? strdup(demo[i].src) : NULL;
+        syms[i].line        = demo[i].line;
+    }
+
+    server->current_command.context.symbol_list.symbols      = syms;
+    server->current_command.context.symbol_list.symbol_count  = n;
+
+    return 0;
+}
+
+/**
  * @brief Register command callbacks for mock debugger implementation
- * 
+ *
  * This function connects the mock debugger's command implementations to the DAP server.
  * Each callback implements the debugger-specific behavior for a DAP command.
  * 
@@ -1927,6 +1968,7 @@ int setup_server_callbacks(DAPServer *server) {
     dap_server_register_command_callback(server, DAP_CMD_RESTART, cmd_restart);
     dap_server_register_command_callback(server, DAP_CMD_SET_VARIABLE, &cmd_set_variable);
     dap_server_register_command_callback(server, DAP_CMD_STACK_TRACE, mock_handle_stack_trace);
+    dap_server_register_command_callback(server, DAP_CMD_SYMBOL_LIST, cmd_symbol_list);
 
     // Initialize debugger state
     init_debugger_state(server);

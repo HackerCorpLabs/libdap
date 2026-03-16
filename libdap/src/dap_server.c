@@ -510,10 +510,20 @@ void cleanup_command_context(DAPServer *server)
         break;
 
     case DAP_CMD_SYMBOL_LIST:
-        if (server->current_command.context.symbol_list.filter)
+        if (server->current_command.context.symbol_list.symbols)
         {
-            free(server->current_command.context.symbol_list.filter);
-            server->current_command.context.symbol_list.filter = NULL;
+            DAPSymbol *syms = server->current_command.context.symbol_list.symbols;
+            int count = server->current_command.context.symbol_list.symbol_count;
+            for (int i = 0; i < count; i++)
+            {
+                free(syms[i].name);
+                free(syms[i].type);
+                if (syms[i].source_path)
+                    free(syms[i].source_path);
+            }
+            free(syms);
+            server->current_command.context.symbol_list.symbols = NULL;
+            server->current_command.context.symbol_list.symbol_count = 0;
         }
         break;
 

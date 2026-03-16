@@ -266,6 +266,17 @@ struct DAPDisassembledInstruction {
 // Forward declarations
 typedef struct DAPDisassembledInstruction DAPDisassembledInstruction;
 
+/**
+ * @brief Symbol structure for symbolList response
+ */
+typedef struct {
+    char *name;               /**< Symbol name */
+    uint32_t address;         /**< Memory address */
+    char *type;               /**< "function", "label", or "variable" */
+    char *source_path;        /**< Optional source file path (may be NULL) */
+    int line;                 /**< Source line (0 if unknown) */
+} DAPSymbol;
+
 // Result types for various DAP responses
 typedef struct {
     bool success;

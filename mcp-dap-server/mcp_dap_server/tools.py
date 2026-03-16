@@ -28,6 +28,8 @@ class DAPDebugger:
         self._source_breakpoints: dict[str, list[dict[str, Any]]] = {}
         # Instruction breakpoints: list of {address, condition?, hit_condition?}
         self._instruction_breakpoints: list[dict[str, Any]] = []
+        # Symbol cache: fetched once from DAP, filtered locally
+        self._symbol_cache: list[dict[str, Any]] | None = None
 
     def _check_connected(self) -> None:
         if not self.conn.connected:
@@ -136,6 +138,7 @@ class DAPDebugger:
         self.debugger_state = "disconnected"
         self._source_breakpoints.clear()
         self._instruction_breakpoints.clear()
+        self._symbol_cache = None
         return {"status": "disconnected"}
 
     async def status(self) -> dict[str, Any]:
@@ -713,6 +716,15 @@ class DAPDebugger:
             result["note"] = "No console output received. Is console capture enabled?"
         return result
 
+    async def _fetch_symbols(self) -> list[dict[str, Any]]:
+        """Fetch all symbols from DAP server (internal, populates cache)."""
+        response = await self.conn.send_request("symbolList", {})
+        err = self._check_response(response)
+        if "error" in err:
+            return []
+        body = response.get("body", {})
+        return body.get("symbols", [])
+
     async def symbol_list(
         self,
         filter: str = "",
@@ -720,31 +732,39 @@ class DAPDebugger:
         offset: int = 0,
         count: int = 0,
     ) -> dict[str, Any]:
-        """Request symbol list from the debug target (custom DAP extension).
+        """List symbols from the debug target. Fetches once and caches locally.
 
-        Returns a list of symbols with names, addresses, types, and source locations.
-        Requires server-side support for the symbolList command.
+        Filtering, type selection, and paging are all done client-side on the
+        cached symbol table.
         """
         self._check_connected()
 
-        args: dict[str, Any] = {}
+        # Fetch and cache on first call (or after reconnect)
+        if self._symbol_cache is None:
+            self._symbol_cache = await self._fetch_symbols()
+
+        symbols = self._symbol_cache
+
+        # Local filtering by name (case-insensitive substring)
         if filter:
-            args["filter"] = filter
-        if symbol_type > 0:
-            args["symbolType"] = symbol_type
+            needle = filter.lower()
+            symbols = [s for s in symbols if needle in s.get("name", "").lower()]
+
+        # Local type filtering: 1=functions, 2=labels, 3=variables
+        type_map = {1: "function", 2: "label", 3: "variable"}
+        if symbol_type in type_map:
+            symbols = [s for s in symbols if s.get("type") == type_map[symbol_type]]
+
+        total = len(symbols)
+
+        # Local paging
         if offset > 0:
-            args["offset"] = offset
+            symbols = symbols[offset:]
         if count > 0:
-            args["count"] = count
+            symbols = symbols[:count]
 
-        response = await self.conn.send_request("symbolList", args)
-        err = self._check_response(response)
-        if "error" in err:
-            return err
-
-        body = response.get("body", {})
-        symbols = body.get("symbols", [])
         return {
             "symbols": symbols,
             "count": len(symbols),
+            "totalSymbols": total,
         }

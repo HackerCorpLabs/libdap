@@ -2265,6 +2265,19 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         DAP_SERVER_DEBUG_LOG("stopOnEntry: %s", server->debugger_state.stop_at_entry ? "true" : "false");
     }
 
+    // Optional field - textStart (text segment load address, e.g. from -T flag)
+    cJSON *text_start_json = cJSON_GetObjectItem(args, "textStart");
+    if (text_start_json && cJSON_IsNumber(text_start_json))
+    {
+        server->debugger_state.text_start = (uint32_t)text_start_json->valuedouble;
+        DAP_SERVER_DEBUG_LOG("textStart: 0x%x", server->debugger_state.text_start);
+    }
+    else
+    {
+        server->debugger_state.text_start = 0;
+        DAP_SERVER_DEBUG_LOG("textStart: (not specified, default 0)");
+    }
+
     // Optional field - args (command line arguments)
     cJSON *args_json = cJSON_GetObjectItem(args, "args");
     if (args_json && cJSON_IsArray(args_json))

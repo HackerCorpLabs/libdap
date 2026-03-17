@@ -55,6 +55,7 @@ async def list_tools() -> list[Tool]:
                     "stop_on_entry": {"type": "boolean", "default": True, "description": "Stop at program entry point"},
                     "source_file": {"type": "string", "description": "Path to source file for source-level debugging"},
                     "map_file": {"type": "string", "description": "Path to .srcmap file for source-level debugging (C and assembly source lines, C functions, parameters, local variables)"},
+                    "text_start": {"type": "integer", "description": "Text segment load address (e.g. 0x1000 for kernel linked with -T 010000). If omitted, text loads at address 0."},
                 },
                 "required": ["program"],
             },
@@ -343,6 +344,7 @@ async def _dispatch(name: str, args: dict) -> dict | list:
                 stop_on_entry=args.get("stop_on_entry", True),
                 source_file=args.get("source_file"),
                 map_file=args.get("map_file"),
+                text_start=args.get("text_start"),
             )
         case "debug_disconnect":
             return await debugger.disconnect(terminate=args.get("terminate", True))

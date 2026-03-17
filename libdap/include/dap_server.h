@@ -618,7 +618,8 @@ typedef struct {
     const char* working_directory;/**< Working directory for the debuggee */
     bool no_debug;                /**< Whether debugging is disabled */
     bool stop_at_entry;           /**< Whether to stop at the entry point */
-    
+    uint32_t text_start;          /**< Text segment load address (from -T flag or a.out a_entry) */
+
     // Command line arguments
     char** args;                  /**< Command line arguments array */
     int args_count;               /**< Number of command line arguments */

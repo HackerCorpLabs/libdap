@@ -83,6 +83,7 @@ class DAPDebugger:
     async def launch(
         self, program: str, stop_on_entry: bool = True,
         source_file: str | None = None, map_file: str | None = None,
+        text_start: int | None = None,
     ) -> dict[str, Any]:
         """Launch a program for debugging."""
         self._check_connected()
@@ -96,6 +97,8 @@ class DAPDebugger:
             args["sourceFile"] = source_file
         if map_file:
             args["mapFile"] = map_file
+        if text_start is not None:
+            args["textStart"] = text_start
 
         response = await self.conn.send_request("launch", args)
         err = self._check_response(response)

@@ -45,7 +45,12 @@ class DAPDebugger:
     async def connect(self, host: str = "127.0.0.1", port: int = 4711) -> dict[str, Any]:
         """Connect to DAP server and initialize."""
         if self.conn.connected:
-            await self.conn.disconnect()
+            await self.disconnect()
+
+        # Clear any stale breakpoint/symbol caches from a prior session
+        self._source_breakpoints.clear()
+        self._instruction_breakpoints.clear()
+        self._symbol_cache = None
 
         self.host = host
         self.port = port

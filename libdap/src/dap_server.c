@@ -1371,6 +1371,18 @@ void cleanup_debugger_state(DAPServer *server)
         server->debugger_state.args_count = 0;
     }
 
+    // Free source paths array if it exists
+    if (server->debugger_state.source_paths)
+    {
+        for (int i = 0; i < server->debugger_state.source_paths_count; i++)
+        {
+            SAFE_FREE(server->debugger_state.source_paths[i]);
+        }
+        free(server->debugger_state.source_paths);
+        server->debugger_state.source_paths = NULL;
+        server->debugger_state.source_paths_count = 0;
+    }
+
     // Free any user data if a cleanup function was provided
     if (server->debugger_state.user_data)
     {

@@ -496,12 +496,23 @@ int try_receive_message(DAPTransport *transport, char *buf, int maxlen, bool rea
     char smallbuf[1]; // We only need 1 byte at a time
 
     while (true)
-    {    
+    {
         ssize_t rcvcnt = recv(transport->client_fd, smallbuf, 1, 0);
         if (rcvcnt <= 0)
         {
             return -1;
         }
+
+        // Bounds check BEFORE writing to prevent buffer overflow.
+        // For headers: maxlen is the buffer size, so we must stay within [0..maxlen-2]
+        //              to leave room for the null terminator at buf[maxlen-1].
+        // For body:    caller allocates maxlen+1 bytes, so writing up to buf[maxlen-1]
+        //              and null terminator at buf[maxlen] is safe.
+        if (readHeader && bufcnt >= maxlen - 1)
+        {
+            return -1; // Header too large for buffer
+        }
+
         buf[bufcnt++] = smallbuf[0];
 
         // Detect end of header
@@ -517,10 +528,6 @@ int try_receive_message(DAPTransport *transport, char *buf, int maxlen, bool rea
                 {
                     break;
                 }
-
-                // In header, if we cannot find the end of the header, return an error
-                if (bufcnt >= maxlen)
-                    return -1;
             }
         }
         else

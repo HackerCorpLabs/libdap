@@ -2,6 +2,28 @@
 
 This document outlines the major improvements and new features added to libDAP, transforming it from a basic DAP implementation into a professional-grade debugging toolkit.
 
+## 2026-04 — Address-space-aware memory access
+
+`readMemory` and `writeMemory` now accept an optional address-space prefix
+on `memoryReference` (`phys:`, `P:`, `virt:`, `V:`). The parsed value is
+exposed to integrators via a new `address_space` field on
+`ReadMemoryCommandContext` and `WriteMemoryCommandContext`. The C client
+gained `dap_client_read_memory_ex()` / `dap_client_write_memory_ex()`
+that take a `DAPDataBreakpointAddressSpace` argument and emit the prefix
+automatically. The GUI debugger (`tools/dap-debugger`) ships a new
+**Memory** panel with a Virtual/Physical radio toggle and hex view.
+
+This unblocks debugging of split I/D (0411) kernels on the ND-100, where
+data segments live above 64K of physical memory and cannot be reached
+through the current page table. The mock server has been extended with
+two distinct memory regions and an end-to-end test
+(`test_address_space.py`) that verifies prefixes round-trip correctly.
+
+The CPU memory hot path in nd100x is unchanged; the new physical
+debugger accessors (`Dbg_ReadPhysicalMemory` / `Dbg_WritePhysicalMemory`)
+are only invoked from the DAP command handler, so when no watchpoints
+are active there is zero added cost per memory access.
+
 ## 🎯 Major Achievements
 
 ### 1. **Advanced Threading Architecture** ✅

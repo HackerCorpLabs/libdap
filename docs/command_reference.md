@@ -213,6 +213,36 @@ dap# readMemory main 32 8  # Read 32 bytes at main+8
 ```
 **Output**: Industry-standard hex dump format with ASCII representation.
 
+##### Address-space prefix (libdap extension)
+The `memoryReference` argument may carry an optional address-space prefix
+so the same `readMemory` / `writeMemory` request can target either the
+virtual or the physical address space:
+
+| Prefix     | Meaning                          |
+|------------|----------------------------------|
+| *(none)*   | Virtual address (default)        |
+| `virt:`    | Virtual address                  |
+| `V:`       | Virtual address (short form)     |
+| `phys:`    | Physical address                 |
+| `P:`       | Physical address (short form)    |
+
+Examples:
+```bash
+dap# readMemory 0x10000        # virtual address 0x10000
+dap# readMemory phys:0x10000   # physical word index 0x10000 (above 64K)
+dap# readMemory P:0x40         # short form, physical
+```
+
+This is the convention required for debugging split I/D (0411) kernels
+where data segments live above 64K of physical memory and are not
+reachable through the current page table. The server response echoes the
+prefix in the `address` field so clients can round-trip the reference.
+
+The same prefix is accepted by `writeMemory`. Address spaces are also
+supported for data breakpoints via the existing `setDataBreakpoints`
+`address_space` field on the `DAPDataBreakpoint` struct (and the
+`P:`/`V:` prefix on `dataId` used by the nd100x adapter).
+
 #### `disassemble` (aliases: `da`)
 **Purpose**: Disassemble code at memory location.
 **Syntax**: `disassemble <memory_reference> [-o offset] [-i instruction_offset] [-c count] [-s]`

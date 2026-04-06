@@ -162,7 +162,11 @@ static StatusFlag status_flags[] = {
  * 
  * This is a simple memory model that provides mock data for memory read requests
  */
-static uint8_t mock_memory[0x10000]; // 64KB of mock memory
+static uint8_t mock_memory[0x10000]; // 64KB of mock virtual memory
+// Separate physical memory region used to verify address_space routing.
+// Filled with a distinct pattern (0xA0 ^ low byte) so tests can confirm
+// that "phys:" memoryReference prefixes actually reach the physical space.
+static uint8_t mock_phys_memory[0x10000];
 static bool mock_memory_initialized = false;
 
 /**
@@ -202,7 +206,15 @@ static void initialize_mock_memory() {
         0x00, 0x00, 0x00, 0x48, 0x8b, 0x45, 0xf0, 0x48  // mov -0x10(%rbp), %rax
     };
     memcpy(&mock_memory[0x4000], program, sizeof(program));
-    
+
+    // Physical memory: distinct pattern + recognizable signature so tests
+    // can detect the address-space routing.
+    for (int i = 0; i < 0x10000; i++) {
+        mock_phys_memory[i] = (uint8_t)(0xA0 ^ (i & 0xFF));
+    }
+    const char *phys_sig = "PHYSICAL";
+    memcpy(&mock_phys_memory[0x1000], phys_sig, strlen(phys_sig));
+
     mock_memory_initialized = true;
 }
 
@@ -233,44 +245,37 @@ static int cmd_read_memory(DAPServer *server) {
     uint32_t memory_reference = server->current_command.context.read_memory.memory_reference;
     uint32_t offset = server->current_command.context.read_memory.offset;
     size_t count = server->current_command.context.read_memory.count;
-    
-    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, count: %zu", 
-               memory_reference, (unsigned long long)offset, count);
-    
-    // Mock implementation simply returns some dummy data
-    uint32_t address = 0x1000 + (uint32_t)offset;  // Example address calculation
-    
+    DAPDataBreakpointAddressSpace aspace = server->current_command.context.read_memory.address_space;
+    bool is_phys = (aspace == DAP_DATA_BP_ADDR_PHYSICAL);
+
+    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, count: %zu, space: %s",
+               memory_reference, (unsigned long long)offset, count,
+               is_phys ? "physical" : "virtual");
+
+    // Use the actual memory reference (+offset) so the client can target
+    // arbitrary mock addresses. Wrap into the 64K window for the test region.
+    uint32_t address = (memory_reference + offset) & 0xFFFF;
+
     size_t bytes_to_read = count;
-    // For the demo, we'll limit the number of bytes to read
-    if (bytes_to_read > 64) {
-        bytes_to_read = 64;
+    if (bytes_to_read > 4096) bytes_to_read = 4096;
+    if ((size_t)address + bytes_to_read > 0x10000) {
+        bytes_to_read = 0x10000 - address;
     }
-    
-    // Check if address is out of range for our mock memory
-    if (address >= 0x8000) {
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
-        
-        // Create error response
-        cJSON *body = cJSON_CreateObject();
-        cJSON_AddStringToObject(body, "error", "Address out of range");
-        return -1;
-    }
-    
+
     char info_message[256];
-    snprintf(info_message, sizeof(info_message), 
-             "Reading %zu bytes from address 0x%08x (reference: 0x%08x, offset: 0x%llx)\n", 
-              bytes_to_read, address, memory_reference, (unsigned long long)offset);
+    snprintf(info_message, sizeof(info_message),
+             "Reading %zu bytes from %s address 0x%08x (ref: 0x%08x, off: 0x%llx)\n",
+              bytes_to_read, is_phys ? "physical" : "virtual",
+              address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
-    
-    // Generate mock memory data as raw bytes
+
     uint8_t *raw_data = (uint8_t *)malloc(bytes_to_read);
     if (!raw_data) {
         return -1;
     }
 
-    for (size_t i = 0; i < bytes_to_read; i++) {
-        raw_data[i] = (uint8_t)((address + i) % 256);
-    }
+    const uint8_t *src = is_phys ? mock_phys_memory : mock_memory;
+    memcpy(raw_data, src + address, bytes_to_read);
 
     // Encode as base64 per DAP spec
     char *b64_data = base64_encode(raw_data, bytes_to_read);
@@ -314,47 +319,60 @@ static int cmd_write_memory(DAPServer *server) {
     uint32_t offset = server->current_command.context.write_memory.offset;
     const char* data = server->current_command.context.write_memory.data;
     bool allow_partial = server->current_command.context.write_memory.allow_partial;
-    
-    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, allow_partial: %d", 
-               memory_reference, (unsigned long long)offset, allow_partial);
-    
+    DAPDataBreakpointAddressSpace aspace = server->current_command.context.write_memory.address_space;
+    bool is_phys = (aspace == DAP_DATA_BP_ADDR_PHYSICAL);
+
+    DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, allow_partial: %d, space: %s",
+               memory_reference, (unsigned long long)offset, allow_partial,
+               is_phys ? "physical" : "virtual");
+
     if (!data) {
         dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: No data provided\n");
         return -1;
     }
-    
-    // Decode base64 data (skipped in this mock implementation)
-    // In a real implementation, you would decode the base64 data
-    // For mock purposes, we'll just use the length of the string
-    size_t data_length = strlen(data) / 2;  // Each byte is represented by 2 hex chars
-    
-    // Mock implementation pretends to write to memory
-    uint32_t address = 0x1000 + (uint32_t)offset;  // Example address calculation
-    
-    // Check if address is out of range for our mock memory
-    if (address >= 0x8000) {
-        dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
-        return -1;
+
+    // Base64 decode (small inline decoder, mirrors libdap's encoder).
+    static const char b64tab[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t in_len = strlen(data);
+    uint8_t *decoded = (uint8_t *)malloc(in_len);
+    if (!decoded) return -1;
+    size_t out_len = 0;
+    for (size_t i = 0; i + 3 < in_len; i += 4) {
+        int v[4] = {0,0,0,0};
+        int valid = 0;
+        for (int j = 0; j < 4; j++) {
+            char c = data[i+j];
+            if (c == '=') { v[j] = 0; }
+            else { const char *p = strchr(b64tab, c); if (p) { v[j] = (int)(p-b64tab); valid++; } }
+        }
+        if (valid >= 2) decoded[out_len++] = (v[0] << 2) | (v[1] >> 4);
+        if (valid >= 3) decoded[out_len++] = ((v[1] & 0xF) << 4) | (v[2] >> 2);
+        if (valid >= 4) decoded[out_len++] = ((v[2] & 0x3) << 6) | v[3];
     }
-    
+
+    uint32_t address = (memory_reference + offset) & 0xFFFF;
+    if ((size_t)address + out_len > 0x10000) {
+        if (!allow_partial) {
+            free(decoded);
+            dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: Address out of range\n");
+            return -1;
+        }
+        out_len = 0x10000 - address;
+    }
+
+    uint8_t *dst = is_phys ? mock_phys_memory : mock_memory;
+    memcpy(dst + address, decoded, out_len);
+    free(decoded);
+
     char info_message[256];
-    snprintf(info_message, sizeof(info_message), 
-             "Writing to memory at address 0x%08x (reference: 0x%08x, offset: 0x%llx)\n", 
+    snprintf(info_message, sizeof(info_message),
+             "Wrote %zu bytes to %s 0x%08x (ref: 0x%08x, off: 0x%llx)\n",
+              out_len, is_phys ? "physical" : "virtual",
               address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
-    
-    // Pretend to write some data
-    snprintf(info_message, sizeof(info_message), "Wrote %zu bytes of data\n", data_length);
-    dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
-    
-    // Create the response body
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddNumberToObject(body, "bytesWritten", data_length);
-    
-    // Send the response
-    dap_server_send_response(server, DAP_CMD_WRITE_MEMORY, server->sequence++, 
-                            server->current_command.request_seq, true, body);
-    
+
+    server->current_command.context.write_memory.bytes_written = (uint16_t)out_len;
     return 0;
 }
 

@@ -17,6 +17,7 @@ UIMain::UIMain()
     panel_protocol_ = new PanelProtocol();
     panel_symbols_ = new PanelSymbols();
     panel_server_info_ = new PanelServerInfo();
+    panel_memory_ = new PanelMemory();
 }
 
 UIMain::~UIMain()
@@ -31,6 +32,7 @@ UIMain::~UIMain()
     delete panel_protocol_;
     delete panel_symbols_;
     delete panel_server_info_;
+    delete panel_memory_;
 }
 
 void UIMain::setup_docking()
@@ -72,6 +74,7 @@ void UIMain::setup_docking()
     ImGui::DockBuilderDockWindow("DAP Protocol Log", dock_bottom);
     ImGui::DockBuilderDockWindow("Symbols", dock_main);
     ImGui::DockBuilderDockWindow("Server Info", dock_right_top);
+    ImGui::DockBuilderDockWindow("Memory", dock_main);
 
     ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -118,6 +121,7 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     panel_protocol_->render(client);
     panel_symbols_->render(client);
     panel_server_info_->render(client);
+    panel_memory_->render(client);
 
     // Status bar
     render_status_bar(client);

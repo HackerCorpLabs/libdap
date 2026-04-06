@@ -179,8 +179,13 @@ public:
     uint32_t disasm_cache_end() const { return disasm_cache_end_; }
 
     // Memory
+    enum class AddressSpace { Virtual, Physical };
     std::string read_memory(uint32_t address, uint32_t offset, size_t count);
     bool write_memory(uint32_t address, uint32_t offset, const std::string& data);
+    // Variants that select an address space (encoded as "phys:" prefix on
+    // memoryReference per the libdap convention).
+    std::string read_memory(uint32_t address, uint32_t offset, size_t count, AddressSpace space);
+    bool write_memory(uint32_t address, uint32_t offset, const std::string& data_b64, AddressSpace space);
 
     // Threads
     void refresh_threads();
@@ -231,6 +236,9 @@ public:
 
     void log(ConsoleEntry::Category cat, const std::string& text);
     void log_protocol(ProtocolEntry::Direction dir, const std::string& json);
+
+    // Current source file from top stack frame
+    const std::string& current_source() const { return current_source_; }
 
     // Process info
     const std::string& process_name() const { return process_name_; }

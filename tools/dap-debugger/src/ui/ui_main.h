@@ -3,6 +3,8 @@
 
 #include "../debugger_client.h"
 #include "../app.h"
+#include <cstdint>
+#include <vector>
 
 class PanelConsole;
 class PanelStack;
@@ -14,6 +16,7 @@ class PanelThreads;
 class PanelProtocol;
 class PanelSymbols;
 class PanelServerInfo;
+class PanelMemory;
 
 class UIMain {
 public:
@@ -38,6 +41,7 @@ private:
     PanelProtocol* panel_protocol_;
     PanelSymbols* panel_symbols_;
     PanelServerInfo* panel_server_info_;
+    PanelMemory* panel_memory_;
 
     void handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config);
 
@@ -119,6 +123,19 @@ private:
 class PanelServerInfo {
 public:
     void render(DebuggerClient& client);
+};
+
+class PanelMemory {
+public:
+    void render(DebuggerClient& client);
+private:
+    char addr_buf_[32] = "0";
+    char write_hex_buf_[256] = {};
+    int  count_ = 64;
+    int  address_space_ = 0; // 0 = virtual, 1 = physical
+    int  last_space_ = 0;
+    uint32_t last_addr_ = 0;
+    std::vector<unsigned char> data_;
 };
 
 class PanelProtocol {

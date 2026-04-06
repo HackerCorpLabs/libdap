@@ -886,10 +886,17 @@ void DebuggerClient::disassemble_extend(uint32_t address, int count, bool resolv
 
 std::string DebuggerClient::read_memory(uint32_t address, uint32_t offset, size_t count)
 {
+    return read_memory(address, offset, count, AddressSpace::Virtual);
+}
+
+std::string DebuggerClient::read_memory(uint32_t address, uint32_t offset, size_t count, AddressSpace space)
+{
     if (!impl_->client) return "";
 
     DAPReadMemoryResult result = {};
-    int rc = dap_client_read_memory(impl_->client, address, offset, count, &result);
+    DAPDataBreakpointAddressSpace as = (space == AddressSpace::Physical)
+        ? DAP_DATA_BP_ADDR_PHYSICAL : DAP_DATA_BP_ADDR_VIRTUAL;
+    int rc = dap_client_read_memory_ex(impl_->client, address, offset, count, as, &result);
     if (rc != DAP_ERROR_NONE) {
         log(ConsoleEntry::Error, "Read memory failed: " + std::string(dap_error_message((DAPError)rc)));
         return "";
@@ -903,17 +910,24 @@ std::string DebuggerClient::read_memory(uint32_t address, uint32_t offset, size_
 
 bool DebuggerClient::write_memory(uint32_t address, uint32_t offset, const std::string& data)
 {
+    return write_memory(address, offset, data, AddressSpace::Virtual);
+}
+
+bool DebuggerClient::write_memory(uint32_t address, uint32_t offset, const std::string& data, AddressSpace space)
+{
     if (!impl_->client) return false;
 
     DAPWriteMemoryResult result = {};
-    int rc = dap_client_write_memory(impl_->client, address, offset, data.c_str(), false, &result);
+    DAPDataBreakpointAddressSpace as = (space == AddressSpace::Physical)
+        ? DAP_DATA_BP_ADDR_PHYSICAL : DAP_DATA_BP_ADDR_VIRTUAL;
+    int rc = dap_client_write_memory_ex(impl_->client, address, offset, data.c_str(), false, as, &result);
     if (rc != DAP_ERROR_NONE) {
         log(ConsoleEntry::Error, "Write memory failed: " + std::string(dap_error_message((DAPError)rc)));
         return false;
     }
 
-    log(ConsoleEntry::Info, "Wrote " + std::to_string(result.bytes_written) + " bytes at 0x" +
-        std::to_string(address));
+    log(ConsoleEntry::Info, "Wrote " + std::to_string(result.bytes_written) + " bytes at " +
+        (space == AddressSpace::Physical ? "phys:0x" : "0x") + std::to_string(address));
     return true;
 }
 

@@ -1628,10 +1628,20 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
+    // Parse optional address-space prefix on memoryReference.
+    // Accepted forms: "phys:0x1000", "P:0x1000", "virt:0x1000", "V:0x1000".
+    // Default (no prefix) is virtual.
+    const char *mref_str = memory_reference->valuestring;
+    server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    if (strncmp(mref_str, "phys:", 5) == 0) { mref_str += 5; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str, "P:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str, "virt:", 5) == 0) { mref_str += 5; }
+    else if (strncmp(mref_str, "V:", 2) == 0)    { mref_str += 2; }
+
     // Convert memory reference from string to uint32_t
     char *endptr = NULL;
-    server->current_command.context.read_memory.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
-    if (endptr == memory_reference->valuestring || *endptr != '\0')
+    server->current_command.context.read_memory.memory_reference = (uint32_t)strtoul(mref_str, &endptr, 0);
+    if (endptr == mref_str || *endptr != '\0')
     {
         set_response_error(response, "Invalid memory reference format");
         return -1;
@@ -1694,9 +1704,13 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Format address as a string (per DAP spec)
-    char address_str[32];
-    snprintf(address_str, sizeof(address_str), "%06o", address);
+    // Format address as a string (per DAP spec). Re-emit the address-space
+    // prefix so the client can round-trip the reference back to us.
+    char address_str[40];
+    if (server->current_command.context.read_memory.address_space == DAP_DATA_BP_ADDR_PHYSICAL)
+        snprintf(address_str, sizeof(address_str), "phys:0x%X", address);
+    else
+        snprintf(address_str, sizeof(address_str), "0x%X", address);
     cJSON_AddStringToObject(body, "address", address_str);
 
 
@@ -1736,10 +1750,20 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
+    // Parse optional address-space prefix on memoryReference.
+    // Accepted forms: "phys:0x1000", "P:0x1000", "virt:0x1000", "V:0x1000".
+    // Default (no prefix) is virtual.
+    const char *mref_str_w = memory_reference->valuestring;
+    server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    if (strncmp(mref_str_w, "phys:", 5) == 0) { mref_str_w += 5; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str_w, "P:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str_w, "virt:", 5) == 0) { mref_str_w += 5; }
+    else if (strncmp(mref_str_w, "V:", 2) == 0)    { mref_str_w += 2; }
+
     // Convert memory reference from string to uint32_t
     char *endptr = NULL;
-    server->current_command.context.write_memory.memory_reference = (uint32_t)strtoul(memory_reference->valuestring, &endptr, 0);
-    if (endptr == memory_reference->valuestring || *endptr != '\0')
+    server->current_command.context.write_memory.memory_reference = (uint32_t)strtoul(mref_str_w, &endptr, 0);
+    if (endptr == mref_str_w || *endptr != '\0')
     {
         set_response_error(response, "Invalid memory reference format");
         return -1;

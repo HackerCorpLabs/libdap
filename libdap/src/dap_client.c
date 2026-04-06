@@ -615,6 +615,12 @@ int dap_client_modules(DAPClient* client, int start_module, int module_count, DA
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
 int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count, DAPReadMemoryResult* result) {
+    return dap_client_read_memory_ex(client, memory_reference, offset, count,
+                                     DAP_DATA_BP_ADDR_VIRTUAL, result);
+}
+
+int dap_client_read_memory_ex(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count,
+                              DAPDataBreakpointAddressSpace address_space, DAPReadMemoryResult* result) {
     if (!client || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
@@ -624,9 +630,14 @@ int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_
         return DAP_ERROR_MEMORY;
     }
 
-    // Convert memory_reference to string (needed for DAP protocol)
-    char memory_ref_str[32];
-    snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    // Convert memory_reference to string (needed for DAP protocol).
+    // Encode address-space as a "phys:" prefix when requested - this is the
+    // libdap convention parsed by handle_read_memory in the server.
+    char memory_ref_str[40];
+    if (address_space == DAP_DATA_BP_ADDR_PHYSICAL)
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference);
+    else
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
     cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
     
     cJSON_AddNumberToObject(args, "offset", offset);
@@ -693,6 +704,12 @@ int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
 int dap_client_write_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result) {
+    return dap_client_write_memory_ex(client, memory_reference, offset, data, allow_partial,
+                                      DAP_DATA_BP_ADDR_VIRTUAL, result);
+}
+
+int dap_client_write_memory_ex(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data,
+                               bool allow_partial, DAPDataBreakpointAddressSpace address_space, DAPWriteMemoryResult* result) {
     if (!client || !data || !result) {
         return DAP_ERROR_INVALID_ARG;
     }
@@ -702,9 +719,12 @@ int dap_client_write_memory(DAPClient* client, uint32_t memory_reference, uint32
         return DAP_ERROR_MEMORY;
     }
 
-    // Convert memory_reference to string (needed for DAP protocol)
-    char memory_ref_str[32];
-    snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    // Convert memory_reference to string (needed for DAP protocol).
+    char memory_ref_str[40];
+    if (address_space == DAP_DATA_BP_ADDR_PHYSICAL)
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference);
+    else
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
     cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
     
     cJSON_AddNumberToObject(args, "offset", offset);

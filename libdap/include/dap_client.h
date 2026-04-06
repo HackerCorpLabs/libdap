@@ -329,6 +329,16 @@ int dap_client_modules(DAPClient* client, int start_module, int module_count, DA
 int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count, DAPReadMemoryResult* result);
 
 /**
+ * @brief Read memory from the debuggee, selecting an address space.
+ *
+ * Same as dap_client_read_memory but encodes a "phys:" prefix into the
+ * DAP memoryReference when address_space is DAP_DATA_BP_ADDR_PHYSICAL,
+ * so the server can route to the physical address space directly.
+ */
+int dap_client_read_memory_ex(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t count,
+                              DAPDataBreakpointAddressSpace address_space, DAPReadMemoryResult* result);
+
+/**
  * @brief Write memory to the debuggee
  * 
  * @param client Pointer to the client
@@ -340,6 +350,12 @@ int dap_client_read_memory(DAPClient* client, uint32_t memory_reference, uint32_
  * @return int DAP_ERROR_NONE on success, error code on failure
  */
 int dap_client_write_memory(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data, bool allow_partial, DAPWriteMemoryResult* result);
+
+/**
+ * @brief Write memory to the debuggee, selecting an address space.
+ */
+int dap_client_write_memory_ex(DAPClient* client, uint32_t memory_reference, uint32_t offset, const char* data,
+                               bool allow_partial, DAPDataBreakpointAddressSpace address_space, DAPWriteMemoryResult* result);
 
 /**
  * @brief Disassemble memory from the debuggee

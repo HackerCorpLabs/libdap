@@ -465,9 +465,10 @@ typedef struct {
     uint32_t memory_reference;      /**< Memory reference (required) */
     int offset;                     /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
     int count;                      /**< Number of bytes to read (required) */
+    DAPDataBreakpointAddressSpace address_space; /**< Virtual (default) or Physical, parsed from optional "phys:"/"P:"/"virt:"/"V:" prefix on memoryReference */
 
     // Results - populated by the command handler
-    char *base64_data;              /**< Base64 encoded data read from memory (optional) */    
+    char *base64_data;              /**< Base64 encoded data read from memory (optional) */
     size_t unreadable_bytes;        /**< Number of bytes that were not readable (optional) */
 } ReadMemoryCommandContext;
 
@@ -480,6 +481,7 @@ typedef struct {
     int offset;                    /**< Offset in bytes to add to the memory reference- Can be positive or negative (optional) */
     char* data;                     /**< Data to write in base64 encoding (required) */
     bool allow_partial;             /**< Whether to allow partial writes (optional) */
+    DAPDataBreakpointAddressSpace address_space; /**< Virtual (default) or Physical, parsed from optional "phys:"/"P:"/"virt:"/"V:" prefix on memoryReference */
 
     //# Resutls - populated by the command handler
     uint16_t bytes_written;          /**< Number of bytes written (optional) */

@@ -49,6 +49,35 @@ This project implements a Debug Adapter Protocol (DAP) server and client - to be
 
 ## 📦 Components
 
+> ### ⚠️ Two debuggers ship in this repo — don't confuse them
+>
+> | Binary | Kind | Source dir | Build dir | How to build & run |
+> |---|---|---|---|---|
+> | **`dap_debugger`** / **`dap_debugger_threaded`** | Terminal (readline TUI) | `src/dap_debugger/` | `build/bin/` | `make debug` (root) → `make run` |
+> | **`dap_gui_debugger`** | Visual GUI (ImGui + SDL3) | `tools/dap-debugger/src/` | `tools/dap-debugger/build/` | `cd tools/dap-debugger && make` → `make run` |
+>
+> The **root** `Makefile` (`make`, `make run`, `make runsrv`) only builds and
+> runs the **terminal** clients. It will **not** build the GUI.
+>
+> The **GUI** has its own Makefile under `tools/dap-debugger/`. You must
+> `cd` into that directory first. The GUI binary lives at
+> `tools/dap-debugger/build/dap_gui_debugger` and connects to a running
+> DAP server (nd100x or `dap_mock_server`) — start the server first.
+>
+> Quick reference:
+> ```bash
+> # Terminal TUI debugger (root)
+> cd ~/repos/libdap
+> make debug                    # builds dap_debugger and dap_debugger_threaded
+>
+> # Visual GUI debugger (subdir)
+> cd ~/repos/libdap/tools/dap-debugger
+> make                          # build dap_gui_debugger
+> make run                      # build + connect to localhost:5555 (nd100x default)
+> make run-mock                 # build + connect to mock server on 4711
+> make rebuild                  # clean + build
+> ```
+
 ### DAP Mock Server (Mock of a debugger backend. Use as example to integrate into your architecture)
 - `src/dap_mock_server/dap_mock_server.c`: Main server implementation
 - `src/dap_mock_server/dap_mock_server.h`: Main server implementation header file
@@ -204,11 +233,15 @@ make release
 
 # Run with memory checking
 make runsrv  # Start server with valgrind
-make run     # Start debugger with valgrind
+make run     # Start TERMINAL debugger with valgrind
 
 # Clean everything
 make clean
 ```
+
+> **Note:** these targets build the **terminal** debugger only. To build
+> the **visual GUI** (`dap_gui_debugger`), use the separate Makefile in
+> `tools/dap-debugger/` — see the "Two debuggers" callout above.
 
 ## 🔧 Quick Start
 

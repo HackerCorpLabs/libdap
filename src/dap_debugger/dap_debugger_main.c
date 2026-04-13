@@ -552,20 +552,29 @@ int main(int argc, char* argv[]) {
     char cmd[256];
     int cmd_len = 0;
     int cursor_pos = 0;
-    
+    bool prompt_dirty = true;  // Need to redraw the prompt
+
     fd_set read_fds;
     int max_fd;
     struct timeval timeout;
-    
+
+    memset(cmd, 0, sizeof(cmd));
+
     while (g_client->connected) {
+        // Show prompt if needed (after events, command execution, etc.)
+        if (prompt_dirty) {
+            print_command_with_cursor(cmd, cursor_pos);
+            prompt_dirty = false;
+        }
+
         FD_ZERO(&read_fds);
         FD_SET(STDIN_FILENO, &read_fds);
         FD_SET(g_client->fd, &read_fds);
         max_fd = (STDIN_FILENO > g_client->fd) ? STDIN_FILENO : g_client->fd;
-        
+
         timeout.tv_sec = 0;
         timeout.tv_usec = 100000; // 100ms timeout
-        
+
         int ready = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
         if (ready < 0) {
             if (errno == EINTR) {
@@ -575,11 +584,12 @@ int main(int argc, char* argv[]) {
             perror("select");
             break;
         }
-        
+
+        // Process DAP messages first (events, responses)
         if (FD_ISSET(g_client->fd, &read_fds)) {
             cJSON* message = NULL;
             int recv_result = dap_client_receive_message(g_client, &message);
-            
+
             if (recv_result == 0) {
                 if (message) {
                     // Process the message
@@ -594,43 +604,40 @@ int main(int argc, char* argv[]) {
                             const char* reason = cJSON_GetStringValue(
                                 cJSON_GetObjectItem(cJSON_GetObjectItem(message, "body"), "reason"));
                             if (reason && strcmp(reason, "entry") == 0) {
-                                printf("\n🎯 Debuggee ready! Stopped at entry point.\n");
-                                printf("(dap) ");
-                                fflush(stdout);
+                                printf("\r\033[KDebuggee ready! Stopped at entry point.\n");
                             }
                         }
 
                     } else if (type && strcmp(type, "response") == 0) {
                         // Process responses when they arrive
-                        // This is needed to handle responses to requests sent from within the event loop
                         const char* command_str = cJSON_GetStringValue(cJSON_GetObjectItem(message, "command"));
                         if (command_str) {
-                            // Log received response for debugging if needed
                             #ifdef DAP_DEBUG_PRINT_JSON
                             char* json_str = cJSON_Print(message);
                             if (json_str) {
-                                printf("\nReceived response for command: %s\n", command_str);
+                                printf("\r\033[KReceived response for command: %s\n", command_str);
                                 printf("Response details: %s\n", json_str);
                                 free(json_str);
                             }
                             #endif
-                            
-                            // Handle specific responses if needed
-                            // For now we just acknowledge receipt of the response and continue
+
                             if (g_client->debug_mode) {
-                                printf("\nReceived response for command: %s\n", command_str);
+                                printf("\r\033[KReceived response for command: %s\n", command_str);
                             }
                         }
                     }
-                    
+
                     cJSON_Delete(message);
+                    // Redraw prompt after any DAP message output
+                    prompt_dirty = true;
                 }
             } else if (recv_result == DAP_ERROR_TIMEOUT) {
                 // Handle timeout gracefully - don't break out of the main loop
-                printf("\nTimeout waiting for server response\n");
+                printf("\r\033[KTimeout waiting for server response\n");
+                prompt_dirty = true;
             } else {
                 // Any other non-zero result is an error
-                printf("\nError receiving message: %d (%s)\n", 
+                printf("\r\033[KError receiving message: %d (%s)\n",
                        recv_result, dap_error_message(recv_result));
                 if (g_client && !g_client->connected) {
                     printf("Connection closed by server\n");
@@ -638,159 +645,139 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
-        
-        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
 
-            cmd_len = 0;
-            cursor_pos = 0;
-            memset(cmd, 0, sizeof(cmd));
-            
-            while (1) {
-                char c;
-                if (read(STDIN_FILENO, &c, 1) != 1) {
-                    if (errno == EINTR) continue;
-                    break;
-                }
-                
-                // Handle arrow keys and special characters
-                if (c == '\x1b') {  // ESC sequence
-                    char seq[2];
-                    if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
-                    if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
-                    
-                    if (seq[0] == '[') {
-                        switch (seq[1]) {
-                            case 'A':  // Up arrow
-                                if (g_history) {
-                                    const char* prev_cmd = history_prev(g_history);
-                                    if (prev_cmd) {
-                                        strncpy(cmd, prev_cmd, sizeof(cmd) - 1);
-                                        cmd_len = strlen(cmd);
-                                        cursor_pos = cmd_len;
-                                        print_command_with_cursor(cmd, cursor_pos);
-                                    }
-                                }
-                                continue;
-                            case 'B':  // Down arrow
-                                if (g_history) {
-                                    const char* next_cmd = history_next(g_history);
-                                    if (next_cmd) {
-                                        strncpy(cmd, next_cmd, sizeof(cmd) - 1);
-                                        cmd_len = strlen(cmd);
-                                        cursor_pos = cmd_len;
-                                        print_command_with_cursor(cmd, cursor_pos);
-                                    }
-                                }
-                                continue;
-                            case 'C':  // Right arrow
-                                if (cursor_pos < cmd_len) {
-                                    cursor_pos++;
-                                    print_command_with_cursor(cmd, cursor_pos);
-                                }
-                                continue;
-                            case 'D':  // Left arrow
-                                if (cursor_pos > 0) {
-                                    cursor_pos--;
-                                    print_command_with_cursor(cmd, cursor_pos);
-                                }
-                                continue;
-                        }
-                    }
-                    continue;
-                }
-                
-                if (c == '\n') {
-                    printf("\n");
-                    break;
-                }
-                if (c == '\t') {
-                    handle_tab_completion(cmd, &cursor_pos);
-                    cmd_len = strlen(cmd);
-                    print_command_with_cursor(cmd, cursor_pos);
-                    continue;
-                }
-                if (c == 127 || c == 8) {  // Backspace
-                    if (cursor_pos > 0) {
-                        memmove(cmd + cursor_pos - 1, cmd + cursor_pos, 
-                                cmd_len - cursor_pos + 1);
-                        cursor_pos--;
-                        cmd_len--;
-                        print_command_with_cursor(cmd, cursor_pos);
-                    }
-                    continue;
-                }
-                
-                // Handle regular input
-                if (cmd_len < (int)(sizeof(cmd) - 1)) {
-                    memmove(cmd + cursor_pos + 1, cmd + cursor_pos, 
-                            cmd_len - cursor_pos + 1);
-                    cmd[cursor_pos] = c;
-                    cursor_pos++;
-                    cmd_len++;
-                    print_command_with_cursor(cmd, cursor_pos);
-                    
-                    // Check if the just-typed character is "?" at the end of a command
-                    if (c == '?' && cursor_pos > 1) {
-                        // Check if the position before ? is a space (indicating "command ?")
-                        if (cmd[cursor_pos-2] == ' ') {
-                            // Tokenize the command for processing
-                            char* cmd_copy = strdup(cmd);
-                            if (cmd_copy) {
-                                // Split into command name
-                                char* saveptr = NULL;
-                                char* command = strtok_r(cmd_copy, " ", &saveptr);
-                                
-                                // Show parameter help immediately
-                                if (command) {
-                                    printf("\n"); // Move to a new line
-                                    print_parameter_help(command);
-                                    
-                                    // Show prompt and command again
-                                    printf("\n(dap6) ");
-                                    print_command_with_cursor(cmd, cursor_pos);
-                                }
-                                free(cmd_copy);
-                            }
-                        }
-                    }
-                }
+        // Process one character at a time from stdin (non-blocking within select loop)
+        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+            char c;
+            if (read(STDIN_FILENO, &c, 1) != 1) {
+                if (errno == EINTR) continue;
+                break;
             }
-            
-            // Process command
-            if (cmd_len > 0) {
-                history_add(g_history, cmd);
-                
-                // Split command into command name and arguments
-                char* cmd_copy = strdup(cmd);
-                if (cmd_copy) {
-                    char* saveptr = NULL;
-                    char* command = strtok_r(cmd_copy, " ", &saveptr);
-                    char* args = strtok_r(NULL, "", &saveptr);  // Get rest of string as args
-                    
-                    // Check if this is a parameter help request (command ?)
-                    if (args && *args) {
-                        // Trim leading whitespace
-                        while (*args && isspace(*args)) args++;
-                        
-                        // Check if args is just "?"
-                        if (strcmp(args, "?") == 0) {
-                            int result = print_parameter_help(command);
-                            free(cmd_copy);  // Free the copy before continuing
-                            if (result == 1) {
-                                continue;  // Skip normal command processing
+
+            // Handle escape sequences (arrow keys etc.)
+            if (c == '\x1b') {
+                char seq[2];
+                if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+
+                if (seq[0] == '[') {
+                    switch (seq[1]) {
+                        case 'A':  // Up arrow
+                            if (g_history) {
+                                const char* prev_cmd = history_prev(g_history);
+                                if (prev_cmd) {
+                                    strncpy(cmd, prev_cmd, sizeof(cmd) - 1);
+                                    cmd_len = strlen(cmd);
+                                    cursor_pos = cmd_len;
+                                    print_command_with_cursor(cmd, cursor_pos);
+                                }
+                            }
+                            break;
+                        case 'B':  // Down arrow
+                            if (g_history) {
+                                const char* next_cmd = history_next(g_history);
+                                if (next_cmd) {
+                                    strncpy(cmd, next_cmd, sizeof(cmd) - 1);
+                                    cmd_len = strlen(cmd);
+                                    cursor_pos = cmd_len;
+                                    print_command_with_cursor(cmd, cursor_pos);
+                                }
+                            }
+                            break;
+                        case 'C':  // Right arrow
+                            if (cursor_pos < cmd_len) {
+                                cursor_pos++;
+                                print_command_with_cursor(cmd, cursor_pos);
+                            }
+                            break;
+                        case 'D':  // Left arrow
+                            if (cursor_pos > 0) {
+                                cursor_pos--;
+                                print_command_with_cursor(cmd, cursor_pos);
+                            }
+                            break;
+                    }
+                }
+            } else if (c == '\n') {
+                // Enter pressed - execute command
+                printf("\n");
+
+                if (cmd_len > 0) {
+                    history_add(g_history, cmd);
+
+                    char* cmd_copy = strdup(cmd);
+                    if (cmd_copy) {
+                        char* saveptr = NULL;
+                        char* command = strtok_r(cmd_copy, " ", &saveptr);
+                        char* args = strtok_r(NULL, "", &saveptr);
+
+                        // Check if this is a parameter help request (command ?)
+                        bool skip_cmd = false;
+                        if (args && *args) {
+                            while (*args && isspace(*args)) args++;
+                            if (strcmp(args, "?") == 0) {
+                                if (print_parameter_help(command) == 1) {
+                                    skip_cmd = true;
+                                }
                             }
                         }
+
+                        if (!skip_cmd) {
+                            int result = handle_shell_command(command, args);
+                            if (result == 1) {
+                                free(cmd_copy);
+                                goto exit_loop;
+                            }
+                        }
+                        free(cmd_copy);
                     }
-                    
-                    int result = handle_shell_command(command, args);
-                    free(cmd_copy);  // Free the copy after command processing
-                    if (result == 1) {
-                        break;  // Exit command loop
+                }
+
+                // Reset command buffer for next command
+                memset(cmd, 0, sizeof(cmd));
+                cmd_len = 0;
+                cursor_pos = 0;
+                prompt_dirty = true;
+            } else if (c == '\t') {
+                handle_tab_completion(cmd, &cursor_pos);
+                cmd_len = strlen(cmd);
+                print_command_with_cursor(cmd, cursor_pos);
+            } else if (c == 127 || c == 8) {  // Backspace
+                if (cursor_pos > 0) {
+                    memmove(cmd + cursor_pos - 1, cmd + cursor_pos,
+                            cmd_len - cursor_pos + 1);
+                    cursor_pos--;
+                    cmd_len--;
+                    print_command_with_cursor(cmd, cursor_pos);
+                }
+            } else if (cmd_len < (int)(sizeof(cmd) - 1)) {
+                // Regular character input
+                memmove(cmd + cursor_pos + 1, cmd + cursor_pos,
+                        cmd_len - cursor_pos + 1);
+                cmd[cursor_pos] = c;
+                cursor_pos++;
+                cmd_len++;
+                print_command_with_cursor(cmd, cursor_pos);
+
+                // Inline help: "command ?" shows parameter help
+                if (c == '?' && cursor_pos > 1 && cmd[cursor_pos-2] == ' ') {
+                    char* cmd_copy = strdup(cmd);
+                    if (cmd_copy) {
+                        char* saveptr = NULL;
+                        char* command = strtok_r(cmd_copy, " ", &saveptr);
+                        if (command) {
+                            printf("\n");
+                            print_parameter_help(command);
+                            printf("\n");
+                            print_command_with_cursor(cmd, cursor_pos);
+                        }
+                        free(cmd_copy);
                     }
                 }
             }
         }
     }
+exit_loop:
     
     // Cleanup
     if (g_history) {

@@ -17,6 +17,11 @@ void PanelBreakpoints::render(DebuggerClient& client)
         return;
     }
 
+    // Auto-populate source field from current stack frame if empty
+    if (source_buf_[0] == '\0' && !client.current_source().empty()) {
+        snprintf(source_buf_, sizeof(source_buf_), "%s", client.current_source().c_str());
+    }
+
     if (ImGui::BeginTabBar("##bp_tabs")) {
         // --- Source Breakpoints Tab ---
         if (ImGui::BeginTabItem("Source")) {

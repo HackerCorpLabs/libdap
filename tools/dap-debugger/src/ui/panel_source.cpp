@@ -100,12 +100,24 @@ void PanelSource::render(DebuggerClient& client)
                     ImGui::SetScrollY(scroll_target);
                 }
 
+                // Build set of lines with breakpoints for this source
+                const auto& bps = client.breakpoints();
+
                 ImGuiListClipper clipper;
                 clipper.Begin((int)source_lines_.size());
                 while (clipper.Step()) {
                     for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
                         int line_num = i + 1;
                         bool is_current = (line_num == current_line);
+
+                        // Check if this line has a breakpoint
+                        bool has_bp = false;
+                        for (const auto& bp : bps) {
+                            if (bp.line == line_num && bp.source_path == loaded_source_path_) {
+                                has_bp = true;
+                                break;
+                            }
+                        }
 
                         if (is_current) {
                             // Highlight current execution line
@@ -116,6 +128,28 @@ void PanelSource::render(DebuggerClient& client)
                                 IM_COL32(80, 80, 0, 128));
                         }
 
+                        // Breakpoint marker (red circle) or clickable gutter
+                        if (has_bp) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "*");
+                        } else {
+                            ImGui::TextColored(ImVec4(0.3f, 0.3f, 0.3f, 1.0f), " ");
+                        }
+                        // Click on the gutter to toggle breakpoint
+                        if (ImGui::IsItemClicked() && !loaded_source_path_.empty()) {
+                            if (has_bp) {
+                                // Find and remove the breakpoint
+                                for (const auto& bp : bps) {
+                                    if (bp.line == line_num && bp.source_path == loaded_source_path_) {
+                                        client.remove_source_breakpoint(bp.id);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                client.add_source_breakpoint(loaded_source_path_, line_num);
+                            }
+                        }
+
+                        ImGui::SameLine();
                         ImVec4 color = is_current ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f)
                                                   : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
                         ImVec4 num_color = is_current ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f)

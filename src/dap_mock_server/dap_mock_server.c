@@ -167,6 +167,10 @@ static uint8_t mock_memory[0x10000]; // 64KB of mock virtual memory
 // Filled with a distinct pattern (0xA0 ^ low byte) so tests can confirm
 // that "phys:" memoryReference prefixes actually reach the physical space.
 static uint8_t mock_phys_memory[0x10000];
+// I-space and D-space regions for split I/D testing.
+// Each has a distinct pattern so tests can verify ispace:/dspace: routing.
+static uint8_t mock_ispace_memory[0x10000];
+static uint8_t mock_dspace_memory[0x10000];
 static bool mock_memory_initialized = false;
 
 /**
@@ -215,6 +219,20 @@ static void initialize_mock_memory() {
     const char *phys_sig = "PHYSICAL";
     memcpy(&mock_phys_memory[0x1000], phys_sig, strlen(phys_sig));
 
+    // I-space memory: instruction page table view (0xB0 ^ low byte pattern)
+    for (int i = 0; i < 0x10000; i++) {
+        mock_ispace_memory[i] = (uint8_t)(0xB0 ^ (i & 0xFF));
+    }
+    const char *ispace_sig = "I-SPACE";
+    memcpy(&mock_ispace_memory[0x1000], ispace_sig, strlen(ispace_sig));
+
+    // D-space memory: data page table view (0xD0 ^ low byte pattern)
+    for (int i = 0; i < 0x10000; i++) {
+        mock_dspace_memory[i] = (uint8_t)(0xD0 ^ (i & 0xFF));
+    }
+    const char *dspace_sig = "D-SPACE";
+    memcpy(&mock_dspace_memory[0x1000], dspace_sig, strlen(dspace_sig));
+
     mock_memory_initialized = true;
 }
 
@@ -246,11 +264,14 @@ static int cmd_read_memory(DAPServer *server) {
     uint32_t offset = server->current_command.context.read_memory.offset;
     size_t count = server->current_command.context.read_memory.count;
     DAPDataBreakpointAddressSpace aspace = server->current_command.context.read_memory.address_space;
-    bool is_phys = (aspace == DAP_DATA_BP_ADDR_PHYSICAL);
+
+    const char *space_name = "virtual";
+    if (aspace == DAP_DATA_BP_ADDR_PHYSICAL) space_name = "physical";
+    else if (aspace == DAP_DATA_BP_ADDR_ISPACE) space_name = "ispace";
+    else if (aspace == DAP_DATA_BP_ADDR_DSPACE) space_name = "dspace";
 
     DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, count: %zu, space: %s",
-               memory_reference, (unsigned long long)offset, count,
-               is_phys ? "physical" : "virtual");
+               memory_reference, (unsigned long long)offset, count, space_name);
 
     // Use the actual memory reference (+offset) so the client can target
     // arbitrary mock addresses. Wrap into the 64K window for the test region.
@@ -265,7 +286,7 @@ static int cmd_read_memory(DAPServer *server) {
     char info_message[256];
     snprintf(info_message, sizeof(info_message),
              "Reading %zu bytes from %s address 0x%08x (ref: 0x%08x, off: 0x%llx)\n",
-              bytes_to_read, is_phys ? "physical" : "virtual",
+              bytes_to_read, space_name,
               address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
 
@@ -274,7 +295,10 @@ static int cmd_read_memory(DAPServer *server) {
         return -1;
     }
 
-    const uint8_t *src = is_phys ? mock_phys_memory : mock_memory;
+    const uint8_t *src = mock_memory;
+    if (aspace == DAP_DATA_BP_ADDR_PHYSICAL) src = mock_phys_memory;
+    else if (aspace == DAP_DATA_BP_ADDR_ISPACE) src = mock_ispace_memory;
+    else if (aspace == DAP_DATA_BP_ADDR_DSPACE) src = mock_dspace_memory;
     memcpy(raw_data, src + address, bytes_to_read);
 
     // Encode as base64 per DAP spec
@@ -320,11 +344,14 @@ static int cmd_write_memory(DAPServer *server) {
     const char* data = server->current_command.context.write_memory.data;
     bool allow_partial = server->current_command.context.write_memory.allow_partial;
     DAPDataBreakpointAddressSpace aspace = server->current_command.context.write_memory.address_space;
-    bool is_phys = (aspace == DAP_DATA_BP_ADDR_PHYSICAL);
+
+    const char *space_name = "virtual";
+    if (aspace == DAP_DATA_BP_ADDR_PHYSICAL) space_name = "physical";
+    else if (aspace == DAP_DATA_BP_ADDR_ISPACE) space_name = "ispace";
+    else if (aspace == DAP_DATA_BP_ADDR_DSPACE) space_name = "dspace";
 
     DBG_MOCK_LOG("Memory reference: 0x%08x, offset: %llu, allow_partial: %d, space: %s",
-               memory_reference, (unsigned long long)offset, allow_partial,
-               is_phys ? "physical" : "virtual");
+               memory_reference, (unsigned long long)offset, allow_partial, space_name);
 
     if (!data) {
         dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, "Error: No data provided\n");
@@ -361,14 +388,17 @@ static int cmd_write_memory(DAPServer *server) {
         out_len = 0x10000 - address;
     }
 
-    uint8_t *dst = is_phys ? mock_phys_memory : mock_memory;
+    uint8_t *dst = mock_memory;
+    if (aspace == DAP_DATA_BP_ADDR_PHYSICAL) dst = mock_phys_memory;
+    else if (aspace == DAP_DATA_BP_ADDR_ISPACE) dst = mock_ispace_memory;
+    else if (aspace == DAP_DATA_BP_ADDR_DSPACE) dst = mock_dspace_memory;
     memcpy(dst + address, decoded, out_len);
     free(decoded);
 
     char info_message[256];
     snprintf(info_message, sizeof(info_message),
              "Wrote %zu bytes to %s 0x%08x (ref: 0x%08x, off: 0x%llx)\n",
-              out_len, is_phys ? "physical" : "virtual",
+              out_len, space_name,
               address, memory_reference, (unsigned long long)offset);
     dap_server_send_output_category(server, DAP_OUTPUT_CONSOLE, info_message);
 

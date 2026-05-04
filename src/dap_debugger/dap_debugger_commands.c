@@ -982,12 +982,16 @@ int handle_read_memory_command(DAPClient* client, const char* args) {
     if (!client) return 0;
 
     if (!args || !*args) {
-        printf("Usage: x <address> [count]\n");
+        printf("Usage: x [prefix:]<address> [count]\n");
+        printf("  prefix:  phys: P: ispace: I: dspace: D: (optional)\n");
         printf("  address: Octal (0177), hex (0xFF), or decimal address\n");
         printf("  count:   Number of words to read (default: 16)\n");
         printf("Examples:\n");
-        printf("  x 0100         - Read 16 words at octal 0100\n");
-        printf("  x 0x40 32      - Read 32 words at hex 0x40\n");
+        printf("  x 0100              - Read 16 words at virtual octal 0100\n");
+        printf("  x 0x40 32           - Read 32 words at hex 0x40\n");
+        printf("  x phys:0x10000 8    - Read 8 words from physical memory\n");
+        printf("  x ispace:0xBA60 10  - Read 10 words from I-space\n");
+        printf("  x dspace:0xBA60 10  - Read 10 words from D-space\n");
         return 0;
     }
 
@@ -997,13 +1001,25 @@ int handle_read_memory_command(DAPClient* client, const char* args) {
     char* addr_str = strtok(args_copy, " ");
     char* count_str = strtok(NULL, " ");
 
-    uint32_t address = (uint32_t)strtoul(addr_str, NULL, 0);
+    // Parse address-space prefix
+    DAPDataBreakpointAddressSpace addr_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    const char *num_str = addr_str;
+    if (strncmp(addr_str, "phys:", 5) == 0) { num_str += 5; addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(addr_str, "P:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(addr_str, "ispace:", 7) == 0) { num_str += 7; addr_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(addr_str, "I:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(addr_str, "dspace:", 7) == 0) { num_str += 7; addr_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(addr_str, "D:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(addr_str, "virt:", 5) == 0) { num_str += 5; }
+    else if (strncmp(addr_str, "V:", 2) == 0) { num_str += 2; }
+
+    uint32_t address = (uint32_t)strtoul(num_str, NULL, 0);
     int count = count_str ? atoi(count_str) : 16;
     if (count <= 0) count = 16;
     if (count > 512) count = 512;
 
     DAPReadMemoryResult result = {0};
-    int error = dap_client_read_memory(client, address, 0, count, &result);
+    int error = dap_client_read_memory_ex(client, address, 0, count, addr_space, &result);
 
     if (error != DAP_ERROR_NONE) {
         printf("Error reading memory at 0%06o: %d\n", address, error);
@@ -1205,13 +1221,15 @@ int handle_watch_command(DAPClient* client, const char* args) {
     if (!client) return 0;
 
     if (!args || !*args) {
-        printf("Usage: watch [phys] <address> [read|write|readwrite]\n");
-        printf("  watch 01000            - Watch virtual address 01000 for writes\n");
-        printf("  watch 01000 read       - Watch virtual address 01000 for reads\n");
-        printf("  watch 01000 readwrite  - Watch virtual address 01000 for read/write\n");
-        printf("  watch 0x200            - Hex address (virtual)\n");
-        printf("  watch phys 01000       - Watch physical address 01000 for writes\n");
-        printf("  watch phys 0x200 read  - Watch physical hex address for reads\n");
+        printf("Usage: watch [space] <address> [read|write|readwrite]\n");
+        printf("  watch 01000              - Watch virtual address 01000 for writes\n");
+        printf("  watch 01000 read         - Watch virtual address 01000 for reads\n");
+        printf("  watch 01000 readwrite    - Watch virtual address 01000 for read/write\n");
+        printf("  watch 0x200              - Hex address (virtual)\n");
+        printf("  watch phys 01000         - Watch physical address 01000 for writes\n");
+        printf("  watch phys 0x200 read    - Watch physical hex address for reads\n");
+        printf("  watch ispace 0xBA60      - Watch I-space address (instruction PT)\n");
+        printf("  watch dspace 0xBA60      - Watch D-space address (data APT)\n");
         return 0;
     }
 
@@ -1221,11 +1239,17 @@ int handle_watch_command(DAPClient* client, const char* args) {
     char* saveptr;
     char* first_token = strtok_r(args_copy, " ", &saveptr);
 
-    // Check for "phys" prefix
+    // Check for address-space prefix
     DAPDataBreakpointAddressSpace addr_space = DAP_DATA_BP_ADDR_VIRTUAL;
     char* addr_str = first_token;
     if (first_token && (strcmp(first_token, "phys") == 0 || strcmp(first_token, "physical") == 0)) {
         addr_space = DAP_DATA_BP_ADDR_PHYSICAL;
+        addr_str = strtok_r(NULL, " ", &saveptr);
+    } else if (first_token && (strcmp(first_token, "ispace") == 0 || strcmp(first_token, "i") == 0)) {
+        addr_space = DAP_DATA_BP_ADDR_ISPACE;
+        addr_str = strtok_r(NULL, " ", &saveptr);
+    } else if (first_token && (strcmp(first_token, "dspace") == 0 || strcmp(first_token, "d") == 0)) {
+        addr_space = DAP_DATA_BP_ADDR_DSPACE;
         addr_str = strtok_r(NULL, " ", &saveptr);
     }
 
@@ -1251,8 +1275,11 @@ int handle_watch_command(DAPClient* client, const char* args) {
 
     // Format data_id with address space prefix (V: or P:) and octal address
     char data_id[32];
-    snprintf(data_id, sizeof(data_id), "%c:%06o",
-             addr_space == DAP_DATA_BP_ADDR_PHYSICAL ? 'P' : 'V', address);
+    char space_char = 'V';
+    if (addr_space == DAP_DATA_BP_ADDR_PHYSICAL) space_char = 'P';
+    else if (addr_space == DAP_DATA_BP_ADDR_ISPACE) space_char = 'I';
+    else if (addr_space == DAP_DATA_BP_ADDR_DSPACE) space_char = 'D';
+    snprintf(data_id, sizeof(data_id), "%c:%06o", space_char, address);
 
     // Build the request including all existing data breakpoints plus this new one
     int existing_count = 0;
@@ -1386,7 +1413,10 @@ int handle_info_command(DAPClient* client, const char* args) {
                 case DAP_DATA_BP_ACCESS_WRITE:     type_str = "write"; break;
                 case DAP_DATA_BP_ACCESS_READWRITE: type_str = "readwrite"; break;
             }
-            const char* space_str = wps[i].address_space == DAP_DATA_BP_ADDR_PHYSICAL ? "phys" : "virt";
+            const char* space_str = "virt";
+            if (wps[i].address_space == DAP_DATA_BP_ADDR_PHYSICAL) space_str = "phys";
+            else if (wps[i].address_space == DAP_DATA_BP_ADDR_ISPACE) space_str = "isp";
+            else if (wps[i].address_space == DAP_DATA_BP_ADDR_DSPACE) space_str = "dsp";
             printf("%-3d  %-8s  %-5s  %06o    %-9s  ",
                    wps[i].id ? wps[i].id : i + 1,
                    wps[i].verified ? "yes" : "no",

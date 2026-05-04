@@ -218,25 +218,43 @@ The `memoryReference` argument may carry an optional address-space prefix
 so the same `readMemory` / `writeMemory` request can target either the
 virtual or the physical address space:
 
-| Prefix     | Meaning                          |
-|------------|----------------------------------|
-| *(none)*   | Virtual address (default)        |
-| `virt:`    | Virtual address                  |
-| `V:`       | Virtual address (short form)     |
-| `phys:`    | Physical address                 |
-| `P:`       | Physical address (short form)    |
+| Prefix     | Meaning                                              |
+|------------|------------------------------------------------------|
+| *(none)*   | Virtual address (default)                            |
+| `virt:`    | Virtual address                                      |
+| `V:`       | Virtual address (short form)                         |
+| `phys:`    | Physical address                                     |
+| `P:`       | Physical address (short form)                        |
+| `ispace:`  | I-space (instruction page table, PT field of PCR)    |
+| `I:`       | I-space (short form)                                 |
+| `dspace:`  | D-space (data page table, APT field of PCR)          |
+| `D:`       | D-space (short form)                                 |
 
 Examples:
 ```bash
-dap# readMemory 0x10000        # virtual address 0x10000
-dap# readMemory phys:0x10000   # physical word index 0x10000 (above 64K)
-dap# readMemory P:0x40         # short form, physical
+dap# readMemory 0x10000           # virtual address 0x10000
+dap# readMemory phys:0x10000      # physical word index 0x10000 (above 64K)
+dap# readMemory P:0x40            # short form, physical
+dap# readMemory ispace:0xBA60     # I-space: read via instruction page table
+dap# readMemory dspace:0xBA60     # D-space: read via data page table (APT)
+dap# readMemory I:0x1000          # short form, I-space
 ```
 
 This is the convention required for debugging split I/D (0411) kernels
 where data segments live above 64K of physical memory and are not
 reachable through the current page table. The server response echoes the
 prefix in the `address` field so clients can round-trip the reference.
+
+**I-space and D-space prefixes** are essential when the kernel runs with
+PTM=1 (split I/D mode). In this mode, the same virtual address maps to
+different physical memory depending on whether the CPU is fetching an
+instruction (I-space, via the PT field of the PCR) or accessing data
+(D-space, via the APT field of the PCR). Without explicit space
+selection, the debugger uses the default virtual read path which may
+not match the desired address space.
+
+The `disassemble` command always reads via I-space internally, since
+instructions are never in D-space.
 
 The same prefix is accepted by `writeMemory`. Address spaces are also
 supported for data breakpoints via the existing `setDataBreakpoints`

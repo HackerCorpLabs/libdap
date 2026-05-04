@@ -2,6 +2,30 @@
 
 This document outlines the major improvements and new features added to libDAP, transforming it from a basic DAP implementation into a professional-grade debugging toolkit.
 
+## 2026-05 — I-space / D-space address space support
+
+When the kernel runs with split I/D (PTM=1), the same virtual address
+maps to different physical memory for instruction fetch (I-space, via
+the PT field of the PCR) vs data access (D-space, via the APT field).
+The DAP disassembler previously read through the runtime MMS path which
+could resolve to D-space, causing overlay code disassembly to show
+garbage instead of actual instructions.
+
+**Disassembler fix:** `cmd_disassemble` and all instruction-scanning
+helpers now use `Dbg_ReadVirtualMemoryISpace()` which explicitly selects
+the instruction page table from the PCR. No traps are generated and no
+PGU/WIP bits are modified -- safe to call from debugger handlers without
+disturbing CPU state.
+
+**New address-space prefixes:** `readMemory` and `writeMemory` now accept
+`ispace:` / `I:` (instruction page table) and `dspace:` / `D:` (data
+page table) prefixes on `memoryReference`, alongside the existing
+`phys:` / `P:` and `virt:` / `V:` prefixes.
+
+The `DAPDataBreakpointAddressSpace` enum gained `DAP_DATA_BP_ADDR_ISPACE`
+and `DAP_DATA_BP_ADDR_DSPACE` values. The C client, C++ debugger client,
+ImGui Memory panel, and MCP tool descriptions have been updated.
+
 ## 2026-04 — Address-space-aware memory access
 
 `readMemory` and `writeMemory` now accept an optional address-space prefix
@@ -11,7 +35,8 @@ exposed to integrators via a new `address_space` field on
 gained `dap_client_read_memory_ex()` / `dap_client_write_memory_ex()`
 that take a `DAPDataBreakpointAddressSpace` argument and emit the prefix
 automatically. The GUI debugger (`tools/dap-debugger`) ships a new
-**Memory** panel with a Virtual/Physical radio toggle and hex view.
+**Memory** panel with a Virtual/Physical/I-space/D-space radio toggle
+and hex view.
 
 This unblocks debugging of split I/D (0411) kernels on the ND-100, where
 data segments live above 64K of physical memory and cannot be reached
@@ -19,10 +44,11 @@ through the current page table. The mock server has been extended with
 two distinct memory regions and an end-to-end test
 (`test_address_space.py`) that verifies prefixes round-trip correctly.
 
-The CPU memory hot path in nd100x is unchanged; the new physical
-debugger accessors (`Dbg_ReadPhysicalMemory` / `Dbg_WritePhysicalMemory`)
-are only invoked from the DAP command handler, so when no watchpoints
-are active there is zero added cost per memory access.
+The CPU memory hot path in nd100x is unchanged; the new debugger
+accessors (`Dbg_ReadPhysicalMemory`, `Dbg_ReadVirtualMemoryISpace`,
+`Dbg_ReadVirtualMemoryDSpace`, etc.) are only invoked from the DAP
+command handler, so when no watchpoints are active there is zero added
+cost per memory access.
 
 ## 🎯 Major Achievements
 

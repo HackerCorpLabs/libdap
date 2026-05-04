@@ -196,12 +196,31 @@ Common stop reasons:
    }
    ```
 
+### Address-Space Prefixes on memoryReference
+
+The `memoryReference` string in `readMemory` and `writeMemory` accepts
+an optional prefix to select the address space:
+
+| Prefix    | Meaning                                           |
+|-----------|---------------------------------------------------|
+| *(none)*  | Virtual address (default)                         |
+| `phys:`   | Physical address (bypass MMU)                     |
+| `ispace:` | I-space (instruction page table, PT field of PCR) |
+| `dspace:` | D-space (data page table, APT field of PCR)       |
+
+Short forms: `P:` (physical), `V:` (virtual), `I:` (I-space), `D:` (D-space).
+
+Example: `"memoryReference": "ispace:0xBA60"` reads address 0xBA60 via the
+instruction page table, which is critical for inspecting overlay code when
+the kernel uses split I/D (PTM=1).
+
 ### Memory Access Best Practices
 1. Always verify memory permissions before access
 2. Use appropriate alignment for memory operations
 3. Handle partial reads/writes carefully
 4. Consider endianness when interpreting data
 5. Use memory breakpoints for monitoring memory access
+6. Use `ispace:` / `dspace:` prefixes when debugging split I/D kernels
 
 ## Register Access
 
@@ -1590,6 +1609,44 @@ graph TD
    - Bypass MMU translation
    - Fixed location in memory
    - Useful for DMA debugging
+
+### I-space and D-space (Split I/D Kernels)
+
+When the target runs with split I/D mode (PTM=1 in the ND-100 STS
+register), the same virtual address resolves to different physical
+memory depending on whether the access is an instruction fetch or a
+data read:
+
+- **I-space** (instruction space): Uses the PT field (bits 14:11) of the
+  PCR. This is the page table used for instruction fetch. Overlay code
+  lives here.
+- **D-space** (data space): Uses the APT field (bits 10:7) of the PCR.
+  This is the page table used for data access when PTM=1. Kernel
+  data/BSS lives here.
+
+The `readMemory` and `writeMemory` commands accept `ispace:` / `I:` and
+`dspace:` / `D:` prefixes to explicitly select the address space:
+
+```json
+{
+  "command": "readMemory",
+  "arguments": {
+    "memoryReference": "ispace:0xBA60",
+    "count": 20
+  }
+}
+```
+
+The `disassemble` command always reads via I-space internally, since
+instructions are never in D-space. This was fixed to prevent overlay
+code disassembly from showing D-space garbage when PTM=1.
+
+**When to use each prefix:**
+- `ispace:` -- Reading code in overlay regions (VPN 44+) when PTM=1
+- `dspace:` -- Reading kernel data/BSS at addresses that overlap with
+  overlay text regions
+- `phys:` -- Bypassing the MMU entirely (e.g., physical memory above 64K)
+- *(no prefix)* -- Default virtual read via current page table state
 
 ## Data Loading and Path Handling
 

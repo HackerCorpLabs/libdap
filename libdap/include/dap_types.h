@@ -450,7 +450,9 @@ typedef enum {
  */
 typedef enum {
     DAP_DATA_BP_ADDR_VIRTUAL,            ///< Virtual address (default)
-    DAP_DATA_BP_ADDR_PHYSICAL            ///< Physical address
+    DAP_DATA_BP_ADDR_PHYSICAL,           ///< Physical address
+    DAP_DATA_BP_ADDR_ISPACE,             ///< I-space (instruction, PT field of PCR)
+    DAP_DATA_BP_ADDR_DSPACE              ///< D-space (data, APT field of PCR)
 } DAPDataBreakpointAddressSpace;
 
 /**

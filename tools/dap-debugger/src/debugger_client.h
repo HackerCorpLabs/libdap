@@ -179,7 +179,7 @@ public:
     uint32_t disasm_cache_end() const { return disasm_cache_end_; }
 
     // Memory
-    enum class AddressSpace { Virtual, Physical };
+    enum class AddressSpace { Virtual, Physical, ISpace, DSpace };
     std::string read_memory(uint32_t address, uint32_t offset, size_t count);
     bool write_memory(uint32_t address, uint32_t offset, const std::string& data);
     // Variants that select an address space (encoded as "phys:" prefix on

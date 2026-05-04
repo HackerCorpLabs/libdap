@@ -65,7 +65,9 @@ void PanelMemory::render(DebuggerClient& client)
     ImGui::Text("Address space:");
     ImGui::SameLine();
     ImGui::RadioButton("Virtual", &address_space_, 0); ImGui::SameLine();
-    ImGui::RadioButton("Physical", &address_space_, 1);
+    ImGui::RadioButton("Physical", &address_space_, 1); ImGui::SameLine();
+    ImGui::RadioButton("I-space", &address_space_, 2); ImGui::SameLine();
+    ImGui::RadioButton("D-space", &address_space_, 3);
 
     ImGui::PushItemWidth(140);
     ImGui::InputText("Address (hex)", addr_buf_, sizeof(addr_buf_),
@@ -78,9 +80,10 @@ void PanelMemory::render(DebuggerClient& client)
 
     if (ImGui::Button("Read")) {
         uint32_t addr = (uint32_t)strtoul(addr_buf_, nullptr, 16);
-        DebuggerClient::AddressSpace as = (address_space_ == 1)
-            ? DebuggerClient::AddressSpace::Physical
-            : DebuggerClient::AddressSpace::Virtual;
+        DebuggerClient::AddressSpace as = DebuggerClient::AddressSpace::Virtual;
+        if (address_space_ == 1) as = DebuggerClient::AddressSpace::Physical;
+        else if (address_space_ == 2) as = DebuggerClient::AddressSpace::ISpace;
+        else if (address_space_ == 3) as = DebuggerClient::AddressSpace::DSpace;
         std::string b64 = client.read_memory(addr, 0, (size_t)count_, as);
         if (!b64.empty()) {
             unsigned char raw[4096];

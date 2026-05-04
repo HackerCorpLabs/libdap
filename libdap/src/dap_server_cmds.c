@@ -1635,6 +1635,10 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
     if (strncmp(mref_str, "phys:", 5) == 0) { mref_str += 5; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
     else if (strncmp(mref_str, "P:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str, "ispace:", 7) == 0) { mref_str += 7; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(mref_str, "I:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(mref_str, "dspace:", 7) == 0) { mref_str += 7; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(mref_str, "D:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
     else if (strncmp(mref_str, "virt:", 5) == 0) { mref_str += 5; }
     else if (strncmp(mref_str, "V:", 2) == 0)    { mref_str += 2; }
 
@@ -1707,10 +1711,16 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     // Format address as a string (per DAP spec). Re-emit the address-space
     // prefix so the client can round-trip the reference back to us.
     char address_str[40];
-    if (server->current_command.context.read_memory.address_space == DAP_DATA_BP_ADDR_PHYSICAL)
-        snprintf(address_str, sizeof(address_str), "phys:0x%X", address);
-    else
-        snprintf(address_str, sizeof(address_str), "0x%X", address);
+    switch (server->current_command.context.read_memory.address_space) {
+    case DAP_DATA_BP_ADDR_PHYSICAL:
+        snprintf(address_str, sizeof(address_str), "phys:0x%X", address); break;
+    case DAP_DATA_BP_ADDR_ISPACE:
+        snprintf(address_str, sizeof(address_str), "ispace:0x%X", address); break;
+    case DAP_DATA_BP_ADDR_DSPACE:
+        snprintf(address_str, sizeof(address_str), "dspace:0x%X", address); break;
+    default:
+        snprintf(address_str, sizeof(address_str), "0x%X", address); break;
+    }
     cJSON_AddStringToObject(body, "address", address_str);
 
 
@@ -1757,6 +1767,10 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
     server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
     if (strncmp(mref_str_w, "phys:", 5) == 0) { mref_str_w += 5; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
     else if (strncmp(mref_str_w, "P:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(mref_str_w, "ispace:", 7) == 0) { mref_str_w += 7; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(mref_str_w, "I:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(mref_str_w, "dspace:", 7) == 0) { mref_str_w += 7; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(mref_str_w, "D:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
     else if (strncmp(mref_str_w, "virt:", 5) == 0) { mref_str_w += 5; }
     else if (strncmp(mref_str_w, "V:", 2) == 0)    { mref_str_w += 2; }
 

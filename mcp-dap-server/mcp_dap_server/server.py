@@ -232,11 +232,13 @@ async def list_tools() -> list[Tool]:
         # Memory & Disassembly
         Tool(
             name="debug_read_memory",
-            description="Read memory from the debuggee. Returns hex dump with ASCII representation.",
+            description="Read memory from the debuggee. Returns hex dump with ASCII representation. "
+                        "Prefix address with phys: for physical, ispace: for I-space (instruction PT), "
+                        "dspace: for D-space (data APT). Default is virtual.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000')"},
+                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000'). Prefix with phys:, ispace:, or dspace: for address space selection."},
                     "count": {"type": "integer", "default": 256, "description": "Number of bytes to read"},
                 },
                 "required": ["address"],
@@ -244,11 +246,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="debug_write_memory",
-            description="Write memory to the debuggee.",
+            description="Write memory to the debuggee. "
+                        "Prefix address with phys: for physical, ispace: for I-space, dspace: for D-space.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000')"},
+                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000'). Prefix with phys:, ispace:, or dspace: for address space selection."},
                     "data": {"type": "string", "description": "Hex string of bytes to write (e.g., '48454C4C4F')"},
                 },
                 "required": ["address", "data"],

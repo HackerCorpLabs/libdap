@@ -894,8 +894,10 @@ std::string DebuggerClient::read_memory(uint32_t address, uint32_t offset, size_
     if (!impl_->client) return "";
 
     DAPReadMemoryResult result = {};
-    DAPDataBreakpointAddressSpace as = (space == AddressSpace::Physical)
-        ? DAP_DATA_BP_ADDR_PHYSICAL : DAP_DATA_BP_ADDR_VIRTUAL;
+    DAPDataBreakpointAddressSpace as = DAP_DATA_BP_ADDR_VIRTUAL;
+    if (space == AddressSpace::Physical) as = DAP_DATA_BP_ADDR_PHYSICAL;
+    else if (space == AddressSpace::ISpace) as = DAP_DATA_BP_ADDR_ISPACE;
+    else if (space == AddressSpace::DSpace) as = DAP_DATA_BP_ADDR_DSPACE;
     int rc = dap_client_read_memory_ex(impl_->client, address, offset, count, as, &result);
     if (rc != DAP_ERROR_NONE) {
         log(ConsoleEntry::Error, "Read memory failed: " + std::string(dap_error_message((DAPError)rc)));
@@ -918,8 +920,10 @@ bool DebuggerClient::write_memory(uint32_t address, uint32_t offset, const std::
     if (!impl_->client) return false;
 
     DAPWriteMemoryResult result = {};
-    DAPDataBreakpointAddressSpace as = (space == AddressSpace::Physical)
-        ? DAP_DATA_BP_ADDR_PHYSICAL : DAP_DATA_BP_ADDR_VIRTUAL;
+    DAPDataBreakpointAddressSpace as = DAP_DATA_BP_ADDR_VIRTUAL;
+    if (space == AddressSpace::Physical) as = DAP_DATA_BP_ADDR_PHYSICAL;
+    else if (space == AddressSpace::ISpace) as = DAP_DATA_BP_ADDR_ISPACE;
+    else if (space == AddressSpace::DSpace) as = DAP_DATA_BP_ADDR_DSPACE;
     int rc = dap_client_write_memory_ex(impl_->client, address, offset, data.c_str(), false, as, &result);
     if (rc != DAP_ERROR_NONE) {
         log(ConsoleEntry::Error, "Write memory failed: " + std::string(dap_error_message((DAPError)rc)));

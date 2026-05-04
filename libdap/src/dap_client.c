@@ -634,12 +634,18 @@ int dap_client_read_memory_ex(DAPClient* client, uint32_t memory_reference, uint
     // Encode address-space as a "phys:" prefix when requested - this is the
     // libdap convention parsed by handle_read_memory in the server.
     char memory_ref_str[40];
-    if (address_space == DAP_DATA_BP_ADDR_PHYSICAL)
-        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference);
-    else
-        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    switch (address_space) {
+    case DAP_DATA_BP_ADDR_PHYSICAL:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference); break;
+    case DAP_DATA_BP_ADDR_ISPACE:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "ispace:0x%x", memory_reference); break;
+    case DAP_DATA_BP_ADDR_DSPACE:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "dspace:0x%x", memory_reference); break;
+    default:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference); break;
+    }
     cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
-    
+
     cJSON_AddNumberToObject(args, "offset", offset);
     cJSON_AddNumberToObject(args, "count", count);
 
@@ -721,12 +727,18 @@ int dap_client_write_memory_ex(DAPClient* client, uint32_t memory_reference, uin
 
     // Convert memory_reference to string (needed for DAP protocol).
     char memory_ref_str[40];
-    if (address_space == DAP_DATA_BP_ADDR_PHYSICAL)
-        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference);
-    else
-        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference);
+    switch (address_space) {
+    case DAP_DATA_BP_ADDR_PHYSICAL:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "phys:0x%x", memory_reference); break;
+    case DAP_DATA_BP_ADDR_ISPACE:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "ispace:0x%x", memory_reference); break;
+    case DAP_DATA_BP_ADDR_DSPACE:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "dspace:0x%x", memory_reference); break;
+    default:
+        snprintf(memory_ref_str, sizeof(memory_ref_str), "0x%x", memory_reference); break;
+    }
     cJSON_AddStringToObject(args, "memoryReference", memory_ref_str);
-    
+
     cJSON_AddNumberToObject(args, "offset", offset);
     cJSON_AddStringToObject(args, "data", data);
     cJSON_AddBoolToObject(args, "allowPartial", allow_partial);

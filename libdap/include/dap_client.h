@@ -372,6 +372,25 @@ int dap_client_write_memory_ex(DAPClient* client, uint32_t memory_reference, uin
 int dap_client_disassemble(DAPClient* client, uint32_t memory_reference, uint32_t offset, size_t instruction_offset, size_t instruction_count, bool resolve_symbols, DAPDisassembleResult* result);
 
 /**
+ * @brief String-based memory/disassemble variants.
+ *
+ * These pass the memoryReference string directly to the DAP server without
+ * constructing it from a numeric address. This allows the full address
+ * encoding ([prefix:]address[@pil]) to pass through intact.
+ */
+int dap_client_read_memory_str(DAPClient* client, const char *memory_ref,
+                               uint32_t offset, size_t count,
+                               DAPReadMemoryResult* result);
+int dap_client_write_memory_str(DAPClient* client, const char *memory_ref,
+                                uint32_t offset, const char* data,
+                                bool allow_partial,
+                                DAPWriteMemoryResult* result);
+int dap_client_disassemble_str(DAPClient* client, const char *memory_ref,
+                               uint32_t offset, size_t instruction_offset,
+                               size_t instruction_count, bool resolve_symbols,
+                               DAPDisassembleResult* result);
+
+/**
  * @brief Evaluate an expression in the debug target
  * 
  * @param client Pointer to the client

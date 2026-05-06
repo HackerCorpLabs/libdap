@@ -905,9 +905,148 @@ int dap_client_disassemble(DAPClient* client, uint32_t memory_reference, uint32_
 
 }
 
+// ---------------------------------------------------------------------------
+// String-based memory/disassemble variants.
+// Pass memoryReference as a raw string so prefix + @PIL encoding reaches
+// the server intact (the server's parse_memory_reference handles it).
+// ---------------------------------------------------------------------------
+
+int dap_client_read_memory_str(DAPClient* client, const char *memory_ref,
+                               uint32_t offset, size_t count,
+                               DAPReadMemoryResult* result) {
+    if (!client || !memory_ref || !result) return DAP_ERROR_INVALID_ARG;
+
+    cJSON* args = cJSON_CreateObject();
+    if (!args) return DAP_ERROR_MEMORY;
+
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref);
+    cJSON_AddNumberToObject(args, "offset", offset);
+    cJSON_AddNumberToObject(args, "count", count);
+
+    char* response = NULL;
+    int error = dap_client_send_request(client, DAP_CMD_READ_MEMORY, args, &response);
+    cJSON_Delete(args);
+    if (error != DAP_ERROR_NONE) return error;
+
+    cJSON* root = cJSON_Parse(response);
+    free(response);
+    if (!root) return DAP_ERROR_PARSE_ERROR;
+
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    if (!body) { cJSON_Delete(root); return DAP_ERROR_PARSE_ERROR; }
+
+    cJSON* address = cJSON_GetObjectItem(body, "address");
+    cJSON* data = cJSON_GetObjectItem(body, "data");
+    cJSON* unreadable = cJSON_GetObjectItem(body, "unreadableBytes");
+
+    result->address = address && cJSON_IsString(address) ? strdup(address->valuestring) : NULL;
+    result->data = data && cJSON_IsString(data) ? strdup(data->valuestring) : NULL;
+    result->unreadable_bytes = unreadable ? unreadable->valueint : 0;
+
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
+}
+
+int dap_client_write_memory_str(DAPClient* client, const char *memory_ref,
+                                uint32_t offset, const char* data,
+                                bool allow_partial,
+                                DAPWriteMemoryResult* result) {
+    if (!client || !memory_ref || !data || !result) return DAP_ERROR_INVALID_ARG;
+
+    cJSON* args = cJSON_CreateObject();
+    if (!args) return DAP_ERROR_MEMORY;
+
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref);
+    cJSON_AddNumberToObject(args, "offset", offset);
+    cJSON_AddStringToObject(args, "data", data);
+    cJSON_AddBoolToObject(args, "allowPartial", allow_partial);
+
+    char* response = NULL;
+    int error = dap_client_send_request(client, DAP_CMD_WRITE_MEMORY, args, &response);
+    cJSON_Delete(args);
+    if (error != DAP_ERROR_NONE) return error;
+
+    cJSON* root = cJSON_Parse(response);
+    free(response);
+    if (!root) return DAP_ERROR_PARSE_ERROR;
+
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    cJSON* bw = body ? cJSON_GetObjectItem(body, "bytesWritten") : NULL;
+    result->bytes_written = bw ? bw->valueint : 0;
+
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
+}
+
+int dap_client_disassemble_str(DAPClient* client, const char *memory_ref,
+                               uint32_t offset, size_t instruction_offset,
+                               size_t instruction_count, bool resolve_symbols,
+                               DAPDisassembleResult* result) {
+    if (!client || !memory_ref || !result) return DAP_ERROR_INVALID_ARG;
+
+    cJSON* args = cJSON_CreateObject();
+    if (!args) return DAP_ERROR_MEMORY;
+
+    cJSON_AddStringToObject(args, "memoryReference", memory_ref);
+    if (offset > 0) cJSON_AddNumberToObject(args, "offset", (double)offset);
+    if (instruction_offset > 0) cJSON_AddNumberToObject(args, "instructionOffset", (double)instruction_offset);
+    cJSON_AddNumberToObject(args, "instructionCount", (double)instruction_count);
+    cJSON_AddBoolToObject(args, "resolveSymbols", resolve_symbols);
+
+    memset(result, 0, sizeof(DAPDisassembleResult));
+
+    char* response_body = NULL;
+    int err = dap_client_send_request(client, DAP_CMD_DISASSEMBLE, args, &response_body);
+    cJSON_Delete(args);
+    if (err != DAP_ERROR_NONE) return err;
+    if (!response_body) return DAP_ERROR_INVALID_FORMAT;
+
+    cJSON* root = cJSON_Parse(response_body);
+    free(response_body);
+    if (!root) return DAP_ERROR_PARSE_ERROR;
+
+    cJSON* body = cJSON_GetObjectItem(root, "body");
+    if (!body) { cJSON_Delete(root); return DAP_ERROR_INVALID_FORMAT; }
+
+    cJSON* instructions_json = cJSON_GetObjectItem(body, "instructions");
+    if (!instructions_json || !cJSON_IsArray(instructions_json)) {
+        cJSON_Delete(root);
+        return DAP_ERROR_INVALID_FORMAT;
+    }
+
+    int cnt = cJSON_GetArraySize(instructions_json);
+    if (cnt <= 0) {
+        cJSON_Delete(root);
+        result->instructions = NULL;
+        result->num_instructions = 0;
+        return DAP_ERROR_NONE;
+    }
+
+    result->instructions = calloc(cnt, sizeof(DAPDisassembledInstruction));
+    if (!result->instructions) { cJSON_Delete(root); return DAP_ERROR_MEMORY; }
+    result->num_instructions = cnt;
+
+    for (int i = 0; i < cnt; i++) {
+        cJSON* instr = cJSON_GetArrayItem(instructions_json, i);
+        if (!instr) continue;
+        cJSON* addr = cJSON_GetObjectItem(instr, "address");
+        if (addr && cJSON_IsString(addr))
+            result->instructions[i].address = strdup(addr->valuestring);
+        cJSON* text = cJSON_GetObjectItem(instr, "instruction");
+        if (text && cJSON_IsString(text))
+            result->instructions[i].instruction = strdup(text->valuestring);
+        cJSON* sym = cJSON_GetObjectItem(instr, "symbol");
+        if (sym && cJSON_IsString(sym))
+            result->instructions[i].symbol = strdup(sym->valuestring);
+    }
+
+    cJSON_Delete(root);
+    return DAP_ERROR_NONE;
+}
+
 /**
  * @brief Step (generic step function)
- * 
+ *
  * @param client Pointer to the client
  * @param thread_id Thread ID to step
  * @param single_thread Whether to continue only the specified thread

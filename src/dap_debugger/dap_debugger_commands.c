@@ -728,14 +728,15 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
         return -1;
     }
 
-    uint32_t memory_reference = 0;
+    char memory_ref[64] = "0x0";  // default: current PC
     uint32_t offset = 0;
     size_t instruction_offset = 0;
-    size_t instruction_count = 10; // Default to 10 instructions
+    size_t instruction_count = 10;
     bool resolve_symbols = false;
     bool memory_reference_set = false;
 
     // Parse command line arguments
+    // First non-flag token is the address (with optional prefix + @PIL)
     if (args && *args) {
         char* args_copy = strdup(args);
         if (args_copy) {
@@ -754,7 +755,8 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
                 } else if (strcmp(token, "-s") == 0) {
                     resolve_symbols = true;
                 } else if (!memory_reference_set) {
-                    memory_reference = (uint32_t)strtoull(token, NULL, 0);
+                    // Preserve full address string (prefix + @PIL)
+                    snprintf(memory_ref, sizeof(memory_ref), "%s", token);
                     memory_reference_set = true;
                 }
                 token = strtok_r(NULL, " ", &saveptr);
@@ -763,24 +765,17 @@ int handle_disassemble_command(DAPClient* client, const char* args) {
         }
     }
 
-    if (!memory_reference_set) {
-        // Default: disassemble at current PC
-        // Use 0 as memory_reference - the server will use the current PC
-        memory_reference = 0;
-    }
-
-    // Call the disassemble function
+    // Pass the full address string to the server for parsing
     DAPDisassembleResult result = {0};
-    int error = dap_client_disassemble(client, memory_reference, offset, 
-                                     instruction_offset, instruction_count, 
-                                     resolve_symbols, &result);
+    int error = dap_client_disassemble_str(client, memory_ref, offset,
+                                           instruction_offset, instruction_count,
+                                           resolve_symbols, &result);
     if (error != DAP_ERROR_NONE) {
         fprintf(stderr, "Error: Failed to disassemble memory: %d\n", error);
         return -1;
     }
 
-    // Print the results
-    printf("Disassembly of 0x%08x:\n", memory_reference);
+    printf("Disassembly of %s:\n", memory_ref);
     for (size_t i = 0; i < result.num_instructions; i++) {
         printf("0x%s: %s", result.instructions[i].address, 
                result.instructions[i].instruction);
@@ -978,6 +973,103 @@ int handle_launch_command(DAPClient* client, const char* args) {
     return 0;
 }
 
+int handle_attach_command(DAPClient* client, const char* args) {
+    (void)args;
+    if (!client) return 0;
+
+    // 1. Pause the CPU
+    printf("Pausing target...\n");
+    DAPPauseResult pause_result = {0};
+    int perr = dap_client_pause(client, client->thread_id, &pause_result);
+    if (perr != DAP_ERROR_NONE) {
+        printf("Warning: pause returned %d (target may already be stopped)\n", perr);
+    }
+
+    // Give server time to process + drain stopped event
+    usleep(100000);
+    for (int drain = 0; drain < 10; drain++) {
+        char *msg = dap_client_receive_message(client, 100);
+        if (!msg) break;
+        free(msg);
+    }
+
+    // 2. Threads
+    DAPThread *threads = NULL;
+    int num_threads = 0;
+    if (dap_client_get_threads(client, &threads, &num_threads) == 0) {
+        printf("\n--- Threads ---\n");
+        for (int i = 0; i < num_threads; i++) {
+            printf("  Thread %d: %s\n", threads[i].id,
+                   threads[i].name ? threads[i].name : "(unnamed)");
+        }
+        for (int i = 0; i < num_threads; i++) free(threads[i].name);
+        free(threads);
+    }
+
+    // 3. Stack trace
+    DAPStackFrame *frames = NULL;
+    int frame_count = 0;
+    if (dap_client_get_stack_trace(client, client->thread_id, &frames, &frame_count) == 0 && frame_count > 0) {
+        printf("\n--- Stack Trace ---\n");
+        for (int i = 0; i < frame_count; i++) {
+            printf("  #%d  %s", i, frames[i].instruction_pointer_reference ?
+                   frames[i].instruction_pointer_reference : "???");
+            if (frames[i].name) printf(" in %s", frames[i].name);
+            if (frames[i].source_path) printf(" at %s:%d", frames[i].source_path, frames[i].line);
+            printf("\n");
+        }
+
+        // 4. Variables from all scopes of top frame
+        DAPGetScopesResult scopes = {0};
+        if (dap_client_get_scopes(client, frames[0].id, &scopes) == 0) {
+            for (int s = 0; s < scopes.num_scopes; s++) {
+                if (scopes.scopes[s].variables_reference > 0) {
+                    printf("\n--- %s ---\n", scopes.scopes[s].name ? scopes.scopes[s].name : "Scope");
+                    DAPGetVariablesResult vars = {0};
+                    if (dap_client_get_variables(client, scopes.scopes[s].variables_reference,
+                                                 0, 0, &vars) == 0) {
+                        for (int v = 0; v < vars.num_variables; v++) {
+                            printf("  %-6s = %s", vars.variables[v].name ? vars.variables[v].name : "?",
+                                   vars.variables[v].value ? vars.variables[v].value : "?");
+                            if (vars.variables[v].type) printf("  [%s]", vars.variables[v].type);
+                            printf("\n");
+                        }
+                        dap_get_variables_result_free(&vars);
+                    }
+                }
+            }
+            for (int s = 0; s < scopes.num_scopes; s++) free(scopes.scopes[s].name);
+            free(scopes.scopes);
+        }
+
+        // 5. Disassembly at PC
+        {
+            char pc_str[20];
+            snprintf(pc_str, sizeof(pc_str), "0x%x", frames[0].instruction_pointer_reference);
+            printf("\n--- Disassembly at PC (%s) ---\n", pc_str);
+            DAPDisassembleResult disasm = {0};
+            if (dap_client_disassemble_str(client, pc_str,
+                                           0, 0, 10, true, &disasm) == 0) {
+                for (size_t d = 0; d < disasm.num_instructions; d++) {
+                    printf("  %s: %s", disasm.instructions[d].address,
+                           disasm.instructions[d].instruction);
+                    if (disasm.instructions[d].symbol) printf("  <%s>", disasm.instructions[d].symbol);
+                    printf("\n");
+                }
+                dap_disassemble_result_free(&disasm);
+            }
+        }
+
+        for (int i = 0; i < frame_count; i++) {
+            free(frames[i].name);
+            free(frames[i].source_path);
+        }
+        free(frames);
+    }
+
+    return 0;
+}
+
 int handle_read_memory_command(DAPClient* client, const char* args) {
     if (!client) return 0;
 
@@ -1019,11 +1111,10 @@ int handle_read_memory_command(DAPClient* client, const char* args) {
     if (count <= 0) count = 16;
     if (count > 512) count = 512;
 
-    // Send the full address string (with prefix + @PIL) as memoryReference.
-    // The server parses prefix and @PIL from the string.
+    // Pass the full address string (with prefix + @PIL) as memoryReference.
+    // The server's parse_memory_reference handles prefix and @PIL parsing.
     DAPReadMemoryResult result = {0};
-    int error = dap_client_read_memory(client, address, 0, count, &result);
-    // TODO: pass full addr_str through when C client supports string-based memoryReference
+    int error = dap_client_read_memory_str(client, addr_str, 0, count, &result);
 
     if (error != DAP_ERROR_NONE) {
         printf("Error reading memory at 0%06o: %d\n", address, error);

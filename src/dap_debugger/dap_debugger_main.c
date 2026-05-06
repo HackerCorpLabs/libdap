@@ -234,11 +234,12 @@ int main(int argc, char* argv[]) {
     bool debug_mode = false;
     bool stop_at_entry = true;  // Default to true for debugging
     bool auto_launch = false;
+    bool attach_mode = false;   // Attach to running process (no launch)
     const char* show_disassembly = NULL;
     cJSON* program_args = NULL;
     cJSON* env_vars = NULL;
     const char* working_dir = NULL;
-    
+
     // Define long options
     struct option long_options[] = {
         {"host", required_argument, 0, 'h'},
@@ -248,6 +249,7 @@ int main(int argc, char* argv[]) {
         {"file", required_argument, 0, 'f'},            // Primary input file
         {"show-disassembly", required_argument, 0, 'D'}, // Disassembly mode
         {"auto-launch", no_argument, 0, 'A'},           // Auto launch
+        {"attach", no_argument, 0, 't'},                // Attach to running process
         {"args", required_argument, 0, 'a'},
         {"env", required_argument, 0, 'v'},
         {"cwd", required_argument, 0, 'w'},
@@ -281,6 +283,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'A':
                 auto_launch = true;
+                break;
+            case 't':
+                attach_mode = true;
                 break;
             case 'a': {
                 // Parse program arguments - comma-separated list
@@ -433,6 +438,111 @@ int main(int argc, char* argv[]) {
         free(threads);
     }
     
+    // In attach mode: skip launch, pause the CPU, and auto-inspect
+    if (attach_mode) {
+        printf("Attach mode: pausing CPU and inspecting state...\n");
+
+        // Pause the CPU
+        DAPPauseResult pause_result = {0};
+        int pause_err = dap_client_pause(g_client, g_client->thread_id, &pause_result);
+        if (pause_err != DAP_ERROR_NONE) {
+            printf("Warning: pause request returned %d (CPU may already be stopped)\n", pause_err);
+        }
+
+        // Give the server a moment to process the pause
+        usleep(100000); // 100ms
+
+        // Drain any pending events (especially the "stopped" event from pause)
+        for (int drain = 0; drain < 10; drain++) {
+            char *msg = dap_client_receive_message(g_client, 100);
+            if (!msg) break;
+            free(msg);
+        }
+
+        // Auto-inspect: threads
+        DAPThread *att_threads = NULL;
+        int att_num_threads = 0;
+        if (dap_client_get_threads(g_client, &att_threads, &att_num_threads) == 0) {
+            printf("\n--- Threads ---\n");
+            for (int i = 0; i < att_num_threads; i++) {
+                printf("  Thread %d: %s\n", att_threads[i].id,
+                       att_threads[i].name ? att_threads[i].name : "(unnamed)");
+            }
+            if (att_threads) {
+                for (int i = 0; i < att_num_threads; i++) free(att_threads[i].name);
+                free(att_threads);
+            }
+        }
+
+        // Auto-inspect: stack trace
+        DAPStackFrame *frames = NULL;
+        int frame_count = 0;
+        if (dap_client_get_stack_trace(g_client, g_client->thread_id, &frames, &frame_count) == 0 && frame_count > 0) {
+            printf("\n--- Stack Trace ---\n");
+            for (int i = 0; i < frame_count; i++) {
+                printf("  #%d  %s", i, frames[i].instruction_pointer_reference ?
+                       frames[i].instruction_pointer_reference : "???");
+                if (frames[i].name) printf(" in %s", frames[i].name);
+                if (frames[i].source_path) printf(" at %s:%d", frames[i].source_path, frames[i].line);
+                printf("\n");
+            }
+
+            // Auto-inspect: registers (find register scope from top frame)
+            DAPGetScopesResult scopes = {0};
+            if (dap_client_get_scopes(g_client, frames[0].id, &scopes) == 0) {
+                for (int s = 0; s < scopes.num_scopes; s++) {
+                    if (scopes.scopes[s].variables_reference > 0) {
+                        printf("\n--- %s ---\n", scopes.scopes[s].name ? scopes.scopes[s].name : "Scope");
+                        DAPGetVariablesResult vars = {0};
+                        if (dap_client_get_variables(g_client, scopes.scopes[s].variables_reference,
+                                                     0, 0, &vars) == 0) {
+                            for (int v = 0; v < vars.num_variables; v++) {
+                                printf("  %-6s = %s", vars.variables[v].name ? vars.variables[v].name : "?",
+                                       vars.variables[v].value ? vars.variables[v].value : "?");
+                                if (vars.variables[v].type) printf("  [%s]", vars.variables[v].type);
+                                printf("\n");
+                            }
+                            dap_get_variables_result_free(&vars);
+                        }
+                    }
+                }
+                // Free scopes
+                for (int s = 0; s < scopes.num_scopes; s++) free(scopes.scopes[s].name);
+                free(scopes.scopes);
+            }
+
+            // Auto-inspect: disassembly at PC
+            {
+                char pc_str[20];
+                snprintf(pc_str, sizeof(pc_str), "0x%x", frames[0].instruction_pointer_reference);
+                printf("\n--- Disassembly at PC (%s) ---\n", pc_str);
+                DAPDisassembleResult disasm = {0};
+                if (dap_client_disassemble_str(g_client, pc_str,
+                                               0, 0, 10, true, &disasm) == 0) {
+                    for (size_t d = 0; d < disasm.num_instructions; d++) {
+                        printf("  %s: %s", disasm.instructions[d].address,
+                               disasm.instructions[d].instruction);
+                        if (disasm.instructions[d].symbol) printf("  <%s>", disasm.instructions[d].symbol);
+                        printf("\n");
+                    }
+                    dap_disassemble_result_free(&disasm);
+                }
+            }
+
+            // Free frames
+            for (int i = 0; i < frame_count; i++) {
+                free(frames[i].name);
+                free(frames[i].source_path);
+            }
+            free(frames);
+        }
+
+        printf("\nAttached. Type commands or 'help' for available commands.\n");
+
+        // Skip launch -- go directly to command loop
+        goto enter_command_loop;
+    }
+
     // Create enhanced launch arguments JSON object
     cJSON* launch_args = cJSON_CreateObject();
     if (!launch_args) {
@@ -534,6 +644,7 @@ int main(int argc, char* argv[]) {
     free_file_set(files);
     files = NULL;
 
+enter_command_loop:
     // Create command history
     g_history = history_create(100);
     if (!g_history) {

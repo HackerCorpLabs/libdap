@@ -312,6 +312,21 @@ const DebuggerCommand commands[] = {
         .handler = handle_launch_command
     },
     {
+        .name = "attach",
+        .alias = "tap",
+        .alias2 = NULL,
+        .syntax = "attach",
+        .description = "Pause a running target and inspect state (threads, registers, disassembly)",
+        .request_format = NULL,
+        .response_format = NULL,
+        .events = NULL,
+        .option_descriptions = "Pauses the CPU and shows threads, stack, registers, and disassembly at PC",
+        .examples = "attach|Pause and inspect running target",
+        .category = CATEGORY_EXECUTION_CONTROL,
+        .implemented = true,
+        .handler = handle_attach_command
+    },
+    {
         .name = "readMemory",
         .alias = "memory",
         .alias2 = "x",

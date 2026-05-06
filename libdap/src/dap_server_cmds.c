@@ -1927,6 +1927,23 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
         return 0;
     }
 
+    // Invoke the emulator's pause callback to actually stop the CPU.
+    // We call the callback directly (not via dap_server_execute_callback)
+    // because pause must NOT call DAP_RELEASE_DEBUGGER afterwards --
+    // the CPU should stay paused until a continue/step command.
+    DAPCommandCallback pause_cb = server->command_callbacks[DAP_CMD_PAUSE];
+    if (pause_cb)
+    {
+        int cb_result = pause_cb(server);
+        if (cb_result < 0)
+        {
+            free(body_str);
+            response->success = false;
+            response->error_message = strdup("Failed to pause target CPU");
+            return 0;
+        }
+    }
+
     // Update debugger state
     server->debugger_state.has_stopped = true;
     server->debugger_state.current_thread_id = thread_id;
@@ -1935,7 +1952,6 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
     response->data = body_str;
 
     // Send stopped event according to DAP spec
-
     cJSON *event_body = cJSON_CreateObject();
     if (event_body)
     {
@@ -1944,8 +1960,6 @@ int handle_pause(DAPServer *server, cJSON *args, DAPResponse *response)
         cJSON_AddBoolToObject(event_body, "allThreadsStopped", true);
 
         dap_server_send_event(server, "stopped", event_body);
-        // Remove this line as it causes a double-free - dap_server_send_event already handles freeing the body
-        // cJSON_Delete(event_body);
     }
 
     return 0;

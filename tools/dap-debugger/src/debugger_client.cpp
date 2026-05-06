@@ -935,6 +935,38 @@ bool DebuggerClient::write_memory(uint32_t address, uint32_t offset, const std::
     return true;
 }
 
+std::string DebuggerClient::read_memory_str(const std::string& memref, uint32_t offset, size_t count)
+{
+    if (!impl_->client) return "";
+
+    DAPReadMemoryResult result = {};
+    int rc = dap_client_read_memory_str(impl_->client, memref.c_str(), offset, count, &result);
+    if (rc != DAP_ERROR_NONE) {
+        log(ConsoleEntry::Error, "Read memory failed: " + std::string(dap_error_message((DAPError)rc)));
+        return "";
+    }
+
+    std::string data = result.data ? result.data : "";
+    free(result.data);
+    free(result.address);
+    return data;
+}
+
+bool DebuggerClient::write_memory_str(const std::string& memref, uint32_t offset, const std::string& data_b64)
+{
+    if (!impl_->client) return false;
+
+    DAPWriteMemoryResult result = {};
+    int rc = dap_client_write_memory_str(impl_->client, memref.c_str(), offset, data_b64.c_str(), false, &result);
+    if (rc != DAP_ERROR_NONE) {
+        log(ConsoleEntry::Error, "Write memory failed: " + std::string(dap_error_message((DAPError)rc)));
+        return false;
+    }
+
+    log(ConsoleEntry::Info, "Wrote " + std::to_string(result.bytes_written) + " bytes at " + memref);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Modules
 // ---------------------------------------------------------------------------

@@ -152,6 +152,28 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
+        if (ImGui::Button("Attach & Inspect", ImVec2(200, 0))) {
+            // Connect, pause running target, auto-refresh state
+            client.connect(connect_host_, connect_port_);
+            if (client.state() == ClientState::Connected) {
+                client.initialize();
+                if (client.state() == ClientState::Initialized) {
+                    client.pause();
+                    // Give server time to process pause
+                    SDL_Delay(200);
+                    client.poll(); // Process stopped event
+                    client.refresh_threads();
+                    client.refresh_stack_trace();
+                    if (!client.stack_frames().empty()) {
+                        client.refresh_scopes(client.stack_frames()[0].id);
+                        client.refresh_variables(client.stack_frames()[0].id);
+                        client.disassemble(client.stack_frames()[0].instruction_pointer, 20);
+                    }
+                }
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
         }
@@ -214,6 +236,11 @@ void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Connect...", nullptr, false,
                                 client.state() == ClientState::Disconnected)) {
+                show_connect_dialog_ = true;
+            }
+            if (ImGui::MenuItem("Attach to Running...", nullptr, false,
+                                client.state() == ClientState::Disconnected)) {
+                attach_on_connect_ = true;
                 show_connect_dialog_ = true;
             }
             if (ImGui::MenuItem("Launch...", nullptr, false,

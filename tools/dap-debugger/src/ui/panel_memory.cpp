@@ -78,13 +78,29 @@ void PanelMemory::render(DebuggerClient& client)
     if (count_ < 1) count_ = 1;
     if (count_ > 4096) count_ = 4096;
 
+    // PIL selector: -1 = current, 0-15 = specific
+    ImGui::SameLine();
+    ImGui::PushItemWidth(80);
+    const char* pil_items[] = { "Current", "0", "1", "2", "3", "4", "5", "6", "7",
+                                "8", "9", "10", "11", "12", "13", "14", "15" };
+    ImGui::Combo("PIL", &pil_select_, pil_items, 17);
+    ImGui::PopItemWidth();
+
     if (ImGui::Button("Read")) {
+        // Build memoryReference string: [prefix:]0xADDR[@pil]
+        char memref[64];
+        const char *prefix = "";
+        if (address_space_ == 1) prefix = "phys:";
+        else if (address_space_ == 2) prefix = "ispace:";
+        else if (address_space_ == 3) prefix = "dspace:";
+
+        if (pil_select_ > 0)
+            snprintf(memref, sizeof(memref), "%s0x%s@%d", prefix, addr_buf_, pil_select_ - 1);
+        else
+            snprintf(memref, sizeof(memref), "%s0x%s", prefix, addr_buf_);
+
         uint32_t addr = (uint32_t)strtoul(addr_buf_, nullptr, 16);
-        DebuggerClient::AddressSpace as = DebuggerClient::AddressSpace::Virtual;
-        if (address_space_ == 1) as = DebuggerClient::AddressSpace::Physical;
-        else if (address_space_ == 2) as = DebuggerClient::AddressSpace::ISpace;
-        else if (address_space_ == 3) as = DebuggerClient::AddressSpace::DSpace;
-        std::string b64 = client.read_memory(addr, 0, (size_t)count_, as);
+        std::string b64 = client.read_memory_str(memref, 0, (size_t)count_);
         if (!b64.empty()) {
             unsigned char raw[4096];
             int n = b64_decode(b64.c_str(), raw, (int)sizeof(raw));

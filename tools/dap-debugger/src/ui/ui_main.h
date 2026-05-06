@@ -47,8 +47,9 @@ private:
 
     bool show_connect_dialog_ = false;
     bool show_launch_dialog_ = false;
+    bool attach_on_connect_ = false;
     char connect_host_[256] = "localhost";
-    int connect_port_ = 5555;
+    int connect_port_ = 4711;
     char launch_program_[512] = {};
     char launch_source_[512] = {};
     char launch_map_[512] = {};
@@ -132,7 +133,8 @@ private:
     char addr_buf_[32] = "0";
     char write_hex_buf_[256] = {};
     int  count_ = 64;
-    int  address_space_ = 0; // 0 = virtual, 1 = physical
+    int  address_space_ = 0; // 0=virtual, 1=physical, 2=ispace, 3=dspace
+    int  pil_select_ = 0;    // 0=current, 1-16=PIL 0-15
     int  last_space_ = 0;
     uint32_t last_addr_ = 0;
     std::vector<unsigned char> data_;

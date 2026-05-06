@@ -186,6 +186,9 @@ public:
     // memoryReference per the libdap convention).
     std::string read_memory(uint32_t address, uint32_t offset, size_t count, AddressSpace space);
     bool write_memory(uint32_t address, uint32_t offset, const std::string& data_b64, AddressSpace space);
+    // String-based: pass full [prefix:]address[@pil] to server
+    std::string read_memory_str(const std::string& memref, uint32_t offset, size_t count);
+    bool write_memory_str(const std::string& memref, uint32_t offset, const std::string& data_b64);
 
     // Threads
     void refresh_threads();

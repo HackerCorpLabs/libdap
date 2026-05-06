@@ -277,7 +277,7 @@ Memory read and write operations (`debug_read_memory`, `debug_write_memory`) use
 
 ## Memory Watchpoints (Data Breakpoints)
 
-Watchpoints monitor memory locations and break when the watched address is accessed. By default, watchpoints operate on **virtual addresses**. An `address_space` parameter allows monitoring **physical addresses** instead.
+Watchpoints monitor memory locations and break when the watched address is accessed. By default, watchpoints operate on **virtual addresses** and fire at **any PIL level**.
 
 ### Setting Watchpoints (Virtual - Default)
 
@@ -316,7 +316,42 @@ debug_set_data_breakpoints(
 
 Physical watchpoints trigger on all accesses to the physical address, including those from different virtual address mappings and direct physical memory operations that bypass the MMS.
 
-Physical addresses can be larger than 16 bits (up to 21+ bits for extended memory configurations), so you can watch addresses beyond the 64K-word virtual address space.
+### I-space / D-space Watchpoints (Split I/D Kernels)
+
+When the kernel uses split I/D (PTM=1), a virtual address maps to
+different physical memory for instruction fetch (I-space) vs data
+access (D-space). Watchpoints can be restricted to one or the other:
+
+```
+# Watch overlay code reads (I-space only)
+debug_set_data_breakpoints(variables=["ispace:0xBA60"], access_type="read")
+
+# Watch kernel data writes (D-space only)
+debug_set_data_breakpoints(variables=["dspace:0xBA60"], access_type="write")
+```
+
+Without a prefix, watchpoints fire on both I-space and D-space accesses.
+
+### PIL Filtering on Watchpoints
+
+Append `@N` (N=0-15) to restrict a watchpoint to a specific PIL:
+
+```
+# Watch only when kernel (PIL 0) writes to this address
+debug_set_data_breakpoints(variables=["0x1000@0"], access_type="write")
+
+# Watch D-space writes at PIL 0 only
+debug_set_data_breakpoints(variables=["dspace:0xBA60@0"], access_type="write")
+
+# Watch physical address at PIL 14 (trap handler)
+debug_set_data_breakpoints(
+    variables=["phys:0x10000@14"],
+    access_type="write",
+    address_space="physical"
+)
+```
+
+Without `@N`, the watchpoint fires at any PIL level.
 
 ### Access Types
 
@@ -327,10 +362,10 @@ Physical addresses can be larger than 16 bits (up to 21+ bits for extended memor
 ### Important Notes
 
 - Each call **replaces all** previous data breakpoints, both virtual and physical (per DAP spec). To watch multiple locations, include all of them in a single call.
-- All watchpoints in a single call share the same `address_space`. To mix virtual and physical watchpoints, you would need separate calls (but note that each call replaces the previous ones).
 - The stop occurs at the instruction **after** the memory access, since the CPU executes the read/write before the watchpoint fires.
 - Up to 32 simultaneous watchpoints are supported (32 virtual + 32 physical, tracked separately).
-- Variable names are resolved by searching all loaded symbol tables (a.out binary symbols, .map file symbols, STABS debug symbols). If no symbol matches, the name is parsed as a numeric address. Symbol resolution works with both virtual and physical address spaces.
+- Variable names are resolved by searching all loaded symbol tables (a.out binary symbols, .map file symbols, STABS debug symbols). If no symbol matches, the name is parsed as a numeric address.
+- Virtual watchpoints use a bitmap for O(1) address rejection -- no performance impact on memory accesses to non-watched addresses.
 - To clear all watchpoints: `debug_set_data_breakpoints(variables=[])`
 
 ## Console I/O

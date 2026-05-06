@@ -213,61 +213,70 @@ dap# readMemory main 32 8  # Read 32 bytes at main+8
 ```
 **Output**: Industry-standard hex dump format with ASCII representation.
 
-##### Address-space prefix (libdap extension)
-The `memoryReference` argument may carry an optional address-space prefix
-so the same `readMemory` / `writeMemory` request can target either the
-virtual or the physical address space:
+##### Address encoding (libdap extension)
+
+The `memoryReference` argument for `readMemory`, `writeMemory`, and
+`disassemble` supports the format: `[prefix:]address[@pil]`
+
+**Address-space prefix** (optional, default=virtual):
 
 | Prefix     | Meaning                                              |
 |------------|------------------------------------------------------|
 | *(none)*   | Virtual address (default)                            |
 | `virt:`    | Virtual address                                      |
 | `V:`       | Virtual address (short form)                         |
-| `phys:`    | Physical address                                     |
+| `phys:`    | Physical address (bypass MMU)                        |
 | `P:`       | Physical address (short form)                        |
 | `ispace:`  | I-space (instruction page table, PT field of PCR)    |
 | `I:`       | I-space (short form)                                 |
 | `dspace:`  | D-space (data page table, APT field of PCR)          |
 | `D:`       | D-space (short form)                                 |
 
+**@PIL suffix** (optional, default=current PIL):
+
+Append `@N` (N=0-15) to use a specific PIL's page table for address
+translation. This lets you inspect memory as seen by a different
+interrupt level -- e.g., read user process memory (PIL 1) while stopped
+in the kernel (PIL 0 or 14). Physical addresses ignore @PIL since they
+bypass the MMU.
+
 Examples:
 ```bash
-dap# readMemory 0x10000           # virtual address 0x10000
-dap# readMemory phys:0x10000      # physical word index 0x10000 (above 64K)
-dap# readMemory P:0x40            # short form, physical
-dap# readMemory ispace:0xBA60     # I-space: read via instruction page table
-dap# readMemory dspace:0xBA60     # D-space: read via data page table (APT)
-dap# readMemory I:0x1000          # short form, I-space
+dap# readMemory 0x10000           # virtual, current PIL
+dap# readMemory phys:0x10000      # physical (above 64K)
+dap# readMemory ispace:0xBA60     # I-space, current PIL
+dap# readMemory dspace:0xBA60     # D-space, current PIL
+dap# readMemory 0x1000@1          # virtual, PIL 1's page table
+dap# readMemory ispace:0xBA60@0   # I-space, PIL 0's page table
+dap# readMemory dspace:0x100@1    # D-space, PIL 1's page table
 ```
-
-This is the convention required for debugging split I/D (0411) kernels
-where data segments live above 64K of physical memory and are not
-reachable through the current page table. The server response echoes the
-prefix in the `address` field so clients can round-trip the reference.
 
 **I-space and D-space prefixes** are essential when the kernel runs with
 PTM=1 (split I/D mode). In this mode, the same virtual address maps to
 different physical memory depending on whether the CPU is fetching an
 instruction (I-space, via the PT field of the PCR) or accessing data
-(D-space, via the APT field of the PCR). Without explicit space
-selection, the debugger uses the default virtual read path which may
-not match the desired address space.
+(D-space, via the APT field of the PCR).
 
-The `disassemble` command always reads via I-space internally, since
-instructions are never in D-space.
+The `disassemble` command defaults to I-space (since instructions are
+always fetched from I-space), but accepts all prefixes for inspection.
 
-The same prefix is accepted by `writeMemory`. Address spaces are also
-supported for data breakpoints via the existing `setDataBreakpoints`
-`address_space` field on the `DAPDataBreakpoint` struct (and the
-`P:`/`V:` prefix on `dataId` used by the nd100x adapter).
+The same encoding is accepted by `writeMemory`. Data breakpoints
+(`setDataBreakpoints`) use a similar scheme on `dataId`: prefix
+`I:`/`D:`/`P:`/`V:` + octal address + optional `@PIL` suffix.
 
 #### `disassemble` (aliases: `da`)
 **Purpose**: Disassemble code at memory location.
 **Syntax**: `disassemble <memory_reference> [-o offset] [-i instruction_offset] [-c count] [-s]`
+
+The `memory_reference` supports the same `[prefix:]address[@pil]` encoding
+as `readMemory`. Default is I-space (instruction fetch page table).
+
 **Examples**:
 ```bash
-dap# disassemble 0x401000  # Disassemble at address
-dap# da main -c 10         # Disassemble 10 instructions at main
+dap# disassemble 0x401000       # Disassemble at address (I-space, current PIL)
+dap# da main -c 10              # Disassemble 10 instructions at main
+dap# da 0x1000@1 -c 5           # Disassemble as PIL 1 sees it
+dap# da ispace:0xBA60@0 -c 10   # Overlay code, PIL 0's page table
 ```
 
 ### ⚙️ System & Utility

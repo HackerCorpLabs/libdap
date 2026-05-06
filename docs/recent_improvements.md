@@ -2,7 +2,16 @@
 
 This document outlines the major improvements and new features added to libDAP, transforming it from a basic DAP implementation into a professional-grade debugging toolkit.
 
-## 2026-05 — I-space / D-space address space support
+## 2026-05 — Split I/D debugging, PIL-aware commands, watchpoint optimization
+
+### Pause command fix
+
+`debug_pause()` previously returned "Unknown error". The root cause was
+twofold: libdap's `handle_pause` never invoked the emulator's pause
+callback, and nd100x never registered one. Both are now fixed. Pause
+reliably stops the CPU, and continue/step resumes normally.
+
+### I-space / D-space address space support
 
 When the kernel runs with split I/D (PTM=1), the same virtual address
 maps to different physical memory for instruction fetch (I-space, via
@@ -17,14 +26,64 @@ the instruction page table from the PCR. No traps are generated and no
 PGU/WIP bits are modified -- safe to call from debugger handlers without
 disturbing CPU state.
 
-**New address-space prefixes:** `readMemory` and `writeMemory` now accept
-`ispace:` / `I:` (instruction page table) and `dspace:` / `D:` (data
-page table) prefixes on `memoryReference`, alongside the existing
-`phys:` / `P:` and `virt:` / `V:` prefixes.
+**New address-space prefixes:** `readMemory`, `writeMemory`, and
+`disassemble` now accept `ispace:` / `I:` (instruction page table) and
+`dspace:` / `D:` (data page table) prefixes on `memoryReference`,
+alongside the existing `phys:` / `P:` and `virt:` / `V:` prefixes.
 
 The `DAPDataBreakpointAddressSpace` enum gained `DAP_DATA_BP_ADDR_ISPACE`
 and `DAP_DATA_BP_ADDR_DSPACE` values. The C client, C++ debugger client,
 ImGui Memory panel, and MCP tool descriptions have been updated.
+
+### @PIL suffix for cross-level inspection
+
+All memory commands (`readMemory`, `writeMemory`, `disassemble`) now
+accept an optional `@N` suffix (N=0-15) on the `memoryReference` string
+to read/write/disassemble using a specific PIL's page table instead of
+the current one. This is essential for inspecting user process memory
+(PIL 1) while stopped in the kernel (PIL 0 or 14).
+
+Address encoding: `[prefix:]address[@pil]`
+
+Examples:
+- `"0x1000@1"` -- virtual, using PIL 1's page table
+- `"ispace:0xBA60@0"` -- I-space, using PIL 0's page table
+- `"dspace:0x100@1"` -- D-space, using PIL 1's page table
+- `"phys:0x10000"` -- physical (PIL ignored, no MMU)
+
+Omitting `@N` uses the current PIL (backward compatible).
+
+### UseAPT-aware watchpoints with PIL filtering
+
+Data watchpoints (`setDataBreakpoints`) now support I-space/D-space
+filtering and optional PIL restriction via the `dataId` string:
+
+- Prefix `I:` -- watchpoint fires only on I-space access (UseAPT=false)
+- Prefix `D:` -- watchpoint fires only on D-space access (UseAPT=true)
+- Suffix `@N` -- watchpoint fires only when CPU is at PIL N
+- Both are optional; defaults match all spaces and all PILs
+
+DataId format: `PREFIX:OCTAL_ADDR[@PIL]`
+
+Examples:
+- `"I:135140"` -- I-space overlay code, any PIL
+- `"D:135140@0"` -- D-space data, PIL 0 only
+- `"P:010000@14"` -- physical address, PIL 14 only
+- `"V:001000"` -- virtual, any space, any PIL (backward compatible)
+
+### Watchpoint bitmap hot-path optimization
+
+Virtual watchpoints now use an 8KB bitmap (1 bit per 16-bit address)
+for O(1) fast rejection in the CPU memory access hot path. Performance:
+
+| Scenario | Cost per memory access |
+|----------|----------------------|
+| No watchpoints set | 1 int compare (branch predictor: always not-taken) |
+| Watchpoints active, address miss | + 1 byte load + 1 bit test |
+| Watchpoints active, address HIT | + slow path with PIL/space/type checks |
+
+The bitmap and counter are extern globals accessed directly from the
+CPU loop -- no function call overhead. The 8KB bitmap fits in L1 cache.
 
 ## 2026-04 — Address-space-aware memory access
 

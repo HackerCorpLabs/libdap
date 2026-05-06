@@ -197,6 +197,55 @@ int dap_server_set_capability(DAPCapabilityID capability_id, bool supported)
     return -1;
 }
 
+/**
+ * @brief Parse address-space prefix and @PIL suffix from a memoryReference string.
+ *
+ * Accepted forms: "[prefix:]address[@pil]"
+ * Prefixes: phys:/P:, ispace:/I:, dspace:/D:, virt:/V: (default: virtual)
+ * Suffix: @N (N=0-15, default: -1 = current PIL)
+ *
+ * @param input        The raw memoryReference string (not modified)
+ * @param addr_space   Output: parsed address space enum
+ * @param pil          Output: parsed PIL (-1 if not specified)
+ * @param addr_out     Output: parsed numeric address
+ * @return 0 on success, -1 on parse error
+ */
+static int parse_memory_reference(const char *input,
+                                  DAPDataBreakpointAddressSpace *addr_space,
+                                  int8_t *pil,
+                                  uint32_t *addr_out)
+{
+    *addr_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    *pil = -1;
+
+    const char *s = input;
+
+    // Parse prefix
+    if (strncmp(s, "phys:", 5) == 0)        { s += 5; *addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(s, "P:", 2) == 0)      { s += 2; *addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
+    else if (strncmp(s, "ispace:", 7) == 0)  { s += 7; *addr_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(s, "I:", 2) == 0)      { s += 2; *addr_space = DAP_DATA_BP_ADDR_ISPACE; }
+    else if (strncmp(s, "dspace:", 7) == 0)  { s += 7; *addr_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(s, "D:", 2) == 0)      { s += 2; *addr_space = DAP_DATA_BP_ADDR_DSPACE; }
+    else if (strncmp(s, "virt:", 5) == 0)    { s += 5; }
+    else if (strncmp(s, "V:", 2) == 0)      { s += 2; }
+
+    // Parse address, stopping at @ if present
+    char *endptr = NULL;
+    *addr_out = (uint32_t)strtoul(s, &endptr, 0);
+    if (endptr == s) return -1;
+
+    // Parse optional @PIL suffix
+    if (endptr && *endptr == '@') {
+        int p = atoi(endptr + 1);
+        if (p >= 0 && p <= 15) *pil = (int8_t)p;
+    } else if (endptr && *endptr != '\0') {
+        return -1;  // unexpected trailing chars
+    }
+
+    return 0;
+}
+
 static int dap_server_execute_callback(DAPServer *server, DAPCommandType cmd)
 {
     if (!server)
@@ -1311,9 +1360,19 @@ int handle_disassemble(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Convert memory reference from string to uint32_t    
-    server->current_command.context.disassemble.memory_reference = (uint32_t)string_to_uint32(memory_reference->valuestring);
-    
+    // Parse address-space prefix, @PIL suffix, and numeric address
+    DAPDataBreakpointAddressSpace as_d;
+    int8_t pil_d;
+    uint32_t addr_d;
+    if (parse_memory_reference(memory_reference->valuestring, &as_d, &pil_d, &addr_d) < 0)
+    {
+        set_response_error(response, "Invalid memory reference format");
+        return -1;
+    }
+    server->current_command.context.disassemble.memory_reference = addr_d;
+    server->current_command.context.disassemble.address_space = as_d;
+    server->current_command.context.disassemble.pil = pil_d;
+
     // Parse optional arguments with defaults
     cJSON *offset_json = cJSON_GetObjectItem(args, "offset");
     if (offset_json && cJSON_IsNumber(offset_json))
@@ -1628,28 +1687,18 @@ int handle_read_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Parse optional address-space prefix on memoryReference.
-    // Accepted forms: "phys:0x1000", "P:0x1000", "virt:0x1000", "V:0x1000".
-    // Default (no prefix) is virtual.
-    const char *mref_str = memory_reference->valuestring;
-    server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
-    if (strncmp(mref_str, "phys:", 5) == 0) { mref_str += 5; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(mref_str, "P:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(mref_str, "ispace:", 7) == 0) { mref_str += 7; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(mref_str, "I:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(mref_str, "dspace:", 7) == 0) { mref_str += 7; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(mref_str, "D:", 2) == 0) { mref_str += 2; server->current_command.context.read_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(mref_str, "virt:", 5) == 0) { mref_str += 5; }
-    else if (strncmp(mref_str, "V:", 2) == 0)    { mref_str += 2; }
-
-    // Convert memory reference from string to uint32_t
-    char *endptr = NULL;
-    server->current_command.context.read_memory.memory_reference = (uint32_t)strtoul(mref_str, &endptr, 0);
-    if (endptr == mref_str || *endptr != '\0')
+    // Parse address-space prefix, @PIL suffix, and numeric address
+    DAPDataBreakpointAddressSpace as;
+    int8_t pil;
+    uint32_t addr;
+    if (parse_memory_reference(memory_reference->valuestring, &as, &pil, &addr) < 0)
     {
         set_response_error(response, "Invalid memory reference format");
         return -1;
     }
+    server->current_command.context.read_memory.memory_reference = addr;
+    server->current_command.context.read_memory.address_space = as;
+    server->current_command.context.read_memory.pil = pil;
 
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
     if (!count_json || !cJSON_IsNumber(count_json))
@@ -1760,28 +1809,18 @@ int handle_write_memory(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // Parse optional address-space prefix on memoryReference.
-    // Accepted forms: "phys:0x1000", "P:0x1000", "virt:0x1000", "V:0x1000".
-    // Default (no prefix) is virtual.
-    const char *mref_str_w = memory_reference->valuestring;
-    server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_VIRTUAL;
-    if (strncmp(mref_str_w, "phys:", 5) == 0) { mref_str_w += 5; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(mref_str_w, "P:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(mref_str_w, "ispace:", 7) == 0) { mref_str_w += 7; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(mref_str_w, "I:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(mref_str_w, "dspace:", 7) == 0) { mref_str_w += 7; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(mref_str_w, "D:", 2) == 0) { mref_str_w += 2; server->current_command.context.write_memory.address_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(mref_str_w, "virt:", 5) == 0) { mref_str_w += 5; }
-    else if (strncmp(mref_str_w, "V:", 2) == 0)    { mref_str_w += 2; }
-
-    // Convert memory reference from string to uint32_t
-    char *endptr = NULL;
-    server->current_command.context.write_memory.memory_reference = (uint32_t)strtoul(mref_str_w, &endptr, 0);
-    if (endptr == mref_str_w || *endptr != '\0')
+    // Parse address-space prefix, @PIL suffix, and numeric address
+    DAPDataBreakpointAddressSpace as_w;
+    int8_t pil_w;
+    uint32_t addr_w;
+    if (parse_memory_reference(memory_reference->valuestring, &as_w, &pil_w, &addr_w) < 0)
     {
         set_response_error(response, "Invalid memory reference format");
         return -1;
     }
+    server->current_command.context.write_memory.memory_reference = addr_w;
+    server->current_command.context.write_memory.address_space = as_w;
+    server->current_command.context.write_memory.pil = pil_w;
 
     // Parse required arguments - data
     cJSON *data = cJSON_GetObjectItem(args, "data");

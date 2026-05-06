@@ -982,16 +982,18 @@ int handle_read_memory_command(DAPClient* client, const char* args) {
     if (!client) return 0;
 
     if (!args || !*args) {
-        printf("Usage: x [prefix:]<address> [count]\n");
+        printf("Usage: x [prefix:]<address>[@pil] [count]\n");
         printf("  prefix:  phys: P: ispace: I: dspace: D: (optional)\n");
         printf("  address: Octal (0177), hex (0xFF), or decimal address\n");
+        printf("  @pil:    @N (N=0-15) read via PIL N's page table (optional)\n");
         printf("  count:   Number of words to read (default: 16)\n");
         printf("Examples:\n");
         printf("  x 0100              - Read 16 words at virtual octal 0100\n");
         printf("  x 0x40 32           - Read 32 words at hex 0x40\n");
         printf("  x phys:0x10000 8    - Read 8 words from physical memory\n");
         printf("  x ispace:0xBA60 10  - Read 10 words from I-space\n");
-        printf("  x dspace:0xBA60 10  - Read 10 words from D-space\n");
+        printf("  x dspace:0xBA60@0   - Read from D-space, PIL 0's page table\n");
+        printf("  x 0x1000@1 16       - Read 16 words via PIL 1's page table\n");
         return 0;
     }
 
@@ -1001,25 +1003,27 @@ int handle_read_memory_command(DAPClient* client, const char* args) {
     char* addr_str = strtok(args_copy, " ");
     char* count_str = strtok(NULL, " ");
 
-    // Parse address-space prefix
-    DAPDataBreakpointAddressSpace addr_space = DAP_DATA_BP_ADDR_VIRTUAL;
+    // Extract numeric address (after prefix, before @PIL) for display
     const char *num_str = addr_str;
-    if (strncmp(addr_str, "phys:", 5) == 0) { num_str += 5; addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(addr_str, "P:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_PHYSICAL; }
-    else if (strncmp(addr_str, "ispace:", 7) == 0) { num_str += 7; addr_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(addr_str, "I:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_ISPACE; }
-    else if (strncmp(addr_str, "dspace:", 7) == 0) { num_str += 7; addr_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(addr_str, "D:", 2) == 0) { num_str += 2; addr_space = DAP_DATA_BP_ADDR_DSPACE; }
-    else if (strncmp(addr_str, "virt:", 5) == 0) { num_str += 5; }
-    else if (strncmp(addr_str, "V:", 2) == 0) { num_str += 2; }
+    if (strncmp(num_str, "phys:", 5) == 0) num_str += 5;
+    else if (strncmp(num_str, "P:", 2) == 0) num_str += 2;
+    else if (strncmp(num_str, "ispace:", 7) == 0) num_str += 7;
+    else if (strncmp(num_str, "I:", 2) == 0) num_str += 2;
+    else if (strncmp(num_str, "dspace:", 7) == 0) num_str += 7;
+    else if (strncmp(num_str, "D:", 2) == 0) num_str += 2;
+    else if (strncmp(num_str, "virt:", 5) == 0) num_str += 5;
+    else if (strncmp(num_str, "V:", 2) == 0) num_str += 2;
 
     uint32_t address = (uint32_t)strtoul(num_str, NULL, 0);
     int count = count_str ? atoi(count_str) : 16;
     if (count <= 0) count = 16;
     if (count > 512) count = 512;
 
+    // Send the full address string (with prefix + @PIL) as memoryReference.
+    // The server parses prefix and @PIL from the string.
     DAPReadMemoryResult result = {0};
-    int error = dap_client_read_memory_ex(client, address, 0, count, addr_space, &result);
+    int error = dap_client_read_memory(client, address, 0, count, &result);
+    // TODO: pass full addr_str through when C client supports string-based memoryReference
 
     if (error != DAP_ERROR_NONE) {
         printf("Error reading memory at 0%06o: %d\n", address, error);

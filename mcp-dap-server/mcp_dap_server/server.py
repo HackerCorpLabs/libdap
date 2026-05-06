@@ -230,15 +230,45 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         # Memory & Disassembly
+        #
+        # Address encoding for all memory/disassembly tools:
+        #   [prefix:]address[@pil]
+        #
+        # Prefixes (optional, default=virtual):
+        #   phys:   - Physical address (bypass MMU)
+        #   ispace: - I-space (instruction page table, PT field of PCR)
+        #   dspace: - D-space (data page table, APT field of PCR)
+        #   virt:   - Virtual address (explicit default)
+        #   Short forms: P:, I:, D:, V:
+        #
+        # @PIL suffix (optional, default=current PIL):
+        #   @N where N=0-15 selects which PIL's page table to use.
+        #   Useful for inspecting user process memory (PIL 1) while
+        #   stopped in kernel (PIL 0 or 14).
+        #
+        # Examples:
+        #   "0x1000"           - virtual, current PIL
+        #   "ispace:0xBA60"    - I-space (overlay code), current PIL
+        #   "dspace:0xBA60@0"  - D-space, PIL 0's page table
+        #   "0x1000@1"         - virtual, PIL 1's page table
+        #   "phys:0x10000"     - physical (PIL ignored)
+        #
         Tool(
             name="debug_read_memory",
-            description="Read memory from the debuggee. Returns hex dump with ASCII representation. "
-                        "Prefix address with phys: for physical, ispace: for I-space (instruction PT), "
-                        "dspace: for D-space (data APT). Default is virtual.",
+            description="Read memory from the debuggee. Returns hex dump. "
+                        "Address format: [prefix:]address[@pil]. "
+                        "Prefixes: phys: (physical), ispace: (instruction PT), dspace: (data PT). "
+                        "Append @N (N=0-15) to read via a specific PIL's page table. "
+                        "Examples: '0x1000', 'ispace:0xBA60', 'dspace:0xBA60@0', 'phys:0x10000'.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000'). Prefix with phys:, ispace:, or dspace: for address space selection."},
+                    "address": {
+                        "type": "string",
+                        "description": "Memory address: [prefix:]hex_addr[@pil]. "
+                            "Prefixes: phys:/P:, ispace:/I:, dspace:/D: (default: virtual). "
+                            "Suffix @N: use PIL N's page table (default: current PIL).",
+                    },
                     "count": {"type": "integer", "default": 256, "description": "Number of bytes to read"},
                 },
                 "required": ["address"],
@@ -247,11 +277,17 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="debug_write_memory",
             description="Write memory to the debuggee. "
-                        "Prefix address with phys: for physical, ispace: for I-space, dspace: for D-space.",
+                        "Address format: [prefix:]address[@pil]. "
+                        "Prefixes: phys:, ispace:, dspace:. Suffix @N for specific PIL.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000'). Prefix with phys:, ispace:, or dspace: for address space selection."},
+                    "address": {
+                        "type": "string",
+                        "description": "Memory address: [prefix:]hex_addr[@pil]. "
+                            "Prefixes: phys:/P:, ispace:/I:, dspace:/D: (default: virtual). "
+                            "Suffix @N: use PIL N's page table (default: current PIL).",
+                    },
                     "data": {"type": "string", "description": "Hex string of bytes to write (e.g., '48454C4C4F')"},
                 },
                 "required": ["address", "data"],
@@ -259,11 +295,20 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="debug_disassemble",
-            description="Disassemble instructions at a memory address.",
+            description="Disassemble instructions at a memory address. "
+                        "Address format: [prefix:]address[@pil]. "
+                        "Prefixes: ispace: (default for disassembly), dspace:, phys:. "
+                        "Suffix @N for specific PIL's page table. "
+                        "Examples: '0x1000', '0x1000@1' (PIL 1's view), 'ispace:0xBA60@0'.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {"type": "string", "description": "Memory address (hex string like '0x1000')"},
+                    "address": {
+                        "type": "string",
+                        "description": "Memory address: [prefix:]hex_addr[@pil]. "
+                            "Prefixes: ispace:/I: (default), dspace:/D:, phys:/P:. "
+                            "Suffix @N: use PIL N's page table (default: current PIL).",
+                    },
                     "count": {"type": "integer", "default": 20, "description": "Number of instructions"},
                 },
                 "required": ["address"],

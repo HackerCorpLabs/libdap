@@ -23,6 +23,7 @@ void print_usage(const char* program_name) {
     printf("  -e, --stop-on-entry       Force stop at program entry point (default)\n");
     printf("  -E, --no-stop-on-entry    Don't stop at program entry point\n");
     printf("  -A, --auto-launch         Enable auto-launch\n");
+    printf("  -t, --attach              Attach to running target (no launch, pause + inspect)\n");
     printf("  -a, --args ARGS           Program arguments (comma-separated)\n");
     printf("  -v, --env VARS            Environment variables (NAME=VALUE,...)\n");
     printf("  -w, --cwd DIR             Working directory\n");

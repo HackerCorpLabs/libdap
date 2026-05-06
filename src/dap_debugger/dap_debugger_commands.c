@@ -980,18 +980,13 @@ int handle_attach_command(DAPClient* client, const char* args) {
     // 1. Pause the CPU
     printf("Pausing target...\n");
     DAPPauseResult pause_result = {0};
-    int perr = dap_client_pause(client, client->thread_id, &pause_result);
+    int perr = dap_client_pause(client, client->thread_id > 0 ? client->thread_id : 1, &pause_result);
     if (perr != DAP_ERROR_NONE) {
         printf("Warning: pause returned %d (target may already be stopped)\n", perr);
     }
 
-    // Give server time to process + drain stopped event
-    usleep(100000);
-    for (int drain = 0; drain < 10; drain++) {
-        char *msg = dap_client_receive_message(client, 100);
-        if (!msg) break;
-        free(msg);
-    }
+    // Give server time to process the pause
+    usleep(200000); // 200ms
 
     // 2. Threads
     DAPThread *threads = NULL;

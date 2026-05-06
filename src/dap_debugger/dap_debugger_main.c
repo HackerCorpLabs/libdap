@@ -261,7 +261,7 @@ int main(int argc, char* argv[]) {
     int opt;
     int option_index = 0;
     
-    while ((opt = getopt_long(argc, argv, "h:p:eEf:D:Aa:v:d:w:?", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "h:p:eEf:D:Ata:v:d:w:?", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'h':
                 host = optarg;
@@ -341,7 +341,7 @@ int main(int argc, char* argv[]) {
         input_file = argv[optind];
     }
 
-    if (!input_file) {
+    if (!input_file && !attach_mode) {
         print_usage(argv[0]);
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         if (program_args) cJSON_Delete(program_args);
@@ -349,10 +349,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Discover related files
-    printf("Discovering files for: %s\n", input_file);
-    FileSet* files = discover_files(input_file);
-    if (!files) {
+    // Discover related files (skip in attach mode -- no file needed)
+    FileSet* files = NULL;
+    if (input_file) {
+        printf("Discovering files for: %s\n", input_file);
+        files = discover_files(input_file);
+    }
+    if (!files && !attach_mode) {
         fprintf(stderr, "Failed to discover files for: %s\n", input_file);
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         if (program_args) cJSON_Delete(program_args);
@@ -361,10 +364,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Print discovered files
-    print_file_set(files);
+    if (files) print_file_set(files);
 
     // Validate files
-    if (!validate_file_set(files)) {
+    if (files && !validate_file_set(files)) {
         fprintf(stderr, "File validation failed\n");
         free_file_set(files);
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
@@ -373,7 +376,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    g_program_file = files->source_file ? files->source_file : files->program_file;  // Store primary file path
+    g_program_file = (files && files->source_file) ? files->source_file :
+                     (files && files->program_file) ? files->program_file : "(attached)";
     
     // Create client
     g_client = dap_client_create(host, port);
@@ -439,105 +443,17 @@ int main(int argc, char* argv[]) {
     }
     
     // In attach mode: skip launch, pause the CPU, and auto-inspect
+    // Uses existing command handlers for robustness
     if (attach_mode) {
-        printf("Attach mode: pausing CPU and inspecting state...\n");
+        printf("Attach mode: connecting to running target...\n");
 
-        // Pause the CPU
-        DAPPauseResult pause_result = {0};
-        int pause_err = dap_client_pause(g_client, g_client->thread_id, &pause_result);
-        if (pause_err != DAP_ERROR_NONE) {
-            printf("Warning: pause request returned %d (CPU may already be stopped)\n", pause_err);
-        }
+        // Set thread_id to 1 (default ND-100 thread)
+        g_client->thread_id = 1;
 
-        // Give the server a moment to process the pause
-        usleep(100000); // 100ms
+        // Use the attach command handler which does pause + inspect
+        handle_attach_command(g_client, NULL);
 
-        // Drain any pending events (especially the "stopped" event from pause)
-        for (int drain = 0; drain < 10; drain++) {
-            char *msg = dap_client_receive_message(g_client, 100);
-            if (!msg) break;
-            free(msg);
-        }
-
-        // Auto-inspect: threads
-        DAPThread *att_threads = NULL;
-        int att_num_threads = 0;
-        if (dap_client_get_threads(g_client, &att_threads, &att_num_threads) == 0) {
-            printf("\n--- Threads ---\n");
-            for (int i = 0; i < att_num_threads; i++) {
-                printf("  Thread %d: %s\n", att_threads[i].id,
-                       att_threads[i].name ? att_threads[i].name : "(unnamed)");
-            }
-            if (att_threads) {
-                for (int i = 0; i < att_num_threads; i++) free(att_threads[i].name);
-                free(att_threads);
-            }
-        }
-
-        // Auto-inspect: stack trace
-        DAPStackFrame *frames = NULL;
-        int frame_count = 0;
-        if (dap_client_get_stack_trace(g_client, g_client->thread_id, &frames, &frame_count) == 0 && frame_count > 0) {
-            printf("\n--- Stack Trace ---\n");
-            for (int i = 0; i < frame_count; i++) {
-                printf("  #%d  %s", i, frames[i].instruction_pointer_reference ?
-                       frames[i].instruction_pointer_reference : "???");
-                if (frames[i].name) printf(" in %s", frames[i].name);
-                if (frames[i].source_path) printf(" at %s:%d", frames[i].source_path, frames[i].line);
-                printf("\n");
-            }
-
-            // Auto-inspect: registers (find register scope from top frame)
-            DAPGetScopesResult scopes = {0};
-            if (dap_client_get_scopes(g_client, frames[0].id, &scopes) == 0) {
-                for (int s = 0; s < scopes.num_scopes; s++) {
-                    if (scopes.scopes[s].variables_reference > 0) {
-                        printf("\n--- %s ---\n", scopes.scopes[s].name ? scopes.scopes[s].name : "Scope");
-                        DAPGetVariablesResult vars = {0};
-                        if (dap_client_get_variables(g_client, scopes.scopes[s].variables_reference,
-                                                     0, 0, &vars) == 0) {
-                            for (int v = 0; v < vars.num_variables; v++) {
-                                printf("  %-6s = %s", vars.variables[v].name ? vars.variables[v].name : "?",
-                                       vars.variables[v].value ? vars.variables[v].value : "?");
-                                if (vars.variables[v].type) printf("  [%s]", vars.variables[v].type);
-                                printf("\n");
-                            }
-                            dap_get_variables_result_free(&vars);
-                        }
-                    }
-                }
-                // Free scopes
-                for (int s = 0; s < scopes.num_scopes; s++) free(scopes.scopes[s].name);
-                free(scopes.scopes);
-            }
-
-            // Auto-inspect: disassembly at PC
-            {
-                char pc_str[20];
-                snprintf(pc_str, sizeof(pc_str), "0x%x", frames[0].instruction_pointer_reference);
-                printf("\n--- Disassembly at PC (%s) ---\n", pc_str);
-                DAPDisassembleResult disasm = {0};
-                if (dap_client_disassemble_str(g_client, pc_str,
-                                               0, 0, 10, true, &disasm) == 0) {
-                    for (size_t d = 0; d < disasm.num_instructions; d++) {
-                        printf("  %s: %s", disasm.instructions[d].address,
-                               disasm.instructions[d].instruction);
-                        if (disasm.instructions[d].symbol) printf("  <%s>", disasm.instructions[d].symbol);
-                        printf("\n");
-                    }
-                    dap_disassemble_result_free(&disasm);
-                }
-            }
-
-            // Free frames
-            for (int i = 0; i < frame_count; i++) {
-                free(frames[i].name);
-                free(frames[i].source_path);
-            }
-            free(frames);
-        }
-
-        printf("\nAttached. Type commands or 'help' for available commands.\n");
+        printf("\nType commands or 'help' for available commands.\n");
 
         // Skip launch -- go directly to command loop
         goto enter_command_loop;

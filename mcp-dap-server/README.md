@@ -9,7 +9,7 @@ AI Assistant  <-- MCP (stdio) -->  MCP DAP Server  <-- DAP (TCP) -->  DAP Server
                                    (this project)                     (e.g. nd100x, VS Code debug adapter)
 ```
 
-The MCP server is a long-lived process that maintains stateful debugging sessions. It speaks DAP over TCP to the debug server and exposes 21 tools via MCP's stdio transport. All session state (connection, breakpoints, execution position) persists across tool calls.
+The MCP server is a long-lived process that maintains stateful debugging sessions. It speaks DAP over TCP to the debug server and exposes 26 tools via MCP's stdio transport. All session state (connection, breakpoints, watches, execution position) persists across tool calls.
 
 > **Reverse execution is intentionally absent.** RetroCore is a forward-only
 > instruction-stepping emulator and `stepBack` / `reverseContinue` will never be
@@ -67,26 +67,36 @@ claude mcp list
 
 ### Refreshing after you edit the server
 
-The MCP tool list is read once, when Claude Code starts the server process. Edits
-to `server.py` / `tools.py` are **not** visible to a running Claude Code session —
-in particular, adding or removing a `Tool(...)` entry needs a restart:
+The MCP tool list is read **once, when the server process starts** — the host calls
+`list_tools()` at startup. So the thing that has to happen after you add/remove a
+`Tool(...)` is: **the server process must be re-spawned.** Two clarifications that
+trip people up:
 
-1. If you only changed handler/source code, an editable (`pip install -e`) install
-   already has the new code on disk — just **fully restart Claude Code** so it
-   re-launches the server and re-queries `list_tools()`.
-2. If you changed dependencies or package metadata, re-run
-   `pip install -e E:\Dev\Emulators\libdap\mcp-dap-server` first, then restart.
-3. If the server fails to load (red status in `claude mcp list`), remove and
-   re-add it:
+- **You do NOT need to re-run `pip install -e` for code edits.** The editable
+  install means the files on disk *are* the running code. Re-install is only needed
+  if you change dependencies or package metadata in `pyproject.toml`.
+- **Restarting ≠ re-installing.** What you need is a process restart so `list_tools()`
+  runs again — not a reinstall.
+
+How to make the new tools appear:
+
+1. **Restart / reconnect the MCP server** so its process is re-spawned. In Claude
+   Code, reconnecting the `dap-debugger` server (e.g. via `/mcp`) or fully
+   restarting Claude Code both re-launch the process and re-query `list_tools()`.
+   Reconnecting to the *same still-running* process is **not** enough — it reuses
+   the cached tool list.
+2. Only if you changed dependencies/metadata: re-run
+   `pip install -e E:\Dev\Emulators\libdap\mcp-dap-server`, then restart.
+3. If the server fails to load (red status in `claude mcp list`), remove and re-add:
    ```powershell
    claude mcp remove dap-debugger
    claude mcp add --scope user dap-debugger -- "C:\Users\ronny\AppData\Local\Programs\Python\Python311\python.exe" -m mcp_dap_server.server
    ```
 
 > The C# DAP backend (`DapDebugSession.cs` in the RetroCore repo) owns the actual
-> DAP commands; this Python MCP server is a thin forwarder. New DAP commands are
-> usable from the MCP only after a corresponding tool is added here **and** Claude
-> Code is restarted.
+> DAP commands; this Python MCP server is a thin forwarder. A new DAP command is
+> usable from the MCP only after a corresponding tool is added here **and** the
+> server process is restarted.
 
 ### Standalone
 
@@ -121,6 +131,17 @@ Launch a program for debugging. The program path is sent to the DAP server which
 | `map_file` | string | No | Path to `.srcmap` file for source-level debugging (C and assembly source lines, C functions, parameters, local variables) |
 
 Returns: Launch status and initial stopped event (if stop_on_entry is true).
+
+#### `debug_attach`
+Attach to an already-running debuggee (e.g. a live emulator) instead of launching a program. Sends `configurationDone` and, by default, pauses so the target can be inspected. Call `debug_connect` first.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source_file` | string | - | Optional source file for source-level debugging |
+| `map_file` | string | - | Optional `.srcmap` file for symbols |
+| `stop` | boolean | `true` | Pause the target after attaching so it can be inspected |
+
+Returns: `{ status: "attached", stopped, state }`.
 
 #### `debug_disconnect`
 Disconnect from the DAP server and optionally terminate the debuggee.
@@ -295,6 +316,19 @@ Evaluate an expression in the debuggee context.
 | `frame_id` | integer | No (default: 0) | Stack frame ID for context |
 
 Returns: Result value, type, and optional variable reference.
+
+#### Watch expressions
+
+A persistent list of expressions, re-evaluated together via the `evaluate` command —
+the MCP equivalent of the GUI's Watch panel. Purely a convenience: an LLM can call
+`debug_evaluate` directly instead. The list is cleared on connect/disconnect.
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `debug_add_watch` | `expression` (string, required) | Add an expression to the watch list (deduped) |
+| `debug_remove_watch` | `index` (integer, required) | Remove the watch at a zero-based index |
+| `debug_clear_watches` | — | Remove all watches |
+| `debug_evaluate_watches` | `frame_id` (integer, default 0) | Evaluate all watches; returns `[{expression, value, type}|{expression, error}]` |
 
 #### `debug_threads`
 Get list of threads. No parameters.

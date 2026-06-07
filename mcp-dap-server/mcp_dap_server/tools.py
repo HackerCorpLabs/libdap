@@ -30,6 +30,8 @@ class DAPDebugger:
         self._instruction_breakpoints: list[dict[str, Any]] = []
         # Symbol cache: fetched once from DAP, filtered locally
         self._symbol_cache: list[dict[str, Any]] | None = None
+        # Watch expressions — client-side convenience evaluated via the DAP evaluate command
+        self._watches: list[str] = []
 
     def _check_connected(self) -> None:
         if not self.conn.connected:
@@ -51,6 +53,7 @@ class DAPDebugger:
         self._source_breakpoints.clear()
         self._instruction_breakpoints.clear()
         self._symbol_cache = None
+        self._watches.clear()
 
         self.host = host
         self.port = port
@@ -129,6 +132,52 @@ class DAPDebugger:
 
         return fmt.format_launch_status(response, stopped_event)
 
+    async def attach(
+        self, source_file: str | None = None, map_file: str | None = None,
+        stop: bool = True,
+    ) -> dict[str, Any]:
+        """Attach to an already-running debuggee (e.g. a live emulator).
+
+        Unlike launch, attach does not load a program — it connects the debugger to
+        a target that is already executing. After attaching it sends
+        configurationDone, and (when stop=True) pauses so the target can be inspected.
+        Requires debug_connect first.
+        """
+        self._check_connected()
+
+        args: dict[str, Any] = {}
+        if source_file:
+            args["sourceFile"] = source_file
+        if map_file:
+            args["mapFile"] = map_file
+
+        response = await self.conn.send_request("attach", args)
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+
+        # Send configurationDone (same handshake as launch).
+        cfg_resp = await self.conn.send_request("configurationDone")
+        self._check_response(cfg_resp)
+
+        self.debugger_state = "running"
+
+        stopped = False
+        if stop:
+            # Pause the running target so registers/memory can be inspected.
+            try:
+                await self.conn.send_request("pause", {"threadId": 1})
+                ev = await self.conn.wait_for_event(
+                    {"stopped", "terminated", "exited"}, timeout=10.0
+                )
+                if ev and ev.get("event") == "stopped":
+                    self.debugger_state = "stopped"
+                    stopped = True
+            except Exception as exc:
+                logger.debug("attach pause failed: %s", exc)
+
+        return {"status": "attached", "stopped": stopped, "state": self.debugger_state}
+
     async def disconnect(self, terminate: bool = True) -> dict[str, Any]:
         """Disconnect from the DAP server."""
         if not self.conn.connected:
@@ -147,6 +196,7 @@ class DAPDebugger:
         self._source_breakpoints.clear()
         self._instruction_breakpoints.clear()
         self._symbol_cache = None
+        self._watches.clear()
         return {"status": "disconnected"}
 
     async def status(self) -> dict[str, Any]:
@@ -587,6 +637,61 @@ class DAPDebugger:
         if "error" in err:
             return err
         return fmt.format_evaluate(response)
+
+    # ── Watch expressions (client-side convenience over evaluate) ───────
+    #
+    # The MCP keeps a small list of expressions and re-evaluates them on demand
+    # via the DAP evaluate command — mirroring the GUI debugger's Watch panel.
+    # An LLM can equally call debug_evaluate directly; these tools just persist a
+    # set of expressions so they can be re-checked after each stop in one call.
+
+    async def add_watch(self, expression: str) -> dict[str, Any]:
+        """Add an expression to the watch list (no-op if already present)."""
+        expr = (expression or "").strip()
+        if not expr:
+            return {"error": True, "message": "empty watch expression"}
+        if expr not in self._watches:
+            self._watches.append(expr)
+        return {"watches": list(self._watches)}
+
+    async def remove_watch(self, index: int) -> dict[str, Any]:
+        """Remove the watch expression at the given index."""
+        if 0 <= index < len(self._watches):
+            self._watches.pop(index)
+        else:
+            return {"error": True, "message": f"index {index} out of range (0..{len(self._watches) - 1})"}
+        return {"watches": list(self._watches)}
+
+    async def clear_watches(self) -> dict[str, Any]:
+        """Remove all watch expressions."""
+        self._watches.clear()
+        return {"watches": []}
+
+    async def evaluate_watches(self, frame_id: int = 0) -> dict[str, Any]:
+        """Evaluate every watch expression in the given frame and return the values."""
+        self._check_connected()
+        results: list[dict[str, Any]] = []
+        for expr in self._watches:
+            args: dict[str, Any] = {"expression": expr, "context": "watch"}
+            if frame_id is not None and frame_id >= 0:
+                args["frameId"] = frame_id
+            try:
+                response = await self.conn.send_request("evaluate", args)
+                if response.get("success", False):
+                    body = response.get("body", {})
+                    results.append({
+                        "expression": expr,
+                        "value": body.get("result"),
+                        "type": body.get("type"),
+                    })
+                else:
+                    results.append({
+                        "expression": expr,
+                        "error": fmt.format_error(response).get("message", "evaluation failed"),
+                    })
+            except Exception as exc:
+                results.append({"expression": expr, "error": str(exc)})
+        return {"watches": results}
 
     # ── Memory & Disassembly ────────────────────────────────────────────
 

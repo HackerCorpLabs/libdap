@@ -61,6 +61,19 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="debug_attach",
+            description="Attach to an already-running debuggee (e.g. a live emulator) instead of launching a program. "
+                        "Sends configurationDone and, by default, pauses so the target can be inspected. Call debug_connect first.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_file": {"type": "string", "description": "Optional source file for source-level debugging"},
+                    "map_file": {"type": "string", "description": "Optional .srcmap file for symbols"},
+                    "stop": {"type": "boolean", "default": True, "description": "Pause the target after attaching so it can be inspected"},
+                },
+            },
+        ),
+        Tool(
             name="debug_disconnect",
             description="Disconnect from the DAP server and optionally terminate the debuggee.",
             inputSchema={
@@ -212,6 +225,44 @@ async def list_tools() -> list[Tool]:
                     "frame_id": {"type": "integer", "default": 0, "description": "Stack frame ID for context"},
                 },
                 "required": ["expression"],
+            },
+        ),
+        Tool(
+            name="debug_add_watch",
+            description="Add an expression to the persistent watch list (re-evaluated together via debug_evaluate_watches). "
+                        "Convenience over debug_evaluate; mirrors the GUI Watch panel.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "description": "Expression to watch (e.g. a register name or symbol)"},
+                },
+                "required": ["expression"],
+            },
+        ),
+        Tool(
+            name="debug_remove_watch",
+            description="Remove the watch expression at the given index (see debug_evaluate_watches output order).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "Zero-based index of the watch to remove"},
+                },
+                "required": ["index"],
+            },
+        ),
+        Tool(
+            name="debug_clear_watches",
+            description="Remove all watch expressions.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="debug_evaluate_watches",
+            description="Evaluate every watch expression in one call and return their current values.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "frame_id": {"type": "integer", "default": 0, "description": "Stack frame for evaluation context"},
+                },
             },
         ),
         Tool(
@@ -416,6 +467,12 @@ async def _dispatch(name: str, args: dict) -> dict | list:
                 map_file=args.get("map_file"),
                 text_start=args.get("text_start"),
             )
+        case "debug_attach":
+            return await debugger.attach(
+                source_file=args.get("source_file"),
+                map_file=args.get("map_file"),
+                stop=args.get("stop", True),
+            )
         case "debug_disconnect":
             return await debugger.disconnect(terminate=args.get("terminate", True))
         case "debug_status":
@@ -480,6 +537,14 @@ async def _dispatch(name: str, args: dict) -> dict | list:
                 expression=args["expression"],
                 frame_id=args.get("frame_id", 0),
             )
+        case "debug_add_watch":
+            return await debugger.add_watch(expression=args["expression"])
+        case "debug_remove_watch":
+            return await debugger.remove_watch(index=args["index"])
+        case "debug_clear_watches":
+            return await debugger.clear_watches()
+        case "debug_evaluate_watches":
+            return await debugger.evaluate_watches(frame_id=args.get("frame_id", 0))
         case "debug_threads":
             return await debugger.threads()
 

@@ -35,6 +35,12 @@ This project implements a Debug Adapter Protocol (DAP) server and client - to be
   - Scopes examination with reference tracking
   - **Memory dump functionality** with professional hex output
   - Disassembly support
+- **Custom command extensions**:
+  - Terminal console capture/input (`consoleEnable` / `consoleWrite`)
+  - Bulk symbol fetch (`symbolList`)
+  - **CPU instruction trace ring** (`setCpuTracing` / `getCpuTraceRing`) — record
+    the last N retired instructions and read them back after a stop; the
+    forward-only substitute for reverse execution
 - **Smart User Experience**:
   - Parameter validation with helpful error messages
   - Cached values for seamless command chaining

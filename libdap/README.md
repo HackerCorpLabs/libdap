@@ -141,6 +141,24 @@ dap_client_free(client);
 - [x] scopes/variables
 - [x] source
 - [x] threads
+- [x] readMemory/writeMemory
+- [x] disassemble
+- [x] setInstructionBreakpoints/setDataBreakpoints
+- [x] evaluate
+
+### Custom command extensions
+- [x] consoleEnable / consoleWrite — terminal capture and keyboard input
+- [x] symbolList — bulk symbol fetch
+- [x] setCpuTracing / getCpuTraceRing — CPU instruction trace ring (RetroCore).
+  `setCpuTracing` enables tracing + (re-)allocates the ring + sets/clears a
+  single-PC filter; `getCpuTraceRing` returns an oldest-first snapshot of the
+  last N retired instructions (`pc` / `opCode` / `opCodeName` / `text`). These
+  degrade to a "not implemented" error response if the server registers no
+  callback for them.
+
+### Intentionally unsupported
+- [ ] stepBack / reverseContinue — reverse execution is out of scope; this is a
+  forward-only stepping model. Use the trace ring above to inspect history.
 
 ### Events
 - [x] stopped

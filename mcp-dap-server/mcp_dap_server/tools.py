@@ -201,7 +201,7 @@ class DAPDebugger:
 
         # Wait for stopped event. Use a shorter initial timeout for step
         # commands since some servers don't send stopped events for steps.
-        is_step = command in ("next", "stepIn", "stepOut", "stepBack")
+        is_step = command in ("next", "stepIn", "stepOut")
         initial_timeout = 2.0 if is_step else timeout
 
         event = await self.conn.wait_for_event(
@@ -278,12 +278,6 @@ class DAPDebugger:
         """Step out."""
         return await self._execute_and_wait("stepOut", {"threadId": thread_id})
 
-    async def step_back(self, thread_id: int = 1) -> dict[str, Any]:
-        """Step back (requires server supportsStepBack capability)."""
-        if not self.capabilities.get("supportsStepBack", False):
-            return {"error": True, "message": "Server does not support stepBack"}
-        return await self._execute_and_wait("stepBack", {"threadId": thread_id})
-
     async def pause(self, thread_id: int = 1) -> dict[str, Any]:
         """Pause execution."""
         self._check_connected()
@@ -292,6 +286,55 @@ class DAPDebugger:
         if "error" in err:
             return err
         return {"status": "pause requested"}
+
+    # ── CPU execution tracing (RetroCore-custom) ────────────────────────
+
+    async def set_cpu_tracing(
+        self,
+        enabled: bool | None = None,
+        ring_capacity: int | None = None,
+        pc_filter: int | None = None,
+    ) -> dict[str, Any]:
+        """Enable/disable CPU tracing and size the ring buffer (RetroCore-custom).
+
+        Maps to the DAP 'setCpuTracing' command. Only the provided fields are sent,
+        except pc_filter which always rides along (omitting it clears the filter,
+        matching the server's documented 'trace on <pc>' / 'trace on' semantics).
+        """
+        self._check_connected()
+
+        args: dict[str, Any] = {}
+        if enabled is not None:
+            args["enabled"] = enabled
+        if ring_capacity is not None:
+            args["ringCapacity"] = ring_capacity
+        if pc_filter is not None:
+            args["pcFilter"] = pc_filter
+
+        response = await self.conn.send_request("setCpuTracing", args)
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+        return response.get("body", {})
+
+    async def get_cpu_trace_ring(self, max_entries: int = 0) -> dict[str, Any]:
+        """Read back the CPU trace ring buffer, oldest-first (RetroCore-custom).
+
+        Maps to the DAP 'getCpuTraceRing' command. Returns the response body:
+        header, ringCapacity, totalInstructionsExecuted, and entries[] where each
+        entry carries pc, opCode, opCodeName, and text.
+        """
+        self._check_connected()
+
+        args: dict[str, Any] = {}
+        if max_entries > 0:
+            args["maxEntries"] = max_entries
+
+        response = await self.conn.send_request("getCpuTraceRing", args)
+        err = self._check_response(response)
+        if "error" in err:
+            return err
+        return response.get("body", {})
 
     # ── Breakpoints ─────────────────────────────────────────────────────
 

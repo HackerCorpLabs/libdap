@@ -119,16 +119,6 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="debug_step_back",
-            description="Step back to the previous execution point (requires reverse execution support).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "thread_id": {"type": "integer", "default": 1},
-                },
-            },
-        ),
-        Tool(
             name="debug_pause",
             description="Pause program execution.",
             inputSchema={
@@ -348,6 +338,38 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        # CPU execution tracing (RetroCore-custom DAP extension)
+        #
+        # The CPU records the last N retired instructions into a circular ring
+        # buffer. After a breakpoint or crash, read the ring back to see exactly
+        # how execution reached the current point. This is the supported substitute
+        # for reverse execution (stepBack/reverseContinue are never supported).
+        Tool(
+            name="debug_set_cpu_tracing",
+            description="Enable/disable CPU execution tracing and (re-)allocate the trace ring buffer "
+                        "(RetroCore-custom). Turn tracing on and size the ring, then run to a breakpoint "
+                        "and read it back with debug_get_cpu_trace_ring. Forwards to the DAP 'setCpuTracing' command.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "description": "Master trace switch. Omit to leave unchanged."},
+                    "ring_capacity": {"type": "integer", "description": "Ring-buffer capacity (number of instructions to retain). 0 disables the ring; omit to leave it unchanged."},
+                    "pc_filter": {"type": "integer", "description": "Optional single PC to trace exclusively (all other instructions are skipped). Omit/null to clear the filter and trace everything."},
+                },
+            },
+        ),
+        Tool(
+            name="debug_get_cpu_trace_ring",
+            description="Read back the CPU trace ring buffer: the last N retired instructions, oldest-first "
+                        "(RetroCore-custom). Each entry has pc, opCode, opCodeName (bare mnemonic), and text "
+                        "(the full formatted disassembly+registers line). Forwards to the DAP 'getCpuTraceRing' command.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "max_entries": {"type": "integer", "default": 0, "description": "Max entries to return, most-recent N (0 = all retained)"},
+                },
+            },
+        ),
         # Symbol listing (custom DAP extension)
         Tool(
             name="debug_symbol_list",
@@ -414,8 +436,6 @@ async def _dispatch(name: str, args: dict) -> dict | list:
             )
         case "debug_step_out":
             return await debugger.step_out(thread_id=args.get("thread_id", 1))
-        case "debug_step_back":
-            return await debugger.step_back(thread_id=args.get("thread_id", 1))
         case "debug_pause":
             return await debugger.pause(thread_id=args.get("thread_id", 1))
 
@@ -502,6 +522,18 @@ async def _dispatch(name: str, args: dict) -> dict | list:
                 symbol_type=args.get("symbolType", 0),
                 offset=args.get("offset", 0),
                 count=args.get("count", 0),
+            )
+
+        # CPU execution tracing (RetroCore-custom)
+        case "debug_set_cpu_tracing":
+            return await debugger.set_cpu_tracing(
+                enabled=args.get("enabled"),
+                ring_capacity=args.get("ring_capacity"),
+                pc_filter=args.get("pc_filter"),
+            )
+        case "debug_get_cpu_trace_ring":
+            return await debugger.get_cpu_trace_ring(
+                max_entries=args.get("max_entries", 0),
             )
 
         case _:

@@ -9,7 +9,13 @@ AI Assistant  <-- MCP (stdio) -->  MCP DAP Server  <-- DAP (TCP) -->  DAP Server
                                    (this project)                     (e.g. nd100x, VS Code debug adapter)
 ```
 
-The MCP server is a long-lived process that maintains stateful debugging sessions. It speaks DAP over TCP to the debug server and exposes 20 tools via MCP's stdio transport. All session state (connection, breakpoints, execution position) persists across tool calls.
+The MCP server is a long-lived process that maintains stateful debugging sessions. It speaks DAP over TCP to the debug server and exposes 21 tools via MCP's stdio transport. All session state (connection, breakpoints, execution position) persists across tool calls.
+
+> **Reverse execution is intentionally absent.** RetroCore is a forward-only
+> instruction-stepping emulator and `stepBack` / `reverseContinue` will never be
+> supported, so there is no `debug_step_back` tool. To inspect how execution
+> reached the current point, use the CPU trace ring (`debug_set_cpu_tracing` +
+> `debug_get_cpu_trace_ring`).
 
 ## Requirements
 
@@ -41,6 +47,46 @@ Add to your assistant's MCP server configuration (e.g. `~/.claude.json`):
   }
 }
 ```
+
+### For Claude Code
+
+Register the server with the Claude Code CLI (one-time). Use the editable install
+so source edits are picked up without re-packaging:
+
+```powershell
+pip install -e E:\Dev\Emulators\libdap\mcp-dap-server
+claude mcp add --scope user dap-debugger -- "C:\Users\ronny\AppData\Local\Programs\Python\Python311\python.exe" -m mcp_dap_server.server
+```
+
+Verify it loaded:
+
+```powershell
+claude mcp list
+# dap-debugger: ✓ Connected
+```
+
+### Refreshing after you edit the server
+
+The MCP tool list is read once, when Claude Code starts the server process. Edits
+to `server.py` / `tools.py` are **not** visible to a running Claude Code session —
+in particular, adding or removing a `Tool(...)` entry needs a restart:
+
+1. If you only changed handler/source code, an editable (`pip install -e`) install
+   already has the new code on disk — just **fully restart Claude Code** so it
+   re-launches the server and re-queries `list_tools()`.
+2. If you changed dependencies or package metadata, re-run
+   `pip install -e E:\Dev\Emulators\libdap\mcp-dap-server` first, then restart.
+3. If the server fails to load (red status in `claude mcp list`), remove and
+   re-add it:
+   ```powershell
+   claude mcp remove dap-debugger
+   claude mcp add --scope user dap-debugger -- "C:\Users\ronny\AppData\Local\Programs\Python\Python311\python.exe" -m mcp_dap_server.server
+   ```
+
+> The C# DAP backend (`DapDebugSession.cs` in the RetroCore repo) owns the actual
+> DAP commands; this Python MCP server is a thin forwarder. New DAP commands are
+> usable from the MCP only after a corresponding tool is added here **and** Claude
+> Code is restarted.
 
 ### Standalone
 
@@ -128,12 +174,9 @@ Step out of the current function.
 
 Returns: New location after returning from the function.
 
-#### `debug_step_back`
-Step back to the previous execution point. Requires reverse execution support from the DAP server (`supportsStepBack` capability). Returns an error if the server does not advertise this capability.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `thread_id` | integer | `1` | Thread to step back |
+> **No `debug_step_back`.** Reverse execution is never supported by this
+> forward-only emulator (see the note at the top of this README). Use the CPU
+> trace ring instead.
 
 #### `debug_pause`
 Pause program execution.
@@ -344,6 +387,57 @@ Returns:
 ```
 
 Both text and hex representations are provided. The `output` field has printable text (non-printable characters replaced with `.`), while `raw_hex` has exact byte values for detecting control characters and escape sequences.
+
+### CPU Execution Tracing (RetroCore-custom)
+
+The CPU records the last *N* retired instructions into a circular ring buffer.
+After a breakpoint or crash, read the ring to see exactly how execution reached
+the current point. This is the supported substitute for reverse execution.
+
+#### `debug_set_cpu_tracing`
+Enable/disable CPU execution tracing and (re-)allocate the trace ring buffer.
+Forwards to the DAP `setCpuTracing` command.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | boolean | unchanged | Master trace switch. Omit to leave as-is |
+| `ring_capacity` | integer | unchanged | Number of instructions to retain. `0` disables the ring; omit to leave as-is |
+| `pc_filter` | integer | cleared | Trace only the instruction at this PC (all others skipped). Omit/null clears the filter |
+
+Returns the state actually applied:
+```json
+{ "enabled": true, "ringEnabled": true, "ringCapacity": 256, "pcFilter": 4660 }
+```
+
+Note: `pc_filter` follows the legacy `trace on <pc>` / `trace on` semantics —
+omitting it on any call **clears** the filter, and the returned `pcFilter` echoes
+the value now in effect.
+
+#### `debug_get_cpu_trace_ring`
+Read back the ring buffer, oldest-first. Forwards to the DAP `getCpuTraceRing`
+command.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_entries` | integer | `0` | Most-recent N entries to return (`0` = all retained) |
+
+Returns:
+```json
+{
+  "header": "PC    OP  MNEMONIC  A  B  C ...",
+  "ringCapacity": 256,
+  "totalInstructionsExecuted": 105342,
+  "entries": [
+    { "pc": 4096, "opCode": 62, "opCodeName": "MVI", "text": "1000  3E  MVI A,#$05 ..." }
+  ]
+}
+```
+
+Each entry carries `pc`, `opCode`, the bare-mnemonic `opCodeName`, and the full
+pre-formatted disassembly+registers `text` line.
+
+**Typical flow:** `debug_set_cpu_tracing {enabled:true, ring_capacity:256}` →
+run to a breakpoint → `debug_get_cpu_trace_ring {max_entries:0}`.
 
 ## File Structure
 

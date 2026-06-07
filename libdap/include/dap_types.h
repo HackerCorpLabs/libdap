@@ -277,6 +277,20 @@ typedef struct {
     int line;                 /**< Source line (0 if unknown) */
 } DAPSymbol;
 
+/**
+ * @brief One CPU trace-ring entry for the getCpuTraceRing response (custom, RetroCore)
+ *
+ * Mirrors the emulator's ExecutionTrace on the wire. The implementation callback
+ * allocates op_code_name / text with malloc/strdup; the protocol handler frees them
+ * after serialising the response.
+ */
+typedef struct {
+    uint32_t pc;              /**< Program counter at which the instruction was fetched */
+    uint32_t opcode;          /**< Opcode word (low byte only for 8-bit CPUs) */
+    char *op_code_name;       /**< Bare mnemonic token (may be NULL/empty) */
+    char *text;               /**< Full pre-formatted trace line (may be NULL/empty) */
+} DAPTraceEntry;
+
 // Result types for various DAP responses
 typedef struct {
     bool success;

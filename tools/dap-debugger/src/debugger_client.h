@@ -113,6 +113,14 @@ struct ServerCapability {
     bool supported;
 };
 
+// One CPU trace-ring entry (custom DAP extension getCpuTraceRing).
+struct TraceRingEntry {
+    uint32_t pc;
+    uint32_t opcode;
+    std::string op_code_name;   // bare mnemonic
+    std::string text;           // full formatted disassembly+registers line
+};
+
 struct ScopeInfo {
     std::string name;
     int variables_reference;
@@ -208,6 +216,20 @@ public:
     void fetch_symbols();
     const std::vector<SymbolInfo>& symbols() const { return symbols_; }
 
+    // CPU execution tracing (custom DAP extension, RetroCore).
+    // set_cpu_tracing: when use_pc_filter is false the pcFilter arg is omitted,
+    // which clears any existing filter on the server.
+    void set_cpu_tracing(bool enabled, int ring_capacity, bool use_pc_filter, uint32_t pc_filter);
+    void get_cpu_trace_ring(int max_entries = 0);
+    bool cpu_tracing_enabled() const { return cpu_tracing_enabled_; }
+    bool cpu_trace_ring_enabled() const { return cpu_trace_ring_enabled_; }
+    int cpu_trace_ring_capacity() const { return cpu_trace_ring_capacity_; }
+    bool cpu_trace_has_pc_filter() const { return cpu_trace_has_pc_filter_; }
+    uint32_t cpu_trace_pc_filter() const { return cpu_trace_pc_filter_; }
+    uint64_t cpu_trace_total_instructions() const { return cpu_trace_total_instructions_; }
+    const std::string& cpu_trace_header() const { return cpu_trace_header_; }
+    const std::vector<TraceRingEntry>& cpu_trace_ring() const { return cpu_trace_ring_; }
+
     // Server capabilities
     const std::vector<ServerCapability>& server_capabilities() const { return server_capabilities_; }
 
@@ -300,6 +322,16 @@ private:
     std::vector<ThreadInfo> threads_;
     std::vector<SymbolInfo> symbols_;
     std::vector<ServerCapability> server_capabilities_;
+
+    // CPU trace ring (custom DAP extension)
+    bool cpu_tracing_enabled_ = false;
+    bool cpu_trace_ring_enabled_ = false;
+    int cpu_trace_ring_capacity_ = 0;
+    bool cpu_trace_has_pc_filter_ = false;
+    uint32_t cpu_trace_pc_filter_ = 0;
+    uint64_t cpu_trace_total_instructions_ = 0;
+    std::string cpu_trace_header_;
+    std::vector<TraceRingEntry> cpu_trace_ring_;
     std::vector<ModuleInfo> modules_;
     std::vector<ConsoleEntry> console_log_;
     std::vector<ProtocolEntry> protocol_log_;

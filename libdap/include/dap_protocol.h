@@ -99,6 +99,8 @@ typedef enum {
     DAP_CMD_CONSOLE_ENABLE,      ///< Console enable/disable request (custom)
     DAP_CMD_CONSOLE_WRITE,       ///< Console write input request (custom)
     DAP_CMD_SYMBOL_LIST,         ///< Symbol list request (custom)
+    DAP_CMD_SET_CPU_TRACING,     ///< Enable/disable CPU tracing + ring buffer (custom, RetroCore)
+    DAP_CMD_GET_CPU_TRACE_RING,  ///< Snapshot the CPU trace ring buffer (custom, RetroCore)
     //---
     DAP_WAIT_FOR_DEBUGGER,         ///Always called before any other DAP command to wait for the debugger to be ready for access to CPU registers and memory
     DAP_RELEASE_DEBUGGER,          ///Always called after all DAP commands to release the debugger

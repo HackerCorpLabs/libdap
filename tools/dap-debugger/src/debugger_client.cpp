@@ -1147,6 +1147,119 @@ void DebuggerClient::fetch_symbols()
 }
 
 // ---------------------------------------------------------------------------
+// CPU execution tracing (custom DAP extension, RetroCore)
+// ---------------------------------------------------------------------------
+
+void DebuggerClient::set_cpu_tracing(bool enabled, int ring_capacity,
+                                     bool use_pc_filter, uint32_t pc_filter)
+{
+    if (!impl_->client) return;
+
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddBoolToObject(args, "enabled", enabled);
+    cJSON_AddNumberToObject(args, "ringCapacity", ring_capacity);
+    // Omitting pcFilter clears the filter on the server (legacy "trace on" semantics).
+    if (use_pc_filter)
+        cJSON_AddNumberToObject(args, "pcFilter", (double)pc_filter);
+
+    log_protocol_sent("setCpuTracing", args);
+
+    char* resp_body = nullptr;
+    int rc = dap_client_send_request(impl_->client, DAP_CMD_SET_CPU_TRACING, args, &resp_body);
+    cJSON_Delete(args);
+
+    if (rc != DAP_ERROR_NONE) {
+        log(ConsoleEntry::Warning, "setCpuTracing not supported or failed");
+        free(resp_body);
+        return;
+    }
+
+    if (resp_body) {
+        cJSON* resp = cJSON_Parse(resp_body);
+        if (resp) {
+            cJSON* v;
+            v = cJSON_GetObjectItem(resp, "enabled");
+            cpu_tracing_enabled_ = v ? cJSON_IsTrue(v) : false;
+            v = cJSON_GetObjectItem(resp, "ringEnabled");
+            cpu_trace_ring_enabled_ = v ? cJSON_IsTrue(v) : false;
+            v = cJSON_GetObjectItem(resp, "ringCapacity");
+            cpu_trace_ring_capacity_ = v ? v->valueint : 0;
+            v = cJSON_GetObjectItem(resp, "pcFilter");
+            if (v && cJSON_IsNumber(v)) {
+                cpu_trace_has_pc_filter_ = true;
+                cpu_trace_pc_filter_ = (uint32_t)v->valuedouble;
+            } else {
+                cpu_trace_has_pc_filter_ = false;
+                cpu_trace_pc_filter_ = 0;
+            }
+            cJSON_Delete(resp);
+        }
+        free(resp_body);
+    }
+
+    log(ConsoleEntry::Info, std::string("CPU tracing ") +
+        (cpu_tracing_enabled_ ? "ON" : "off") + ", ring capacity=" +
+        std::to_string(cpu_trace_ring_capacity_));
+}
+
+void DebuggerClient::get_cpu_trace_ring(int max_entries)
+{
+    if (!impl_->client) return;
+
+    cJSON* args = cJSON_CreateObject();
+    if (max_entries > 0)
+        cJSON_AddNumberToObject(args, "maxEntries", max_entries);
+
+    log_protocol_sent("getCpuTraceRing", args);
+
+    char* resp_body = nullptr;
+    int rc = dap_client_send_request(impl_->client, DAP_CMD_GET_CPU_TRACE_RING, args, &resp_body);
+    cJSON_Delete(args);
+
+    if (rc != DAP_ERROR_NONE) {
+        log(ConsoleEntry::Warning, "getCpuTraceRing not supported or failed");
+        free(resp_body);
+        return;
+    }
+
+    cpu_trace_ring_.clear();
+    if (resp_body) {
+        cJSON* resp = cJSON_Parse(resp_body);
+        if (resp) {
+            cJSON* v = cJSON_GetObjectItem(resp, "header");
+            cpu_trace_header_ = (v && v->valuestring) ? v->valuestring : "";
+            v = cJSON_GetObjectItem(resp, "ringCapacity");
+            if (v) cpu_trace_ring_capacity_ = v->valueint;
+            v = cJSON_GetObjectItem(resp, "totalInstructionsExecuted");
+            cpu_trace_total_instructions_ = v ? (uint64_t)v->valuedouble : 0;
+
+            cJSON* entries = cJSON_GetObjectItem(resp, "entries");
+            if (entries && cJSON_IsArray(entries)) {
+                int n = cJSON_GetArraySize(entries);
+                for (int i = 0; i < n; i++) {
+                    cJSON* item = cJSON_GetArrayItem(entries, i);
+                    TraceRingEntry te;
+                    cJSON* f;
+                    f = cJSON_GetObjectItem(item, "pc");
+                    te.pc = f ? (uint32_t)f->valuedouble : 0;
+                    f = cJSON_GetObjectItem(item, "opCode");
+                    te.opcode = f ? (uint32_t)f->valuedouble : 0;
+                    f = cJSON_GetObjectItem(item, "opCodeName");
+                    te.op_code_name = (f && f->valuestring) ? f->valuestring : "";
+                    f = cJSON_GetObjectItem(item, "text");
+                    te.text = (f && f->valuestring) ? f->valuestring : "";
+                    cpu_trace_ring_.push_back(te);
+                }
+            }
+            cJSON_Delete(resp);
+        }
+        free(resp_body);
+    }
+
+    log(ConsoleEntry::Info, "Trace ring: " + std::to_string(cpu_trace_ring_.size()) + " entries");
+}
+
+// ---------------------------------------------------------------------------
 // Polling & event handling
 // ---------------------------------------------------------------------------
 

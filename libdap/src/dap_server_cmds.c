@@ -4429,3 +4429,175 @@ int handle_symbol_list(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 }
+
+/**
+ * @brief Free the entry array a getCpuTraceRing callback allocated into the context.
+ */
+static void free_cpu_trace_ring_ctx(GetCpuTraceRingContext *ctx)
+{
+    if (!ctx) return;
+    if (ctx->entries)
+    {
+        for (int i = 0; i < ctx->entry_count; i++)
+        {
+            free(ctx->entries[i].op_code_name);
+            free(ctx->entries[i].text);
+        }
+        free(ctx->entries);
+        ctx->entries = NULL;
+    }
+    free(ctx->header);
+    ctx->header = NULL;
+    ctx->entry_count = 0;
+}
+
+/**
+ * @brief Handle setCpuTracing request (custom DAP extension, RetroCore)
+ *
+ * Enables/disables CPU tracing and (re-)allocates the trace ring buffer, with an
+ * optional single-PC filter. Only the fields present on the wire are applied;
+ * omitting pcFilter clears the filter (legacy "trace on <pc>" / "trace on"
+ * semantics). The callback applies the request and fills the resp_* context
+ * fields; the response echoes the state actually in effect.
+ *
+ * Request args: { enabled?: bool, ringCapacity?: int, pcFilter?: uint }
+ * Response body: { enabled, ringEnabled, ringCapacity, pcFilter (number|null) }
+ */
+int handle_set_cpu_tracing(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_SET_CPU_TRACING;
+    server->current_command.request_seq = response->request_seq;
+    memset(&server->current_command.context.set_cpu_tracing, 0,
+           sizeof(SetCpuTracingContext));
+    SetCpuTracingContext *ctx = &server->current_command.context.set_cpu_tracing;
+
+    if (args)
+    {
+        cJSON *enabled = cJSON_GetObjectItem(args, "enabled");
+        if (enabled && cJSON_IsBool(enabled))
+        {
+            ctx->enabled = cJSON_IsTrue(enabled);
+            ctx->has_enabled = true;
+        }
+
+        cJSON *ring = cJSON_GetObjectItem(args, "ringCapacity");
+        if (ring && cJSON_IsNumber(ring))
+        {
+            ctx->ring_capacity = ring->valueint;
+            ctx->has_ring_capacity = true;
+        }
+
+        /* PC addresses can exceed INT_MAX, so read the double value. */
+        cJSON *pc = cJSON_GetObjectItem(args, "pcFilter");
+        if (pc && cJSON_IsNumber(pc))
+        {
+            ctx->pc_filter = (uint32_t)pc->valuedouble;
+            ctx->has_pc_filter = true;
+        }
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_SET_CPU_TRACING);
+    if (result != 0)
+    {
+        set_response_error(response, "setCpuTracing not implemented by this server");
+        return -1;
+    }
+
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+    cJSON_AddBoolToObject(body, "enabled", ctx->resp_enabled);
+    cJSON_AddBoolToObject(body, "ringEnabled", ctx->resp_ring_enabled);
+    cJSON_AddNumberToObject(body, "ringCapacity", ctx->resp_ring_capacity);
+    if (ctx->resp_has_pc_filter)
+        cJSON_AddNumberToObject(body, "pcFilter", (double)ctx->resp_pc_filter);
+    else
+        cJSON_AddNullToObject(body, "pcFilter");
+
+    set_response_success(response, body);
+    return 0;
+}
+
+/**
+ * @brief Handle getCpuTraceRing request (custom DAP extension, RetroCore)
+ *
+ * Returns an oldest-first snapshot of the CPU trace ring buffer — the last N
+ * retired instructions. The supported substitute for reverse execution.
+ *
+ * Request args: { maxEntries?: int }  (0/omitted = all retained)
+ * Response body: { header, ringCapacity, totalInstructionsExecuted, entries[] }
+ *   where each entry is { pc, opCode, opCodeName, text }.
+ */
+int handle_get_cpu_trace_ring(DAPServer *server, cJSON *args, DAPResponse *response)
+{
+    if (!server || !response)
+    {
+        set_response_error(response, "Invalid arguments");
+        return -1;
+    }
+
+    server->current_command.type = DAP_CMD_GET_CPU_TRACE_RING;
+    server->current_command.request_seq = response->request_seq;
+    memset(&server->current_command.context.get_cpu_trace_ring, 0,
+           sizeof(GetCpuTraceRingContext));
+    GetCpuTraceRingContext *ctx = &server->current_command.context.get_cpu_trace_ring;
+
+    if (args)
+    {
+        cJSON *max = cJSON_GetObjectItem(args, "maxEntries");
+        if (max && cJSON_IsNumber(max))
+            ctx->max_entries = max->valueint;
+    }
+
+    int result = dap_server_execute_callback(server, DAP_CMD_GET_CPU_TRACE_RING);
+    if (result != 0)
+    {
+        free_cpu_trace_ring_ctx(ctx);
+        set_response_error(response, "getCpuTraceRing not implemented by this server");
+        return -1;
+    }
+
+    cJSON *body = cJSON_CreateObject();
+    if (!body)
+    {
+        free_cpu_trace_ring_ctx(ctx);
+        set_response_error(response, "Failed to create response body");
+        return -1;
+    }
+
+    cJSON_AddStringToObject(body, "header", ctx->header ? ctx->header : "");
+    cJSON_AddNumberToObject(body, "ringCapacity", ctx->ring_capacity);
+    cJSON_AddNumberToObject(body, "totalInstructionsExecuted",
+                            (double)ctx->total_instructions_executed);
+
+    cJSON *entries = cJSON_CreateArray();
+    if (entries)
+    {
+        for (int i = 0; i < ctx->entry_count; i++)
+        {
+            cJSON *e = cJSON_CreateObject();
+            if (!e) continue;
+            cJSON_AddNumberToObject(e, "pc", (double)ctx->entries[i].pc);
+            cJSON_AddNumberToObject(e, "opCode", (double)ctx->entries[i].opcode);
+            cJSON_AddStringToObject(e, "opCodeName",
+                                    ctx->entries[i].op_code_name ? ctx->entries[i].op_code_name : "");
+            cJSON_AddStringToObject(e, "text",
+                                    ctx->entries[i].text ? ctx->entries[i].text : "");
+            cJSON_AddItemToArray(entries, e);
+        }
+        cJSON_AddItemToObject(body, "entries", entries);
+    }
+
+    set_response_success(response, body);
+    free_cpu_trace_ring_ctx(ctx);
+    return 0;
+}

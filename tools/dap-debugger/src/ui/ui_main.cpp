@@ -18,6 +18,7 @@ UIMain::UIMain()
     panel_symbols_ = new PanelSymbols();
     panel_server_info_ = new PanelServerInfo();
     panel_memory_ = new PanelMemory();
+    panel_cpu_tracing_ = new PanelCpuTracing();
 }
 
 UIMain::~UIMain()
@@ -33,6 +34,7 @@ UIMain::~UIMain()
     delete panel_symbols_;
     delete panel_server_info_;
     delete panel_memory_;
+    delete panel_cpu_tracing_;
 }
 
 void UIMain::setup_docking()
@@ -75,6 +77,7 @@ void UIMain::setup_docking()
     ImGui::DockBuilderDockWindow("Symbols", dock_main);
     ImGui::DockBuilderDockWindow("Server Info", dock_right_top);
     ImGui::DockBuilderDockWindow("Memory", dock_main);
+    ImGui::DockBuilderDockWindow("CPU Trace", dock_main);
 
     ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -122,6 +125,7 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     panel_symbols_->render(client);
     panel_server_info_->render(client);
     panel_memory_->render(client);
+    panel_cpu_tracing_->render(client);
 
     // Status bar
     render_status_bar(client);

@@ -81,7 +81,9 @@ static const char* command_strings[] = {
     "setExceptionFilters",
     "consoleEnable",
     "consoleWrite",
-    "symbolList"
+    "symbolList",
+    "setCpuTracing",
+    "getCpuTraceRing"
 };
 
 /**

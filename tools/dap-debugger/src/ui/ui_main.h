@@ -17,6 +17,7 @@ class PanelProtocol;
 class PanelSymbols;
 class PanelServerInfo;
 class PanelMemory;
+class PanelCpuTracing;
 
 class UIMain {
 public:
@@ -42,6 +43,7 @@ private:
     PanelSymbols* panel_symbols_;
     PanelServerInfo* panel_server_info_;
     PanelMemory* panel_memory_;
+    PanelCpuTracing* panel_cpu_tracing_;
 
     void handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config);
 
@@ -138,6 +140,19 @@ private:
     int  last_space_ = 0;
     uint32_t last_addr_ = 0;
     std::vector<unsigned char> data_;
+};
+
+class PanelCpuTracing {
+public:
+    void render(DebuggerClient& client);
+private:
+    bool enabled_ = false;
+    int ring_capacity_ = 256;
+    bool use_filter_ = false;
+    uint32_t pc_filter_ = 0;
+    int max_entries_ = 0;
+    bool auto_refresh_ = true;
+    ClientState last_state_ = ClientState::Disconnected;
 };
 
 class PanelProtocol {

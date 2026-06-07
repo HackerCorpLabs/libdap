@@ -583,6 +583,50 @@ typedef struct {
 } SymbolListContext;
 
 /**
+ * @struct SetCpuTracingContext
+ * @brief Context for setCpuTracing command (custom, RetroCore)
+ *
+ * The has_* flags signal that the corresponding field was present on the wire,
+ * so the implementation callback can leave unspecified settings untouched. The
+ * callback applies the request and fills the resp_* fields with the state that
+ * is actually in effect afterwards (echoed back to the client).
+ */
+typedef struct {
+    /* Request */
+    bool enabled;               /**< Requested master tracing on/off */
+    bool has_enabled;           /**< True if "enabled" was provided */
+    int ring_capacity;          /**< Requested ring capacity (0 disables) */
+    bool has_ring_capacity;     /**< True if "ringCapacity" was provided */
+    uint32_t pc_filter;         /**< Requested single-PC filter */
+    bool has_pc_filter;         /**< True if "pcFilter" was provided (else: clear filter) */
+    /* Response - filled by callback */
+    bool resp_enabled;          /**< Tracing enabled now */
+    bool resp_ring_enabled;     /**< Ring buffer allocated now */
+    int resp_ring_capacity;     /**< Ring capacity now (0 if disabled) */
+    bool resp_has_pc_filter;    /**< True if a PC filter is in effect */
+    uint32_t resp_pc_filter;    /**< The PC filter in effect (when resp_has_pc_filter) */
+} SetCpuTracingContext;
+
+/**
+ * @struct GetCpuTraceRingContext
+ * @brief Context for getCpuTraceRing command (custom, RetroCore)
+ *
+ * The callback allocates header (strdup) and the entries[] array (and each
+ * entry's op_code_name / text). The protocol handler frees them after building
+ * the response.
+ */
+typedef struct {
+    /* Request */
+    int max_entries;                       /**< Max most-recent entries to return (0 = all) */
+    /* Response - filled by callback */
+    char *header;                          /**< Column-layout header line (may be NULL) */
+    int ring_capacity;                     /**< Current ring capacity */
+    uint64_t total_instructions_executed;  /**< Monotonic retired-instruction counter */
+    DAPTraceEntry *entries;                /**< Allocated array of entries (oldest-first) */
+    int entry_count;                       /**< Number of entries in the array */
+} GetCpuTraceRingContext;
+
+/**
  * @typedef DAPCommandCallback
  * @brief Function signature for command implementation callbacks
  * 
@@ -697,6 +741,8 @@ struct DAPServer
             ConsoleEnableContext console_enable;    /**< Context for consoleEnable command */
             ConsoleWriteContext console_write;      /**< Context for consoleWrite command */
             SymbolListContext symbol_list;          /**< Context for symbolList command */
+            SetCpuTracingContext set_cpu_tracing;   /**< Context for setCpuTracing command */
+            GetCpuTraceRingContext get_cpu_trace_ring; /**< Context for getCpuTraceRing command */
         } context;
     } current_command;
 

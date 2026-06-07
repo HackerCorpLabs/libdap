@@ -1,5 +1,6 @@
 #include "ui_main.h"
 #include <imgui.h>
+#include <cstdio>
 
 void PanelStack::render(DebuggerClient& client)
 {
@@ -16,7 +17,11 @@ void PanelStack::render(DebuggerClient& client)
 
     const auto& frames = client.stack_frames();
     if (frames.empty()) {
-        ImGui::TextDisabled("No stack frames");
+        if (client.state() == ClientState::Stopped) {
+            ImGui::TextDisabled("Frame 0 (no caller history)");
+        } else {
+            ImGui::TextDisabled("No stack frames");
+        }
         ImGui::End();
         return;
     }
@@ -36,12 +41,35 @@ void PanelStack::render(DebuggerClient& client)
             bool is_selected = (selected_ == (int)i);
             ImGui::TableNextColumn();
             char label[32];
-            snprintf(label, sizeof(label), "%zu", i);
+            snprintf(label, sizeof(label), "#%zu", i);
             if (ImGui::Selectable(label, is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
                 selected_ = (int)i;
                 if (client.state() == ClientState::Stopped) {
                     client.refresh_variables(f.id);
                 }
+            }
+
+            // Right-click context menu on frame
+            char ctx_id[32];
+            snprintf(ctx_id, sizeof(ctx_id), "##frame_ctx_%zu", i);
+            if (ImGui::BeginPopupContextItem(ctx_id)) {
+                if (ImGui::MenuItem("Switch to this frame")) {
+                    selected_ = (int)i;
+                    if (client.state() == ClientState::Stopped) {
+                        client.refresh_variables(f.id);
+                    }
+                }
+                char addr_hex[16];
+                snprintf(addr_hex, sizeof(addr_hex), "0x%04X", f.instruction_pointer);
+                if (ImGui::MenuItem("Copy frame address")) {
+                    ImGui::SetClipboardText(addr_hex);
+                }
+                if (ImGui::MenuItem("Go to in disassembly")) {
+                    if (client.state() == ClientState::Stopped) {
+                        client.disassemble((uint32_t)f.instruction_pointer, 40);
+                    }
+                }
+                ImGui::EndPopup();
             }
 
             ImGui::TableNextColumn();

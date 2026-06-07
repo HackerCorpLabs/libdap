@@ -18,6 +18,10 @@ void PanelProtocol::render(DebuggerClient& client)
         last_count_ = 0;
     }
     ImGui::SameLine();
+    if (ImGui::Button("Copy All")) {
+        ImGui::SetClipboardText(text_buf_.c_str());
+    }
+    ImGui::SameLine();
     ImGui::Checkbox("Auto-scroll", &auto_scroll_);
 
     // Controls row 2: direction + type filters

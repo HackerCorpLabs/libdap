@@ -19,6 +19,7 @@ UIMain::UIMain()
     panel_server_info_ = new PanelServerInfo();
     panel_memory_ = new PanelMemory();
     panel_cpu_tracing_ = new PanelCpuTracing();
+    panel_watch_ = new PanelWatch();
 }
 
 UIMain::~UIMain()
@@ -35,6 +36,7 @@ UIMain::~UIMain()
     delete panel_server_info_;
     delete panel_memory_;
     delete panel_cpu_tracing_;
+    delete panel_watch_;
 }
 
 void UIMain::setup_docking()
@@ -75,7 +77,8 @@ void UIMain::setup_docking()
     ImGui::DockBuilderDockWindow("Terminal I/O", dock_bottom);
     ImGui::DockBuilderDockWindow("DAP Protocol Log", dock_bottom);
     ImGui::DockBuilderDockWindow("Symbols", dock_main);
-    ImGui::DockBuilderDockWindow("Server Info", dock_right_top);
+    ImGui::DockBuilderDockWindow("Debug Status", dock_right_top);
+    ImGui::DockBuilderDockWindow("Watch", dock_right_top);
     ImGui::DockBuilderDockWindow("Memory", dock_main);
     ImGui::DockBuilderDockWindow("CPU Trace", dock_main);
 
@@ -84,10 +87,11 @@ void UIMain::setup_docking()
 
 void UIMain::render(DebuggerClient& client, const AppConfig& config)
 {
-    // Full-window dockspace
+    // Full-window dockspace -- reserve bottom line for status bar
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float status_height = ImGui::GetFrameHeight();
     ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - status_height));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags host_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
@@ -126,6 +130,13 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     panel_server_info_->render(client);
     panel_memory_->render(client);
     panel_cpu_tracing_->render(client);
+    panel_watch_->render(client);
+
+    // Detect disconnect for reconnect banner
+    if (prev_state_ != ClientState::Disconnected && client.state() == ClientState::Disconnected) {
+        show_reconnect_ = true;
+    }
+    prev_state_ = client.state();
 
     // Status bar
     render_status_bar(client);
@@ -135,6 +146,7 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
 
     // Connect dialog
     if (show_connect_dialog_) {
+        connect_error_[0] = '\0';
         ImGui::OpenPopup("Connect to Server");
         show_connect_dialog_ = false;
     }
@@ -143,42 +155,52 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
         ImGui::InputInt("Port", &connect_port_);
         ImGui::Separator();
         ImGui::InputText("Program (optional)", launch_program_, sizeof(launch_program_));
-        ImGui::TextDisabled("Leave empty to connect without launching");
+        ImGui::TextDisabled("Leave empty to connect without launching (use Attach for running emulators)");
 
-        if (ImGui::Button("Connect", ImVec2(200, 0))) {
+        // Show error from previous attempt
+        if (connect_error_[0]) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", connect_error_);
+            ImGui::Spacing();
+        }
+
+        if (ImGui::Button("Connect & Launch", ImVec2(200, 0))) {
+            connect_error_[0] = '\0';
             client.connect(connect_host_, connect_port_);
-            if (client.state() == ClientState::Connected) {
+            if (client.state() != ClientState::Connected) {
+                snprintf(connect_error_, sizeof(connect_error_),
+                         "Connection failed: %s:%d", connect_host_, connect_port_);
+            } else {
                 client.initialize();
                 if (client.state() == ClientState::Initialized && launch_program_[0]) {
                     client.launch(launch_program_);
                 }
+                show_reconnect_ = false;
+                ImGui::CloseCurrentPopup();
             }
-            ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if (ImGui::Button("Attach & Inspect", ImVec2(200, 0))) {
-            // Connect, pause running target, auto-refresh state
+            connect_error_[0] = '\0';
             client.connect(connect_host_, connect_port_);
-            if (client.state() == ClientState::Connected) {
+            if (client.state() != ClientState::Connected) {
+                snprintf(connect_error_, sizeof(connect_error_),
+                         "Connection failed: %s:%d", connect_host_, connect_port_);
+            } else {
                 client.initialize();
                 if (client.state() == ClientState::Initialized) {
+                    client.attach();
                     client.pause();
-                    // Give server time to process pause
                     SDL_Delay(200);
-                    client.poll(); // Process stopped event
-                    client.refresh_threads();
-                    client.refresh_stack_trace();
-                    if (!client.stack_frames().empty()) {
-                        client.refresh_scopes(client.stack_frames()[0].id);
-                        client.refresh_variables(client.stack_frames()[0].id);
-                        client.disassemble(client.stack_frames()[0].instruction_pointer, 20);
-                    }
+                    client.poll();
                 }
+                show_reconnect_ = false;
+                ImGui::CloseCurrentPopup();
             }
-            ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            connect_error_[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -228,10 +250,11 @@ void UIMain::handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& 
 
     if (ImGui::IsKeyPressed(ImGuiKey_F5) && can_run)  client.do_continue();
     if (ImGui::IsKeyPressed(ImGuiKey_F6) && running)   client.pause();
-    if (ImGui::IsKeyPressed(ImGuiKey_F9) && stopped)   client.step_back();
+    if (ImGui::IsKeyPressed(ImGuiKey_F9) && stopped && client.has_capability("supportsStepBack"))
+        client.step_back();
     if (ImGui::IsKeyPressed(ImGuiKey_F10) && stopped)  client.step_over();
-    if (ImGui::IsKeyPressed(ImGuiKey_F11) && stopped)  client.step_in();
     if (ImGui::IsKeyPressed(ImGuiKey_F11) && ImGui::GetIO().KeyShift && stopped) client.step_out();
+    else if (ImGui::IsKeyPressed(ImGuiKey_F11) && stopped)  client.step_in();
 }
 
 void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
@@ -274,7 +297,8 @@ void UIMain::render_menu_bar(DebuggerClient& client, const AppConfig& config)
             if (ImGui::MenuItem("Step Over", "F10", false, stopped)) client.step_over();
             if (ImGui::MenuItem("Step In", "F11", false, stopped)) client.step_in();
             if (ImGui::MenuItem("Step Out", "Shift+F11", false, stopped)) client.step_out();
-            if (ImGui::MenuItem("Step Back", "F9", false, stopped)) client.step_back();
+            bool can_step_back = stopped && client.has_capability("supportsStepBack");
+            if (ImGui::MenuItem("Step Back", "F9", false, can_step_back)) client.step_back();
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -295,8 +319,22 @@ void UIMain::render_toolbar(DebuggerClient& client)
         if (ImGui::Button("Connect")) {
             show_connect_dialog_ = true;
         }
+        // Reconnect button
+        if (show_reconnect_ && !client.last_host().empty()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Reconnect")) {
+                client.connect(client.last_host(), client.last_port());
+                if (client.state() == ClientState::Connected) {
+                    client.initialize();
+                    show_reconnect_ = false;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Connection lost");
+        }
     } else {
         if (ImGui::Button("Disconnect")) {
+            show_reconnect_ = false;
             client.disconnect();
         }
     }
@@ -318,16 +356,24 @@ void UIMain::render_toolbar(DebuggerClient& client)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine();
 
-    // Stepping
+    // Stepping - capability-driven
     ImGui::BeginDisabled(!stopped);
     if (ImGui::Button("Step Over")) client.step_over();
     ImGui::SameLine();
     if (ImGui::Button("Step In")) client.step_in();
     ImGui::SameLine();
     if (ImGui::Button("Step Out")) client.step_out();
+    ImGui::EndDisabled();
     ImGui::SameLine();
+    bool can_step_back = stopped && client.has_capability("supportsStepBack");
+    ImGui::BeginDisabled(!can_step_back);
     if (ImGui::Button("Step Back")) client.step_back();
     ImGui::EndDisabled();
+    if (!can_step_back && stopped) {
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Server does not support reverse execution");
+        }
+    }
 
     ImGui::End();
 }
@@ -336,12 +382,14 @@ void UIMain::render_status_bar(DebuggerClient& client)
 {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     float height = ImGui::GetFrameHeight();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - height));
+    float y = viewport->WorkPos.y + viewport->WorkSize.y - height;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, y));
     ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, height));
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoDocking;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
     if (ImGui::Begin("##StatusBar", nullptr, flags)) {

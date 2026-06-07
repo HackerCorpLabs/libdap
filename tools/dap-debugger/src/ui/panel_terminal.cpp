@@ -79,29 +79,33 @@ void PanelTerminal::render(DebuggerClient& client)
 
     ImGui::Separator();
 
-    // Terminal output display
-    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
-    if (ImGui::BeginChild("##TermOutput", ImVec2(0, -footer_height), ImGuiChildFlags_None,
-                          ImGuiWindowFlags_HorizontalScrollbar)) {
-
-        // Use monospace-style rendering for terminal feel
+    // Copy button
+    ImGui::SameLine();
+    if (ImGui::Button("Copy All##term")) {
         const auto& output = client.terminal_output();
-
-        // Build display text from output fragments
-        // Each entry may be a single char or a short string
-        for (const auto& fragment : output) {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", fragment.c_str());
-        }
-
-        // Auto-scroll
-        if (output.size() != last_output_count_) {
-            if (auto_scroll_) {
-                ImGui::SetScrollHereY(1.0f);
-            }
-            last_output_count_ = output.size();
-        }
+        std::string all;
+        for (const auto& fragment : output) all += fragment;
+        ImGui::SetClipboardText(all.c_str());
     }
-    ImGui::EndChild();
+
+    ImGui::Separator();
+
+    // Terminal output display -- build a single text buffer for copy support
+    const auto& output = client.terminal_output();
+    static std::string term_buf;
+    if (output.size() != last_output_count_) {
+        term_buf.clear();
+        for (const auto& fragment : output) term_buf += fragment;
+        last_output_count_ = output.size();
+    }
+
+    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() * 2;
+    ImVec2 size(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - footer_height);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+    ImGui::InputTextMultiline("##TermOutput", &term_buf[0], term_buf.size() + 1,
+                              size, ImGuiInputTextFlags_ReadOnly);
+    ImGui::PopStyleColor();
 
     // Keyboard input line
     ImGui::Separator();

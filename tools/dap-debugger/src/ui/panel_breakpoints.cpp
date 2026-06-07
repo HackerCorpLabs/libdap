@@ -91,13 +91,13 @@ void PanelBreakpoints::render(DebuggerClient& client)
 
         // --- Instruction Breakpoints Tab ---
         if (ImGui::BeginTabItem("Instruction")) {
-            static uint32_t addr_buf = 0;
+            static char addr_text[16] = {};
             ImGui::SetNextItemWidth(120.0f);
-            ImGui::InputScalar("Address", ImGuiDataType_U32, &addr_buf, nullptr, nullptr, "0x%04X",
-                               ImGuiInputTextFlags_CharsHexadecimal);
+            ImGui::InputText("Address##ibp", addr_text, sizeof(addr_text));
             ImGui::SameLine();
             if (ImGui::Button("Add##inst")) {
-                if (addr_buf > 0) {
+                uint32_t addr_buf = (uint32_t)strtoul(addr_text, nullptr, 0);
+                if (addr_text[0] != '\0') {
                     auto ibps = client.instruction_breakpoints();
                     InstructionBreakpointInfo ibi;
                     ibi.instruction_reference = addr_buf;
@@ -160,7 +160,9 @@ void PanelBreakpoints::render(DebuggerClient& client)
         }
 
         // --- Data Breakpoints (Watchpoints) Tab ---
-        if (ImGui::BeginTabItem("Watchpoints")) {
+        // Only show if server supports data breakpoints
+        bool has_data_bps = client.has_capability("supportsDataBreakpoints");
+        if (has_data_bps && ImGui::BeginTabItem("Watchpoints")) {
             static char data_id_buf[64] = {};
             static int access_type = 1; // write
             ImGui::SetNextItemWidth(120.0f);

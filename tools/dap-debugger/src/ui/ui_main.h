@@ -18,6 +18,7 @@ class PanelSymbols;
 class PanelServerInfo;
 class PanelMemory;
 class PanelCpuTracing;
+class PanelWatch;
 
 class UIMain {
 public:
@@ -44,12 +45,16 @@ private:
     PanelServerInfo* panel_server_info_;
     PanelMemory* panel_memory_;
     PanelCpuTracing* panel_cpu_tracing_;
+    PanelWatch* panel_watch_;
 
     void handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config);
 
     bool show_connect_dialog_ = false;
     bool show_launch_dialog_ = false;
     bool attach_on_connect_ = false;
+    bool show_reconnect_ = false;
+    ClientState prev_state_ = ClientState::Disconnected;
+    char connect_error_[256] = {};
     char connect_host_[256] = "localhost";
     int connect_port_ = 4711;
     char launch_program_[512] = {};
@@ -81,6 +86,17 @@ private:
 class PanelRegisters {
 public:
     void render(DebuggerClient& client);
+private:
+    std::string editing_var_;
+    int editing_scope_ref_ = 0;
+    char edit_buf_[64] = {};
+};
+
+class PanelWatch {
+public:
+    void render(DebuggerClient& client);
+private:
+    char expr_buf_[256] = {};
 };
 
 class PanelSource {

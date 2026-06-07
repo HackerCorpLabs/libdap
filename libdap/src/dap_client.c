@@ -258,7 +258,7 @@ DAPClient* dap_client_create(const char* host, int port) {
         return NULL;
     }
 
-    DAPClient* client = (DAPClient*)malloc(sizeof(DAPClient));
+    DAPClient* client = (DAPClient*)calloc(1, sizeof(DAPClient));
     if (!client) {
         DAP_CLIENT_DEBUG_LOG("Failed to allocate memory for client");
         return NULL;
@@ -894,9 +894,28 @@ int dap_client_disassemble(DAPClient* client, uint32_t memory_reference, uint32_
         }
         
         // Optional fields
+        cJSON* instr_bytes = cJSON_GetObjectItem(instr, "instructionBytes");
+        if (instr_bytes && cJSON_IsString(instr_bytes)) {
+            result->instructions[i].instruction_bytes = strdup(instr_bytes->valuestring);
+        }
+
         cJSON* symbol = cJSON_GetObjectItem(instr, "symbol");
         if (symbol && cJSON_IsString(symbol)) {
             result->instructions[i].symbol = strdup(symbol->valuestring);
+        }
+
+        cJSON* line = cJSON_GetObjectItem(instr, "line");
+        if (line && cJSON_IsNumber(line)) {
+            result->instructions[i].line = line->valueint;
+        }
+
+        cJSON* src = cJSON_GetObjectItem(instr, "location");
+        if (!src) src = cJSON_GetObjectItem(instr, "source");
+        if (src) {
+            cJSON* path = cJSON_GetObjectItem(src, "path");
+            if (path && cJSON_IsString(path)) {
+                result->instructions[i].source_path = strdup(path->valuestring);
+            }
         }
     }
     
@@ -2186,6 +2205,8 @@ void dap_disassemble_result_free(DAPDisassembleResult* result) {
             free(result->instructions[i].instruction_bytes);
             free(result->instructions[i].instruction);
             free(result->instructions[i].symbol);
+            free(result->instructions[i].source_path);
+            free(result->instructions[i].source_name);
         }
         free(result->instructions);
     }

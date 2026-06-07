@@ -4,7 +4,7 @@
 
 void PanelServerInfo::render(DebuggerClient& client)
 {
-    if (!ImGui::Begin("Server Info")) {
+    if (!ImGui::Begin("Debug Status")) {
         ImGui::End();
         return;
     }

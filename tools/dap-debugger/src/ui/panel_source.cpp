@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <algorithm>
 
 // Base64 decode table
 static const unsigned char b64_table[256] = {
@@ -243,6 +244,26 @@ void PanelSource::render(DebuggerClient& client)
                     }
                 }
             }
+            ImGui::SameLine();
+            if (!client.disassembly().empty()) {
+                if (ImGui::Button("Copy")) {
+                    std::string text;
+                    for (const auto& dl : client.disassembly()) {
+                        char line[256];
+                        snprintf(line, sizeof(line), "%-8s %-12s %s",
+                                 dl.address.c_str(),
+                                 dl.instruction_bytes.c_str(),
+                                 dl.instruction.c_str());
+                        text += line;
+                        if (!dl.symbol.empty()) {
+                            text += "  ; ";
+                            text += dl.symbol;
+                        }
+                        text += "\n";
+                    }
+                    ImGui::SetClipboardText(text.c_str());
+                }
+            }
 
             ImGui::Separator();
 
@@ -261,17 +282,108 @@ void PanelSource::render(DebuggerClient& client)
 
                     uint32_t current_ip = frames.empty() ? 0 : (uint32_t)frames[0].instruction_pointer;
 
-                    for (const auto& dl : disasm) {
+                    // Check for instruction breakpoints to mark in gutter
+                    const auto& ibps = client.instruction_breakpoints();
+
+                    for (size_t di = 0; di < disasm.size(); di++) {
+                        const auto& dl = disasm[di];
                         ImGui::TableNextRow();
 
                         // Highlight current IP
                         uint32_t line_addr = (uint32_t)strtoul(dl.address.c_str(), nullptr, 0);
-                        bool is_current = (line_addr == current_ip && current_ip != 0);
+                        bool is_current = (line_addr == current_ip && !frames.empty());
+
+                        // Check if this address has a breakpoint
+                        bool has_bp = false;
+                        for (const auto& bp : ibps) {
+                            if (bp.instruction_reference == line_addr) {
+                                has_bp = true;
+                                break;
+                            }
+                        }
+
                         ImVec4 text_color = is_current ? ImVec4(1.0f, 1.0f, 0.2f, 1.0f)
+                                                       : has_bp ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f)
                                                        : ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
 
                         ImGui::TableNextColumn();
-                        ImGui::TextColored(text_color, "%s%s", is_current ? ">" : " ", dl.address.c_str());
+                        // Breakpoint gutter -- use Selectable for click detection
+                        char addr_label[32];
+                        if (has_bp) {
+                            snprintf(addr_label, sizeof(addr_label), "*%s", dl.address.c_str());
+                        } else {
+                            snprintf(addr_label, sizeof(addr_label), "%s%s", is_current ? ">" : " ", dl.address.c_str());
+                        }
+                        ImVec4 gutter_color = has_bp ? ImVec4(1.0f, 0.2f, 0.2f, 1.0f) : text_color;
+                        ImGui::PushStyleColor(ImGuiCol_Text, gutter_color);
+                        char sel_id[32];
+                        snprintf(sel_id, sizeof(sel_id), "##da_%zu", di);
+                        if (ImGui::Selectable(addr_label, false, 0, ImVec2(0, 0))) {
+                            if (has_bp) {
+                                // Remove
+                                auto bps_copy = ibps;
+                                bps_copy.erase(
+                                    std::remove_if(bps_copy.begin(), bps_copy.end(),
+                                        [line_addr](const InstructionBreakpointInfo& b) {
+                                            return b.instruction_reference == line_addr;
+                                        }),
+                                    bps_copy.end());
+                                client.set_instruction_breakpoints(bps_copy);
+                            } else {
+                                // Add
+                                auto bps_copy = ibps;
+                                InstructionBreakpointInfo newbp = {};
+                                newbp.instruction_reference = line_addr;
+                                bps_copy.push_back(newbp);
+                                client.set_instruction_breakpoints(bps_copy);
+                            }
+                        }
+
+                        // Right-click context menu
+                        char ctx_id[32];
+                        snprintf(ctx_id, sizeof(ctx_id), "##disasm_ctx_%zu", di);
+                        if (ImGui::BeginPopupContextItem(ctx_id)) {
+                            char addr_hex[16];
+                            snprintf(addr_hex, sizeof(addr_hex), "0x%04X", line_addr);
+                            if (has_bp) {
+                                if (ImGui::MenuItem("Remove breakpoint")) {
+                                    auto bps_copy = ibps;
+                                    bps_copy.erase(
+                                        std::remove_if(bps_copy.begin(), bps_copy.end(),
+                                            [line_addr](const InstructionBreakpointInfo& b) {
+                                                return b.instruction_reference == line_addr;
+                                            }),
+                                        bps_copy.end());
+                                    client.set_instruction_breakpoints(bps_copy);
+                                }
+                            } else {
+                                if (ImGui::MenuItem("Set breakpoint")) {
+                                    auto bps_copy = ibps;
+                                    InstructionBreakpointInfo newbp = {};
+                                    newbp.instruction_reference = line_addr;
+                                    bps_copy.push_back(newbp);
+                                    client.set_instruction_breakpoints(bps_copy);
+                                }
+                            }
+                            if (ImGui::MenuItem("Run to here")) {
+                                // Add temporary BP, continue
+                                auto bps_copy = ibps;
+                                InstructionBreakpointInfo newbp = {};
+                                newbp.instruction_reference = line_addr;
+                                bps_copy.push_back(newbp);
+                                client.set_instruction_breakpoints(bps_copy);
+                                client.do_continue();
+                            }
+                            if (ImGui::MenuItem("Copy address")) {
+                                ImGui::SetClipboardText(addr_hex);
+                            }
+                            if (ImGui::MenuItem("Add to watches")) {
+                                client.add_watch(std::string("*") + addr_hex);
+                            }
+                            ImGui::EndPopup();
+                        }
+                        ImGui::PopStyleColor();
+
                         ImGui::TableNextColumn();
                         ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", dl.instruction_bytes.c_str());
                         ImGui::TableNextColumn();

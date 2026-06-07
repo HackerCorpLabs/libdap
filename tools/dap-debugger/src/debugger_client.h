@@ -144,6 +144,8 @@ public:
     };
     void launch(const std::string& program);
     void launch(const LaunchArgs& args);
+    void attach();
+    void send_configuration_done();
     void disconnect();
     void force_close();  // Close socket immediately without sending disconnect request
 
@@ -232,6 +234,23 @@ public:
 
     // Server capabilities
     const std::vector<ServerCapability>& server_capabilities() const { return server_capabilities_; }
+    bool has_capability(const std::string& name) const;
+
+    // Watch expressions
+    struct WatchEntry {
+        std::string expression;
+        std::string value;
+        std::string prev_value;
+        bool changed = false;
+    };
+    void add_watch(const std::string& expression);
+    void remove_watch(size_t index);
+    void evaluate_watches();
+    const std::vector<WatchEntry>& watches() const { return watches_; }
+
+    // Reconnect info
+    const std::string& last_host() const { return last_host_; }
+    int last_port() const { return last_port_; }
 
     // Terminal console I/O
     void console_enable(int terminal, bool enable);
@@ -250,9 +269,11 @@ public:
 
     const std::vector<StackFrameInfo>& stack_frames() const { return stack_frames_; }
     const std::vector<ScopeInfo>& scopes() const { return scopes_; }
+    const std::vector<ScopeInfo>& prev_scopes() const { return prev_scopes_; }
     const std::vector<VariableInfo>& variables() const { return variables_; }
     const std::vector<BreakpointInfo>& breakpoints() const { return breakpoints_; }
     const std::vector<ConsoleEntry>& console_log() const { return console_log_; }
+    std::vector<ConsoleEntry>& console_log() { return console_log_; }
     const std::vector<ProtocolEntry>& protocol_log() const { return protocol_log_; }
     void clear_protocol_log() { protocol_log_.clear(); }
 
@@ -312,8 +333,13 @@ private:
     std::string stop_reason_;
     std::vector<int> hit_breakpoint_ids_;
 
+    std::string last_host_;
+    int last_port_ = 4711;
+    std::vector<WatchEntry> watches_;
+
     std::vector<StackFrameInfo> stack_frames_;
     std::vector<ScopeInfo> scopes_;
+    std::vector<ScopeInfo> prev_scopes_;
     std::vector<VariableInfo> variables_;
     std::vector<BreakpointInfo> breakpoints_;
     std::vector<InstructionBreakpointInfo> instruction_breakpoints_;

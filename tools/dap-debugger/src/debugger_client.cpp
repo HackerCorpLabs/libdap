@@ -100,6 +100,8 @@ void DebuggerClient::connect(const std::string& host, int port)
         return;
     }
 
+    last_host_ = host;
+    last_port_ = port;
     state_ = ClientState::Connected;
     log(ConsoleEntry::Info, "Connected to " + host + ":" + std::to_string(port));
 }
@@ -246,7 +248,54 @@ void DebuggerClient::launch(const LaunchArgs& largs)
         }
     }
 
-    // Send configurationDone (also async)
+    // Send configurationDone after launch
+    send_configuration_done();
+
+    // Don't set state to Stopped here -- let the stopped event do that
+    // via poll(). The server will send process + stopped events.
+    state_ = ClientState::Running;
+    log(ConsoleEntry::Info, "Launch sent: " + largs.program);
+}
+
+void DebuggerClient::attach()
+{
+    if (!impl_->client || state_ != ClientState::Initialized) return;
+
+    cJSON* request = cJSON_CreateObject();
+    cJSON_AddStringToObject(request, "type", "request");
+    cJSON_AddNumberToObject(request, "seq", impl_->client->seq++);
+    cJSON_AddStringToObject(request, "command", "attach");
+
+    cJSON* args = cJSON_CreateObject();
+    cJSON_AddStringToObject(args, "name", "GUI Debug Session");
+
+    cJSON_AddItemToObject(request, "arguments", args);
+
+    log_protocol_sent("attach", args);
+
+    char* msg_str = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+
+    if (msg_str) {
+        int rc = dap_transport_send(impl_->client->transport, msg_str);
+        free(msg_str);
+        if (rc != 0) {
+            log(ConsoleEntry::Error, "Failed to send attach request");
+            return;
+        }
+    }
+
+    // Send configurationDone after attach
+    send_configuration_done();
+
+    state_ = ClientState::Running;
+    log(ConsoleEntry::Info, "Attach sent");
+}
+
+void DebuggerClient::send_configuration_done()
+{
+    if (!impl_->client) return;
+
     cJSON* cfg_req = cJSON_CreateObject();
     cJSON_AddStringToObject(cfg_req, "type", "request");
     cJSON_AddNumberToObject(cfg_req, "seq", impl_->client->seq++);
@@ -254,18 +303,13 @@ void DebuggerClient::launch(const LaunchArgs& largs)
 
     log_protocol_sent("configurationDone", nullptr);
 
-    msg_str = cJSON_PrintUnformatted(cfg_req);
+    char* msg_str = cJSON_PrintUnformatted(cfg_req);
     cJSON_Delete(cfg_req);
 
     if (msg_str) {
         dap_transport_send(impl_->client->transport, msg_str);
         free(msg_str);
     }
-
-    // Don't set state to Stopped here -- let the stopped event do that
-    // via poll(). The server will send process + stopped events.
-    state_ = ClientState::Running;
-    log(ConsoleEntry::Info, "Launch sent: " + largs.program);
 }
 
 void DebuggerClient::disconnect()
@@ -448,12 +492,69 @@ void DebuggerClient::refresh_stack_trace()
 {
     if (!impl_->client) return;
 
-    DAPStackFrame* frames = nullptr;
-    int count = 0;
-    int rc = dap_client_get_stack_trace(impl_->client, thread_id_, &frames, &count);
+    // Send stackTrace manually to capture the raw response for debugging
+    cJSON* st_args = cJSON_CreateObject();
+    cJSON_AddNumberToObject(st_args, "threadId", thread_id_);
+    cJSON_AddNumberToObject(st_args, "startFrame", 0);
+    cJSON_AddNumberToObject(st_args, "levels", 20);
+
+    log_protocol_sent("stackTrace", st_args);
+
+    char* st_resp = nullptr;
+    int rc = dap_client_send_request(impl_->client, DAP_CMD_STACK_TRACE, st_args, &st_resp);
+    cJSON_Delete(st_args);
+
     if (rc != DAP_ERROR_NONE) {
         log(ConsoleEntry::Warning, "Failed to get stack trace");
+        free(st_resp);
         return;
+    }
+
+    if (st_resp) {
+        log_protocol(ProtocolEntry::Received, st_resp);
+    }
+
+    // Parse the response ourselves
+    DAPStackFrame* frames = nullptr;
+    int count = 0;
+
+    if (st_resp) {
+        cJSON* json = cJSON_Parse(st_resp);
+        if (json) {
+            cJSON* body = cJSON_GetObjectItem(json, "body");
+            cJSON* sf = body ? cJSON_GetObjectItem(body, "stackFrames") : nullptr;
+            if (sf && cJSON_IsArray(sf)) {
+                count = cJSON_GetArraySize(sf);
+                if (count > 0) {
+                    frames = (DAPStackFrame*)calloc(count, sizeof(DAPStackFrame));
+                    for (int i = 0; i < count; i++) {
+                        cJSON* frame = cJSON_GetArrayItem(sf, i);
+                        cJSON* id_j = cJSON_GetObjectItem(frame, "id");
+                        cJSON* name_j = cJSON_GetObjectItem(frame, "name");
+                        cJSON* line_j = cJSON_GetObjectItem(frame, "line");
+                        cJSON* ipr = cJSON_GetObjectItem(frame, "instructionPointerReference");
+
+                        frames[i].id = id_j ? id_j->valueint : i;
+                        frames[i].name = (name_j && name_j->valuestring) ? strdup(name_j->valuestring) : nullptr;
+                        frames[i].line = line_j ? line_j->valueint : 0;
+
+                        if (ipr && ipr->valuestring) {
+                            frames[i].instruction_pointer_reference = (int)strtoul(ipr->valuestring, nullptr, 0);
+                        }
+
+                        cJSON* src = cJSON_GetObjectItem(frame, "source");
+                        if (src) {
+                            cJSON* p = cJSON_GetObjectItem(src, "path");
+                            cJSON* n = cJSON_GetObjectItem(src, "name");
+                            frames[i].source_path = (p && p->valuestring) ? strdup(p->valuestring) : nullptr;
+                            frames[i].source_name = (n && n->valuestring) ? strdup(n->valuestring) : nullptr;
+                        }
+                    }
+                }
+            }
+            cJSON_Delete(json);
+        }
+        free(st_resp);
     }
 
     stack_frames_.clear();
@@ -480,6 +581,12 @@ void DebuggerClient::refresh_scopes(int frame_id)
 {
     if (!impl_->client) return;
 
+    // Log the scopes request
+    cJSON* sc_log = cJSON_CreateObject();
+    cJSON_AddNumberToObject(sc_log, "frameId", frame_id);
+    log_protocol_sent("scopes", sc_log);
+    cJSON_Delete(sc_log);
+
     DAPGetScopesResult result = {};
     int rc = dap_client_get_scopes(impl_->client, frame_id, &result);
     if (rc != DAP_ERROR_NONE) {
@@ -487,6 +594,9 @@ void DebuggerClient::refresh_scopes(int frame_id)
         return;
     }
 
+    log(ConsoleEntry::Info, "Scopes: " + std::to_string(result.num_scopes) + " for frame " + std::to_string(frame_id));
+
+    prev_scopes_ = scopes_;
     scopes_.clear();
     variables_.clear();
 
@@ -674,9 +784,12 @@ void DebuggerClient::set_instruction_breakpoints(const std::vector<InstructionBr
     // Parse response
     instruction_breakpoints_.clear();
     if (resp_body) {
+        log_protocol(ProtocolEntry::Received, resp_body);
         cJSON* resp = cJSON_Parse(resp_body);
         if (resp) {
-            cJSON* bp_arr = cJSON_GetObjectItem(resp, "breakpoints");
+            // Response body may be nested under "body"
+            cJSON* body = cJSON_GetObjectItem(resp, "body");
+            cJSON* bp_arr = cJSON_GetObjectItem(body ? body : resp, "breakpoints");
             if (bp_arr && cJSON_IsArray(bp_arr)) {
                 int arr_size = cJSON_GetArraySize(bp_arr);
                 for (int i = 0; i < arr_size; i++) {
@@ -1042,9 +1155,15 @@ void DebuggerClient::set_variable(int variables_reference, const std::string& na
     cJSON_AddStringToObject(args, "name", name.c_str());
     cJSON_AddStringToObject(args, "value", value.c_str());
 
+    log_protocol_sent("setVariable", args);
+
     char* resp_body = nullptr;
     int rc = dap_client_send_request(impl_->client, DAP_CMD_SET_VARIABLE, args, &resp_body);
     cJSON_Delete(args);
+
+    if (resp_body) {
+        log_protocol(ProtocolEntry::Received, resp_body);
+    }
     free(resp_body);
 
     if (rc != DAP_ERROR_NONE) {
@@ -1053,10 +1172,8 @@ void DebuggerClient::set_variable(int variables_reference, const std::string& na
     }
     log(ConsoleEntry::Info, "Set " + name + " = " + value);
 
-    // Refresh variables to show new value
-    if (!stack_frames_.empty()) {
-        refresh_scopes(stack_frames_[0].id);
-    }
+    // Refresh everything -- setting PC changes the stack trace + disassembly cursor
+    refresh_stack_trace();
 }
 
 // ---------------------------------------------------------------------------
@@ -1331,6 +1448,22 @@ void DebuggerClient::poll()
                 log(ConsoleEntry::Error, "Launch failed");
             }
 
+            // Handle attach failure
+            if (cmd && strcmp(cmd, "attach") == 0 && !success) {
+                state_ = ClientState::Initialized;
+                log(ConsoleEntry::Error, "Attach failed");
+            }
+
+            // Handle step/continue failure -- revert to Stopped
+            if (!success && (
+                (cmd && strcmp(cmd, "next") == 0) ||
+                (cmd && strcmp(cmd, "stepIn") == 0) ||
+                (cmd && strcmp(cmd, "stepOut") == 0) ||
+                (cmd && strcmp(cmd, "stepBack") == 0) ||
+                (cmd && strcmp(cmd, "continue") == 0))) {
+                state_ = ClientState::Stopped;
+            }
+
             // Handle disconnect response
             if (cmd && strcmp(cmd, "disconnect") == 0) {
                 state_ = ClientState::Disconnected;
@@ -1348,12 +1481,21 @@ void DebuggerClient::poll()
     if (needs_refresh_ && state_ == ClientState::Stopped) {
         needs_refresh_ = false;
 
+        log(ConsoleEntry::Info, "Auto-refresh: fetching threads, stack, variables...");
         refresh_threads();
         refresh_stack_trace();
+        evaluate_watches();
+        if (!stack_frames_.empty()) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Auto-refresh: PC=0x%04X, %zu frames, %zu vars",
+                     stack_frames_[0].instruction_pointer,
+                     stack_frames_.size(), variables_.size());
+            log(ConsoleEntry::Info, buf);
+        }
 
         if (auto_disassemble_ && !stack_frames_.empty()) {
             uint32_t ip = (uint32_t)stack_frames_[0].instruction_pointer;
-            if (ip > 0) {
+            {
                 if (disassembly_.empty() || ip < disasm_cache_start_ || ip > disasm_cache_end_) {
                     // IP is outside cached range -- full re-fetch centered on IP
                     uint32_t start = (ip > 20) ? ip - 20 : 0;
@@ -1437,8 +1579,9 @@ void DebuggerClient::handle_event(const char* event_name, void* body_json)
         log(ConsoleEntry::Info, msg && msg->valuestring
             ? std::string("Progress done: ") + msg->valuestring : "Progress done");
     } else if (strcmp(event_name, "invalidated") == 0) {
-        // Server says cached data is stale; refresh everything on next stop
-        log(ConsoleEntry::Info, "Server invalidated cached data");
+        // Server says cached data is stale; refresh everything
+        log(ConsoleEntry::Info, "Server invalidated cached data -- refreshing");
+        needs_refresh_ = true;
     } else {
         log(ConsoleEntry::Warning, std::string("Unhandled event: ") + event_name);
     }
@@ -1799,4 +1942,57 @@ const char* DebuggerClient::state_string() const
     case ClientState::Terminated:   return "Terminated";
     }
     return "Unknown";
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities query
+// ---------------------------------------------------------------------------
+
+bool DebuggerClient::has_capability(const std::string& name) const
+{
+    for (const auto& cap : server_capabilities_) {
+        if (cap.name == name) return cap.supported;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Watch expressions
+// ---------------------------------------------------------------------------
+
+void DebuggerClient::add_watch(const std::string& expression)
+{
+    WatchEntry w;
+    w.expression = expression;
+    watches_.push_back(w);
+}
+
+void DebuggerClient::remove_watch(size_t index)
+{
+    if (index < watches_.size()) {
+        watches_.erase(watches_.begin() + (int)index);
+    }
+}
+
+void DebuggerClient::evaluate_watches()
+{
+    if (!impl_->client || state_ != ClientState::Stopped) return;
+
+    int frame_id = 0;
+    if (!stack_frames_.empty()) frame_id = stack_frames_[0].id;
+
+    for (auto& w : watches_) {
+        w.prev_value = w.value;
+
+        DAPEvaluateResult result = {};
+        int rc = dap_client_evaluate(impl_->client, w.expression.c_str(), frame_id, "watch", &result);
+        if (rc == DAP_ERROR_NONE && result.result) {
+            w.value = result.result;
+        } else {
+            w.value = "<error>";
+        }
+        dap_evaluate_result_free(&result);
+
+        w.changed = (!w.prev_value.empty() && w.value != w.prev_value);
+    }
 }

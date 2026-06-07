@@ -163,6 +163,40 @@ void PanelSymbols::render(DebuggerClient& client)
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn(); ImGui::TextColored(color, "0x%04X", sym.address);
                 ImGui::TableNextColumn(); ImGui::TextColored(color, "%s", sym.name.c_str());
+
+                // Right-click context menu
+                char ctx_label[64];
+                snprintf(ctx_label, sizeof(ctx_label), "##sym_ctx_%s_%u", sym.name.c_str(), sym.address);
+                if (ImGui::BeginPopupContextItem(ctx_label)) {
+                    if (ImGui::MenuItem("Go to address")) {
+                        if (stopped) client.disassemble(sym.address, 40);
+                    }
+                    if (ImGui::MenuItem("Set breakpoint")) {
+                        auto bps_copy = client.instruction_breakpoints();
+                        InstructionBreakpointInfo newbp = {};
+                        newbp.instruction_reference = sym.address;
+                        bps_copy.push_back(newbp);
+                        client.set_instruction_breakpoints(bps_copy);
+                    }
+                    if (ImGui::MenuItem("Set BP and continue")) {
+                        auto bps_copy = client.instruction_breakpoints();
+                        InstructionBreakpointInfo newbp = {};
+                        newbp.instruction_reference = sym.address;
+                        bps_copy.push_back(newbp);
+                        client.set_instruction_breakpoints(bps_copy);
+                        client.do_continue();
+                    }
+                    char addr_hex[16];
+                    snprintf(addr_hex, sizeof(addr_hex), "0x%04X", sym.address);
+                    if (ImGui::MenuItem("Copy address")) {
+                        ImGui::SetClipboardText(addr_hex);
+                    }
+                    if (ImGui::MenuItem("Add to watches")) {
+                        client.add_watch(sym.name);
+                    }
+                    ImGui::EndPopup();
+                }
+
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(sym.type.c_str());
                 ImGui::TableNextColumn();
                 if (!sym.source_path.empty()) ImGui::TextUnformatted(sym.source_path.c_str());
@@ -185,6 +219,29 @@ void PanelSymbols::render(DebuggerClient& client)
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn(); ImGui::TextColored(color, "0x%04X", sym.address);
                 ImGui::TableNextColumn(); ImGui::TextColored(color, "%s", sym.name.c_str());
+
+                // Right-click context menu
+                char ctx_label[64];
+                snprintf(ctx_label, sizeof(ctx_label), "##ssym_ctx_%u", sym.address);
+                if (ImGui::BeginPopupContextItem(ctx_label)) {
+                    if (ImGui::MenuItem("Go to address")) {
+                        if (stopped) client.disassemble(sym.address, 40);
+                    }
+                    if (ImGui::MenuItem("Set breakpoint")) {
+                        auto bps_copy = client.instruction_breakpoints();
+                        InstructionBreakpointInfo newbp = {};
+                        newbp.instruction_reference = sym.address;
+                        bps_copy.push_back(newbp);
+                        client.set_instruction_breakpoints(bps_copy);
+                    }
+                    char addr_hex[16];
+                    snprintf(addr_hex, sizeof(addr_hex), "0x%04X", sym.address);
+                    if (ImGui::MenuItem("Copy address")) {
+                        ImGui::SetClipboardText(addr_hex);
+                    }
+                    ImGui::EndPopup();
+                }
+
                 ImGui::TableNextColumn(); ImGui::TextDisabled("--");
                 ImGui::TableNextColumn();
                 if (!sym.source_path.empty()) ImGui::TextUnformatted(sym.source_path.c_str());

@@ -37,6 +37,7 @@
 #include <netinet/tcp.h> // For TCP_NODELAY
 #include <arpa/inet.h>   // For inet_ntop
 #include <unistd.h>      // For close
+#include <fcntl.h>       // For fcntl, F_GETFL, F_SETFL, O_NONBLOCK
 #include <sys/select.h>
 #include <sys/time.h>
 #include "dap_transport.h"
@@ -717,13 +718,49 @@ int dap_transport_connect(DAPTransport *transport)
         }
         memcpy(&server_addr.sin_addr.s_addr, server->h_addr_list[0], server->h_length);
 
-        // Connect to server
-        if (connect(fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        // Connect to server with a timeout to avoid blocking the caller
+        // (e.g. a GUI main thread) for 20+ seconds on unreachable hosts.
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+        int conn_rc = connect(fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        if (conn_rc < 0 && errno == EINPROGRESS)
+        {
+            // Wait for connection with a 3-second timeout
+            fd_set wfds;
+            FD_ZERO(&wfds);
+            FD_SET(fd, &wfds);
+            struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+
+            int sel = select(fd + 1, NULL, &wfds, NULL, &tv);
+            if (sel <= 0)
+            {
+                dap_error_set(DAP_ERROR_TRANSPORT,
+                    sel == 0 ? "Connection timed out" : "Connection failed");
+                close(fd);
+                return -1;
+            }
+
+            // Check if the connection actually succeeded
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len);
+            if (so_error != 0)
+            {
+                dap_error_set(DAP_ERROR_TRANSPORT, "Connection refused");
+                close(fd);
+                return -1;
+            }
+        }
+        else if (conn_rc < 0)
         {
             dap_error_set(DAP_ERROR_TRANSPORT, "Failed to connect to server");
             close(fd);
             return -1;
         }
+
+        // Restore blocking mode for subsequent I/O
+        if (flags >= 0) fcntl(fd, F_SETFL, flags);
 
         transport->client_fd = fd;
         break;

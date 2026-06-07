@@ -21,17 +21,27 @@ void PanelConsole::render(DebuggerClient& client)
         scroll_to_bottom_ = auto_scroll_;
     }
 
+    // Toolbar
+    if (ImGui::Button("Clear")) {
+        client.console_log().clear();
+        text_buf_.clear();
+        last_count_ = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Copy All")) {
+        ImGui::SetClipboardText(text_buf_.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Auto-scroll", &auto_scroll_);
+
     // Log area as read-only multiline (supports text selection + Ctrl+C)
-    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() * 2;
+    float footer_height = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
     ImVec2 size(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - footer_height);
 
     ImGui::InputTextMultiline("##ConsoleLog", &text_buf_[0], text_buf_.size() + 1,
                               size, ImGuiInputTextFlags_ReadOnly);
 
     if (scroll_to_bottom_) {
-        // Scroll the internal InputText to bottom by setting scroll
-        // InputTextMultiline doesn't expose scroll directly, but setting
-        // cursor to end before rendering achieves the same effect
         scroll_to_bottom_ = false;
     }
 
@@ -42,8 +52,6 @@ void PanelConsole::render(DebuggerClient& client)
     bool send = ImGui::InputText("##eval", input_buf_, sizeof(input_buf_), input_flags);
     ImGui::SameLine();
     send |= ImGui::Button("Eval");
-
-    ImGui::Checkbox("Auto-scroll", &auto_scroll_);
 
     if (send && strlen(input_buf_) > 0) {
         int frame_id = 0;

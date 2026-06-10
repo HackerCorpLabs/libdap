@@ -165,6 +165,7 @@ void PanelBreakpoints::render(DebuggerClient& client)
         if (has_data_bps && ImGui::BeginTabItem("Watchpoints")) {
             static char data_id_buf[64] = {};
             static int access_type = 1; // write
+            static char condition_buf[96] = {};
             ImGui::SetNextItemWidth(120.0f);
             ImGui::InputText("Address/ID", data_id_buf, sizeof(data_id_buf));
             ImGui::SameLine();
@@ -174,12 +175,30 @@ void PanelBreakpoints::render(DebuggerClient& client)
             ImGui::SameLine();
             if (ImGui::Button("Add##data")) {
                 if (strlen(data_id_buf) > 0) {
-                    client.add_data_breakpoint(data_id_buf, access_type);
+                    // Condition is meaningful for register watches (Data ID "reg:NAME");
+                    // it is sent verbatim — the server owns all condition parsing.
+                    client.add_data_breakpoint(data_id_buf, access_type, condition_buf);
                 }
             }
             ImGui::SameLine();
             if (ImGui::Button("Clear All##data")) {
                 client.clear_data_breakpoints();
+            }
+            // Condition for register watches, e.g. "== 0x50000204", "bit 27 -> 1", "bit 27 changed".
+            ImGui::SetNextItemWidth(260.0f);
+            ImGui::InputText("Condition", condition_buf, sizeof(condition_buf));
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Register watch: Data ID 'reg:USP' + Condition\n"
+                                  "  (empty)        break on any change\n"
+                                  "  == 0x50000204  break when equal\n"
+                                  "  bit 27 -> 1    break when bit 27 goes 0->1\n"
+                                  "  bit 27 changed break when bit 27 toggles");
+            }
+            // Visual register-watch builder (register dropdown + clickable bit grid).
+            if (rw_dialog_ && ImGui::Button("+ Register watch...")) {
+                rw_dialog_->open("", -1, "");   // new watch, pick the register in the dialog
             }
 
             ImGui::Separator();
@@ -187,12 +206,13 @@ void PanelBreakpoints::render(DebuggerClient& client)
             if (dbps.empty()) {
                 ImGui::TextDisabled("No watchpoints");
             } else {
-                if (ImGui::BeginTable("##data_bps", 6,
+                if (ImGui::BeginTable("##data_bps", 7,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
                     ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 35.0f);
                     ImGui::TableSetupColumn("Data ID", ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 80.0f);
                     ImGui::TableSetupColumn("Access", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    ImGui::TableSetupColumn("Condition", ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                     ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 30.0f);
                     ImGui::TableHeadersRow();
@@ -201,18 +221,35 @@ void PanelBreakpoints::render(DebuggerClient& client)
                     for (const auto& dbp : dbps) {
                         const char* access_str[] = { "Read", "Write", "RW" };
                         ImGui::TableNextRow();
+                        bool is_reg = dbp.data_id.rfind("reg:", 0) == 0;
                         ImGui::TableNextColumn(); ImGui::Text("%d", dbp.id);
                         ImGui::TableNextColumn(); ImGui::TextUnformatted(dbp.data_id.c_str());
-                        ImGui::TableNextColumn(); ImGui::Text("0x%04X", dbp.address);
+                        ImGui::TableNextColumn();
+                        // Register watches have no numeric address — show a dash instead of 0x0000.
+                        if (is_reg) ImGui::TextUnformatted("—");
+                        else ImGui::Text("0x%04X", dbp.address);
                         ImGui::TableNextColumn();
                         ImGui::TextUnformatted(dbp.access_type >= 0 && dbp.access_type <= 2
                                                ? access_str[dbp.access_type] : "?");
+                        ImGui::TableNextColumn();
+                        if (!dbp.condition.empty()) ImGui::TextUnformatted(dbp.condition.c_str());
                         ImGui::TableNextColumn();
                         if (dbp.verified)
                             ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "OK");
                         else
                             ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Pend");
                         ImGui::TableNextColumn();
+                        // Register watches can be re-built visually via the dialog (Edit =
+                        // remove + re-add, since DAP has no in-place edit). Memory watches
+                        // just get a delete button.
+                        if (is_reg && rw_dialog_) {
+                            char edit_label[32];
+                            snprintf(edit_label, sizeof(edit_label), "E##e%d", dbp.id);
+                            if (ImGui::SmallButton(edit_label)) {
+                                rw_dialog_->open(dbp.data_id.substr(4), dbp.id, dbp.condition);
+                            }
+                            ImGui::SameLine();
+                        }
                         char del_label[32];
                         snprintf(del_label, sizeof(del_label), "X##d%d", dbp.id);
                         if (ImGui::SmallButton(del_label)) {

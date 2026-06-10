@@ -2851,6 +2851,13 @@ int dap_client_set_data_breakpoints(DAPClient* client,
                 client->data_breakpoints[i].address = result->breakpoints[i].address;
                 if (result->breakpoints[i].message)
                     client->data_breakpoints[i].message = strdup(result->breakpoints[i].message);
+                // Persist the request's condition into the client cache. The server response
+                // (result->breakpoints) does not echo the condition, but the cache is the
+                // source from which the next setDataBreakpoints re-sends the full set — so a
+                // condition must be carried here or it would be silently dropped on re-issue.
+                // Request and response are index-aligned per the DAP setDataBreakpoints contract.
+                if (i < count && data_breakpoints[i].condition)
+                    client->data_breakpoints[i].condition = strdup(data_breakpoints[i].condition);
             }
         }
     }

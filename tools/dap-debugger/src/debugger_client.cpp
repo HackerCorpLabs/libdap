@@ -830,7 +830,11 @@ void DebuggerClient::add_data_breakpoint(const std::string& data_id, int access_
     new_dbp.verified = false;
     new_dbp.data_id = data_id;
     new_dbp.access_type = access_type;
-    new_dbp.address = (uint32_t)strtoul(data_id.c_str(), nullptr, 0);
+    // A reg:NAME dataId is a register watch, not a numeric address — leave address at the
+    // 0 sentinel and skip the strtoul that would otherwise misparse the register name.
+    new_dbp.address = (data_id.rfind("reg:", 0) == 0)
+                          ? 0u
+                          : (uint32_t)strtoul(data_id.c_str(), nullptr, 0);
     new_dbp.condition = condition;
     data_breakpoints_.push_back(new_dbp);
 
@@ -852,7 +856,10 @@ void DebuggerClient::add_data_breakpoint(const std::string& data_id, int access_
         return;
     }
 
-    // Update with server response
+    // Update with server response. The server's Breakpoint response does NOT echo the
+    // condition, so snapshot what we just sent and recover the condition by index — the
+    // setDataBreakpoints request/response arrays are index-aligned per the DAP spec.
+    std::vector<DataBreakpointInfo> sent = data_breakpoints_;
     data_breakpoints_.clear();
     for (size_t i = 0; i < result.num_breakpoints; i++) {
         DataBreakpointInfo dbi;
@@ -862,6 +869,8 @@ void DebuggerClient::add_data_breakpoint(const std::string& data_id, int access_
         dbi.access_type = (int)result.breakpoints[i].access_type;
         dbi.address = result.breakpoints[i].address;
         dbi.condition = result.breakpoints[i].condition ? result.breakpoints[i].condition : "";
+        if (dbi.condition.empty() && i < sent.size())
+            dbi.condition = sent[i].condition;   // recover the condition the server dropped
         dbi.message = result.breakpoints[i].message ? result.breakpoints[i].message : "";
         data_breakpoints_.push_back(dbi);
     }

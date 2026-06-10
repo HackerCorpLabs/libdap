@@ -19,6 +19,7 @@ class PanelServerInfo;
 class PanelMemory;
 class PanelCpuTracing;
 class PanelWatch;
+class RegisterWatchDialog;
 
 class UIMain {
 public:
@@ -46,6 +47,9 @@ private:
     PanelMemory* panel_memory_;
     PanelCpuTracing* panel_cpu_tracing_;
     PanelWatch* panel_watch_;
+    // Shared modal for arming/editing CPU register watches; reachable from both the
+    // Registers panel (right-click) and the Watchpoints tab (+ Register watch / Edit).
+    RegisterWatchDialog* reg_watch_dialog_;
 
     void handle_keyboard_shortcuts(DebuggerClient& client, const AppConfig& config);
 
@@ -86,10 +90,13 @@ private:
 class PanelRegisters {
 public:
     void render(DebuggerClient& client);
+    // Wired once by UIMain so the right-click "Register watch…" item can open the shared dialog.
+    void set_rw_dialog(RegisterWatchDialog* d) { rw_dialog_ = d; }
 private:
     std::string editing_var_;
     int editing_scope_ref_ = 0;
     char edit_buf_[64] = {};
+    RegisterWatchDialog* rw_dialog_ = nullptr;
 };
 
 class PanelWatch {
@@ -111,9 +118,38 @@ private:
 class PanelBreakpoints {
 public:
     void render(DebuggerClient& client);
+    // Wired once by UIMain so "+ Register watch…" and per-row Edit can open the shared dialog.
+    void set_rw_dialog(RegisterWatchDialog* d) { rw_dialog_ = d; }
 private:
     char source_buf_[256] = {};
     int line_buf_ = 1;
+    RegisterWatchDialog* rw_dialog_ = nullptr;
+};
+
+// Shared modal that builds a register watch (reg:NAME + condition) visually: register
+// dropdown, mode (any-change / value / bit), a value+operator+mask editor, and a clickable
+// bit grid that reflects the register's live value. On confirm it arms (or, when editing,
+// re-arms) the watch through DebuggerClient::add_data_breakpoint — the one submit path.
+class RegisterWatchDialog {
+public:
+    // Open for a NEW watch (target may be empty → pick from the dropdown) or to EDIT an
+    // existing data breakpoint (edit_id >= 0; existing_condition prefills the fields).
+    void open(const std::string& target_reg, int edit_id, const std::string& existing_condition);
+    // Draw the modal if open and arm/edit via client. Call exactly once per frame.
+    void render(DebuggerClient& client);
+private:
+    std::string build_condition() const;
+    void load_from_condition(const std::string& condition);   // reverse-parse for Edit prefill
+
+    bool open_request_ = false;
+    std::string target_reg_;
+    int edit_id_ = -1;          // -1 = new; otherwise the data-breakpoint id to replace
+    int mode_ = 0;              // 0 = any change, 1 = value, 2 = bit
+    int op_ = 0;                // index into ==, !=, <, >, <=, >=
+    char value_buf_[64] = {};
+    char mask_buf_[64] = {};
+    int bit_index_ = 0;
+    int bit_mode_ = 0;          // 0 = ->1, 1 = ->0, 2 = changed
 };
 
 class PanelThreads {

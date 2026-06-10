@@ -60,7 +60,7 @@ This project implements a Debug Adapter Protocol (DAP) server and client - to be
 > | Binary | Kind | Source dir | Build dir | How to build & run |
 > |---|---|---|---|---|
 > | **`dap_debugger`** / **`dap_debugger_threaded`** | Terminal (readline TUI) | `src/dap_debugger/` | `build/bin/` | `make debug` (root) → `make run` |
-> | **`dap_gui_debugger`** | Visual GUI (ImGui + SDL3) | `tools/dap-debugger/src/` | `tools/dap-debugger/build/` | `cd tools/dap-debugger && make` → `make run` |
+> | **`dap_gui_debugger`** | Visual GUI (ImGui + SDL3) — see [`tools/dap-debugger/README.md`](tools/dap-debugger/README.md) (incl. visual register-watch dialog) | `tools/dap-debugger/src/` | `tools/dap-debugger/build/` | `cd tools/dap-debugger && make` → `make run` |
 >
 > The **root** `Makefile` (`make`, `make run`, `make runsrv`) only builds and
 > runs the **terminal** clients. It will **not** build the GUI.
@@ -371,6 +371,14 @@ dap# server           # Alternative alias
 **Breakpoints:**
 - `setBreakpoints` (`b`, `break`) - Set line breakpoints
 - `setExceptionBreakpoints` (`ex`, `exception`) - Set exception breakpoints
+
+**Watchpoints (`watch`, `w`):**
+- `watch <addr> [read|write|readwrite]` - Memory watchpoint (prefix `phys`/`ispace`/`dspace`)
+- `watch reg:<NAME>` - Break when a CPU register changes
+- `watch reg:<NAME> == 0x50000204` - Break when a register equals a value (`!= < > <= >=` too)
+- `watch reg:<NAME> bit 27 -> 1` - Break when bit 27 goes 0→1 (`-> 0`, `changed` also)
+- `info watchpoints` (`info w`) - List watchpoints, including their conditions
+- See [docs/register-watchpoints.md](docs/register-watchpoints.md) for register watches (`reg:NAME` + value/bit conditions)
 
 **Information & Inspection:**
 - `threads` (`t`) - List all threads

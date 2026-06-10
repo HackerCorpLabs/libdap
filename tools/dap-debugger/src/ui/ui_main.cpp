@@ -20,6 +20,10 @@ UIMain::UIMain()
     panel_memory_ = new PanelMemory();
     panel_cpu_tracing_ = new PanelCpuTracing();
     panel_watch_ = new PanelWatch();
+    reg_watch_dialog_ = new RegisterWatchDialog();
+    // Share the one register-watch dialog with the panels that can open it.
+    panel_registers_->set_rw_dialog(reg_watch_dialog_);
+    panel_breakpoints_->set_rw_dialog(reg_watch_dialog_);
 }
 
 UIMain::~UIMain()
@@ -37,6 +41,7 @@ UIMain::~UIMain()
     delete panel_memory_;
     delete panel_cpu_tracing_;
     delete panel_watch_;
+    delete reg_watch_dialog_;
 }
 
 void UIMain::setup_docking()
@@ -131,6 +136,9 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
     panel_memory_->render(client);
     panel_cpu_tracing_->render(client);
     panel_watch_->render(client);
+
+    // Shared register-watch modal — drawn once per frame after the panels that open it.
+    reg_watch_dialog_->render(client);
 
     // Detect disconnect for reconnect banner
     if (prev_state_ != ClientState::Disconnected && client.state() == ClientState::Disconnected) {

@@ -471,8 +471,16 @@ class DAPDebugger:
         variables: list[str],
         access_type: str = "write",
         address_space: str = "virtual",
+        conditions: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Set data breakpoints (watchpoints)."""
+        """Set data breakpoints (watchpoints).
+
+        A register name (e.g. "USP") resolves via dataBreakpointInfo to a "reg:NAME"
+        dataId and becomes a CPU register watch; the matching entry in ``conditions``
+        (by index) is then sent verbatim and parsed server-side. Condition forms:
+        "" (any change), "== 0x50000204", "!= N"/"< N"/">= N", "bit 27 -> 1",
+        "bit 27 -> 0", "bit 27 changed".
+        """
         self._check_connected()
 
         # Prefix variables with address space hint for physical mode
@@ -480,7 +488,7 @@ class DAPDebugger:
 
         # First get data breakpoint info for each variable
         dap_bps = []
-        for var_name in variables:
+        for i, var_name in enumerate(variables):
             info_resp = await self.conn.send_request("dataBreakpointInfo", {
                 "name": f"{prefix}{var_name}",
             })
@@ -488,10 +496,14 @@ class DAPDebugger:
                 continue
             data_id = info_resp.get("body", {}).get("dataId")
             if data_id:
-                dap_bps.append({
+                bp: dict[str, Any] = {
                     "dataId": data_id,
                     "accessType": access_type,
-                })
+                }
+                # Forward the per-variable condition (register watches use it).
+                if conditions and i < len(conditions) and conditions[i]:
+                    bp["condition"] = conditions[i]
+                dap_bps.append(bp)
 
         if not dap_bps:
             return {"error": True, "message": "No valid data breakpoints could be set"}
@@ -504,6 +516,27 @@ class DAPDebugger:
             return err
 
         return {"breakpoints": fmt.format_breakpoints(response)}
+
+    async def watch_register(
+        self,
+        register: str,
+        condition: str = "",
+    ) -> dict[str, Any]:
+        """Watch a single CPU register — break when it changes, matches a value, or a bit flips.
+
+        Thin, self-documenting wrapper over set_data_breakpoints (no logic of its own): the
+        register name resolves to a "reg:NAME" dataId and the condition is parsed server-side.
+        Condition forms: "" (any change), "== 0x50000204", "!= N"/"< N"/"> N"/"<= N"/">= N",
+        masked "& 0xFF == 0x42", and bit forms "bit 27 -> 1", "bit 27 -> 0", "bit 27 changed".
+
+        NOTE: like all setDataBreakpoints calls this REPLACES the data-breakpoint set; to keep
+        several register/memory watches, use set_data_breakpoints with the full list instead.
+        """
+        return await self.set_data_breakpoints(
+            variables=[register],
+            access_type="write",
+            conditions=[condition] if condition else None,
+        )
 
     async def set_function_breakpoints(
         self,

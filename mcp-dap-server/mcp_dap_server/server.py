@@ -169,15 +169,41 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="debug_set_data_breakpoints",
-            description="Set data breakpoints (watchpoints) on variables.",
+            description=(
+                "Set data breakpoints (watchpoints). Watches memory addresses OR CPU registers: "
+                "pass a register name (e.g. 'USP') to break on a register, with an optional "
+                "per-variable condition supporting value and bit forms (e.g. '== 0x50000204', "
+                "'bit 27 -> 1'). For a single register, debug_watch_register is simpler. "
+                "Replaces the entire data-breakpoint set."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "variables": {"type": "array", "items": {"type": "string"}, "description": "Variable names to watch"},
+                    "variables": {"type": "array", "items": {"type": "string"}, "description": "Variable names to watch. A CPU register name (e.g. 'USP') becomes a register watch."},
                     "access_type": {"type": "string", "enum": ["read", "write", "readWrite"], "default": "write"},
                     "address_space": {"type": "string", "enum": ["virtual", "physical"], "default": "virtual", "description": "Address space: virtual (default) or physical"},
+                    "conditions": {"type": "array", "items": {"type": "string"}, "description": "Optional condition per variable (by index). For register watches: '' (any change), '== 0x50000204', '!= N'/'< N'/'>= N', 'bit 27 -> 1', 'bit 27 -> 0', 'bit 27 changed'."},
                 },
                 "required": ["variables"],
+            },
+        ),
+        Tool(
+            name="debug_watch_register",
+            description=(
+                "Watch a single CPU register: break when it changes, matches a value, or a bit "
+                "flips. Examples — register 'USP' with condition: '' (break on any change), "
+                "'== 0x50000204' (equals; also != < > <= >=), 'bit 27 -> 1' (bit goes 0->1), "
+                "'bit 27 -> 0' (goes 1->0), 'bit 27 changed' (either edge). The condition is "
+                "parsed by the debug server. NOTE: replaces the data-breakpoint set — use "
+                "debug_set_data_breakpoints to keep several watches at once."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "register": {"type": "string", "description": "CPU register name, e.g. 'USP', 'D0', 'A'."},
+                    "condition": {"type": "string", "default": "", "description": "Break condition (see examples). Empty = break on any change."},
+                },
+                "required": ["register"],
             },
         ),
         Tool(
@@ -513,6 +539,12 @@ async def _dispatch(name: str, args: dict) -> dict | list:
                 variables=args["variables"],
                 access_type=args.get("access_type", "write"),
                 address_space=args.get("address_space", "virtual"),
+                conditions=args.get("conditions"),
+            )
+        case "debug_watch_register":
+            return await debugger.watch_register(
+                register=args["register"],
+                condition=args.get("condition", ""),
             )
         case "debug_set_function_breakpoints":
             return await debugger.set_function_breakpoints(

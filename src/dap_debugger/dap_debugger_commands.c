@@ -1307,20 +1307,138 @@ int handle_capabilities_command(DAPClient* client, const char* args) {
     return 0;
 }
 
+// Submit one data breakpoint (memory address OR register watch) to the server.
+//
+// The DAP setDataBreakpoints contract is "replace the entire set", so we re-send every
+// existing data breakpoint plus the new one. Shared by both the memory-address path and
+// the reg:NAME register-watch path so there is a single place that builds the request,
+// copies the existing entries, sends it, frees, and reports the verified result.
+//
+// Copies the `condition` field on existing entries too — without that, re-issuing `watch`
+// (which re-sends the full set) would silently wipe conditions previously set on other
+// watchpoints. `condition` may be NULL (memory watches don't carry one today).
+//
+// `what` is a human label for the report line (e.g. "phys 01000" or "reg:USP == 0x...");
+// `type_str` is the access/kind word shown in parentheses.
+static int submit_data_breakpoint(DAPClient* client,
+                                  const char* data_id,
+                                  DAPDataBreakpointAccessType access,
+                                  DAPDataBreakpointAddressSpace addr_space,
+                                  uint32_t address,
+                                  const char* condition,
+                                  const char* what,
+                                  const char* type_str) {
+    int existing_count = 0;
+    const DAPDataBreakpoint* existing = dap_client_get_data_breakpoints(client, &existing_count);
+
+    int total = existing_count + 1;
+    DAPDataBreakpoint* all_bps = calloc(total, sizeof(DAPDataBreakpoint));
+    if (!all_bps) return 0;
+
+    // Copy existing breakpoints (data_id + access + space + address + condition).
+    for (int i = 0; i < existing_count; i++) {
+        if (existing[i].data_id)
+            all_bps[i].data_id = strdup(existing[i].data_id);
+        all_bps[i].access_type = existing[i].access_type;
+        all_bps[i].address_space = existing[i].address_space;
+        all_bps[i].address = existing[i].address;
+        // Preserve any condition set on existing watchpoints (the latent bug fix).
+        if (existing[i].condition)
+            all_bps[i].condition = strdup(existing[i].condition);
+    }
+
+    // Append the new breakpoint.
+    all_bps[existing_count].data_id = strdup(data_id);
+    all_bps[existing_count].access_type = access;
+    all_bps[existing_count].address_space = addr_space;
+    all_bps[existing_count].address = address;
+    if (condition && *condition)
+        all_bps[existing_count].condition = strdup(condition);
+
+    DAPSetDataBreakpointsResult result = {0};
+    int error = dap_client_set_data_breakpoints(client, all_bps, total, &result);
+
+    // Free the temporary array (data_id + condition were strdup'd; hit_condition stays NULL).
+    for (int i = 0; i < total; i++) {
+        free(all_bps[i].data_id);
+        free(all_bps[i].condition);
+    }
+    free(all_bps);
+
+    if (error != DAP_ERROR_NONE) {
+        printf("Error setting watchpoint: %d\n", error);
+        if (result.base.message)
+            printf("  %s\n", result.base.message);
+        dap_set_data_breakpoints_result_free(&result);
+        return 0;
+    }
+
+    // Report the last added watchpoint (the one we just appended).
+    if (result.num_breakpoints > 0) {
+        size_t last = result.num_breakpoints - 1;
+        if (result.breakpoints[last].verified) {
+            printf("Watchpoint %d set at %s (%s)\n",
+                   result.breakpoints[last].id, what, type_str);
+        } else {
+            printf("Watchpoint at %s NOT verified", what);
+            if (result.breakpoints[last].message)
+                printf(": %s", result.breakpoints[last].message);
+            printf("\n");
+        }
+    }
+
+    dap_set_data_breakpoints_result_free(&result);
+    return 0;
+}
+
 int handle_watch_command(DAPClient* client, const char* args) {
     if (!client) return 0;
 
     if (!args || !*args) {
         printf("Usage: watch [space] <address> [read|write|readwrite]\n");
+        printf("       watch reg:<NAME> [condition]\n");
         printf("  watch 01000              - Watch virtual address 01000 for writes\n");
         printf("  watch 01000 read         - Watch virtual address 01000 for reads\n");
         printf("  watch 01000 readwrite    - Watch virtual address 01000 for read/write\n");
         printf("  watch 0x200              - Hex address (virtual)\n");
         printf("  watch phys 01000         - Watch physical address 01000 for writes\n");
+        printf("  watch reg:USP            - Break when register USP changes\n");
+        printf("  watch reg:USP == 0x50000204 - Break when USP equals a value\n");
+        printf("  watch reg:USP bit 27 -> 1   - Break when USP bit 27 goes 0->1\n");
+        printf("  watch reg:USP bit 27 changed - Break when USP bit 27 toggles\n");
         printf("  watch phys 0x200 read    - Watch physical hex address for reads\n");
         printf("  watch ispace 0xBA60      - Watch I-space address (instruction PT)\n");
         printf("  watch dspace 0xBA60      - Watch D-space address (data APT)\n");
         return 0;
+    }
+
+    // Register watch: "watch reg:NAME [condition...]". The whole remainder after the
+    // reg:NAME token is the condition, passed verbatim to the server (which owns ALL
+    // condition parsing). No octal-address encoding for register watches.
+    if (strncmp(args, "reg:", 4) == 0) {
+        const char* p = args;
+        while (*p && !isspace((unsigned char)*p)) p++;   // span the reg:NAME token
+        size_t idlen = (size_t)(p - args);
+        char* reg_data_id = malloc(idlen + 1);
+        if (!reg_data_id) return 0;
+        memcpy(reg_data_id, args, idlen);
+        reg_data_id[idlen] = '\0';
+
+        while (*p && isspace((unsigned char)*p)) p++;     // skip to the condition, if any
+        const char* condition = (*p != '\0') ? p : NULL;
+
+        char what[96];
+        if (condition)
+            snprintf(what, sizeof(what), "%s %s", reg_data_id, condition);
+        else
+            snprintf(what, sizeof(what), "%s", reg_data_id);
+
+        int rc = submit_data_breakpoint(client, reg_data_id,
+                                        DAP_DATA_BP_ACCESS_WRITE,
+                                        DAP_DATA_BP_ADDR_VIRTUAL, 0,
+                                        condition, what, "register");
+        free(reg_data_id);
+        return rc;
     }
 
     char* args_copy = strdup(args);
@@ -1371,73 +1489,23 @@ int handle_watch_command(DAPClient* client, const char* args) {
     else if (addr_space == DAP_DATA_BP_ADDR_DSPACE) space_char = 'D';
     snprintf(data_id, sizeof(data_id), "%c:%06o", space_char, address);
 
-    // Build the request including all existing data breakpoints plus this new one
-    int existing_count = 0;
-    const DAPDataBreakpoint* existing = dap_client_get_data_breakpoints(client, &existing_count);
-
-    int total = existing_count + 1;
-    DAPDataBreakpoint* all_bps = calloc(total, sizeof(DAPDataBreakpoint));
-    if (!all_bps) {
-        free(args_copy);
-        return 0;
+    // Map the access type to a label for the report line.
+    const char* type_str = "write";
+    switch (access) {
+        case DAP_DATA_BP_ACCESS_READ:      type_str = "read"; break;
+        case DAP_DATA_BP_ACCESS_WRITE:     type_str = "write"; break;
+        case DAP_DATA_BP_ACCESS_READWRITE: type_str = "read/write"; break;
     }
+    const char* space_str = addr_space == DAP_DATA_BP_ADDR_PHYSICAL ? "phys" : "virt";
+    char what[48];
+    snprintf(what, sizeof(what), "%s %06o", space_str, address);
 
-    // Copy existing
-    for (int i = 0; i < existing_count; i++) {
-        if (existing[i].data_id)
-            all_bps[i].data_id = strdup(existing[i].data_id);
-        all_bps[i].access_type = existing[i].access_type;
-        all_bps[i].address_space = existing[i].address_space;
-        all_bps[i].address = existing[i].address;
-    }
-
-    // Add new one
-    all_bps[existing_count].data_id = strdup(data_id);
-    all_bps[existing_count].access_type = access;
-    all_bps[existing_count].address_space = addr_space;
-    all_bps[existing_count].address = address;
-
-    DAPSetDataBreakpointsResult result = {0};
-    int error = dap_client_set_data_breakpoints(client, all_bps, total, &result);
-
-    // Free temporary array
-    for (int i = 0; i < total; i++)
-        free(all_bps[i].data_id);
-    free(all_bps);
-
-    if (error != DAP_ERROR_NONE) {
-        printf("Error setting watchpoint: %d\n", error);
-        if (result.base.message)
-            printf("  %s\n", result.base.message);
-        dap_set_data_breakpoints_result_free(&result);
-        free(args_copy);
-        return 0;
-    }
-
-    // Report the last added watchpoint
-    if (result.num_breakpoints > 0) {
-        size_t last = result.num_breakpoints - 1;
-        const char* type_str = "write";
-        switch (access) {
-            case DAP_DATA_BP_ACCESS_READ:      type_str = "read"; break;
-            case DAP_DATA_BP_ACCESS_WRITE:     type_str = "write"; break;
-            case DAP_DATA_BP_ACCESS_READWRITE: type_str = "read/write"; break;
-        }
-        const char* space_str = addr_space == DAP_DATA_BP_ADDR_PHYSICAL ? "phys" : "virt";
-        if (result.breakpoints[last].verified) {
-            printf("Watchpoint %d set at %s %06o (%s)\n",
-                   result.breakpoints[last].id, space_str, address, type_str);
-        } else {
-            printf("Watchpoint at %s %06o NOT verified", space_str, address);
-            if (result.breakpoints[last].message)
-                printf(": %s", result.breakpoints[last].message);
-            printf("\n");
-        }
-    }
-
-    dap_set_data_breakpoints_result_free(&result);
+    // Memory watches don't carry a condition today — pass NULL. Shared submit path
+    // builds/sends the full set and reports the result (see submit_data_breakpoint).
+    int rc = submit_data_breakpoint(client, data_id, access, addr_space, address,
+                                    NULL, what, type_str);
     free(args_copy);
-    return 0;
+    return rc;
 }
 
 int handle_info_command(DAPClient* client, const char* args) {

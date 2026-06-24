@@ -1007,8 +1007,10 @@ int handle_attach_command(DAPClient* client, const char* args) {
     if (dap_client_get_stack_trace(client, client->thread_id, &frames, &frame_count) == 0 && frame_count > 0) {
         printf("\n--- Stack Trace ---\n");
         for (int i = 0; i < frame_count; i++) {
-            printf("  #%d  %s", i, frames[i].instruction_pointer_reference ?
-                   frames[i].instruction_pointer_reference : "???");
+            if (frames[i].instruction_pointer_reference)
+                printf("  #%d  0x%X", i, frames[i].instruction_pointer_reference);
+            else
+                printf("  #%d  %s", i, "???");
             if (frames[i].name) printf(" in %s", frames[i].name);
             if (frames[i].source_path) printf(" at %s:%d", frames[i].source_path, frames[i].line);
             printf("\n");

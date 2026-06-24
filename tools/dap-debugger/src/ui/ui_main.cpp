@@ -177,7 +177,7 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
             client.connect(connect_host_, connect_port_);
             if (client.state() != ClientState::Connected) {
                 snprintf(connect_error_, sizeof(connect_error_),
-                         "Connection failed: %s:%d", connect_host_, connect_port_);
+                         "Connection failed: %.200s:%d", connect_host_, connect_port_);
             } else {
                 client.initialize();
                 if (client.state() == ClientState::Initialized && launch_program_[0]) {
@@ -193,7 +193,7 @@ void UIMain::render(DebuggerClient& client, const AppConfig& config)
             client.connect(connect_host_, connect_port_);
             if (client.state() != ClientState::Connected) {
                 snprintf(connect_error_, sizeof(connect_error_),
-                         "Connection failed: %s:%d", connect_host_, connect_port_);
+                         "Connection failed: %.200s:%d", connect_host_, connect_port_);
             } else {
                 client.initialize();
                 if (client.state() == ClientState::Initialized) {

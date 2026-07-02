@@ -2462,17 +2462,28 @@ int handle_launch(DAPServer *server, cJSON *args, DAPResponse *response)
         return -1;
     }
 
-    // TODO: Evaluate all fields for the response and if STOP event should be sent (as its probably handled elsewhere)
-
-    // Set debugger state    
+    // Set debugger state
     server->attached = true;
-    server->debugger_state.has_stopped = true;
     server->debugger_state.current_thread_id = 1; // make sure we have a thread id
 
-    // Send default events if no callback is registered
-    DAP_SERVER_DEBUG_LOG("Sending stopped event after launch response");
-    // Stopped at entry point (program start).
-    dap_server_send_stopped_event(server, "entry", NULL);
+    // Only mark the target as stopped and emit an 'entry' stopped event when the
+    // client actually requested stop-on-entry. Unconditionally doing so left the
+    // server believing a freely-running CPU was paused: a subsequent 'pause' was
+    // then rejected by handle_pause() as "already paused" (surfacing to the client
+    // as a generic "Unknown error"), and a spurious 'stopped/entry' event was sent
+    // for a program that never stopped. The implementation callback is responsible
+    // for setting the run mode; here we only reflect it in the DAP state.
+    if (server->debugger_state.stop_at_entry)
+    {
+        server->debugger_state.has_stopped = true;
+        DAP_SERVER_DEBUG_LOG("Sending stopped event after launch response");
+        // Stopped at entry point (program start).
+        dap_server_send_stopped_event(server, "entry", NULL);
+    }
+    else
+    {
+        server->debugger_state.has_stopped = false;
+    }
 
     // Per DAP spec and Microsoft's implementation, a launch response should be minimal with no body
     if (callback_result >= 0)

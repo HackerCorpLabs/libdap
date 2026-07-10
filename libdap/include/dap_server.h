@@ -867,6 +867,22 @@ int dap_server_register_command(DAPServer *server, int command_id, DAPCommandHan
  */
 int dap_server_send_response(DAPServer *server, DAPCommandType command, int sequence, int request_seq, bool success, cJSON *body);
 
+/**
+ * @brief Send an error response with a human-readable error message
+ *
+ * Builds a DAP ErrorResponse (success=false) carrying the spec's top-level
+ * "message" field and a body.error Message object, so clients can display
+ * the actual reason a request was rejected.
+ *
+ * @param server Server instance
+ * @param command Command type (must match the originating request)
+ * @param sequence Sequence number (unique for each request)
+ * @param request_seq Sequence number from the request (must match the originating request)
+ * @param error_message Human-readable error text; NULL falls back to "Command failed"
+ * @return int 0 on success, -1 on error
+ */
+int dap_server_send_error_response(DAPServer *server, DAPCommandType command, int sequence, int request_seq, const char *error_message);
+
 
 /**
  * @brief Send an event to the client

@@ -667,9 +667,19 @@ int dap_server_handle_request(DAPServer *server, const char *request)
     // Send the response with the same command type as the request
     if (result >= 0)
     {
-        cJSON *response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
-        dap_server_send_response(server, command, response.sequence, request_seq, response.success, response_body);
-        // cJSON_Delete(response_body); (double free)
+        if (!response.success)
+        {
+            // Handler completed but reported failure: surface its error message
+            // to the client instead of a bare success=false.
+            dap_server_send_error_response(server, command, response.sequence, request_seq,
+                                           response.error_message);
+        }
+        else
+        {
+            cJSON *response_body = response.data ? cJSON_Parse(response.data) : cJSON_CreateObject();
+            dap_server_send_response(server, command, response.sequence, request_seq, response.success, response_body);
+            // cJSON_Delete(response_body); (double free)
+        }
 
         // If this was an initialize request and it was successful, send the 'initialized' event
         if (command == DAP_CMD_INITIALIZE && response.success)
@@ -689,8 +699,11 @@ int dap_server_handle_request(DAPServer *server, const char *request)
             }
         }
     } else {
-        // If the command failed, send an error response
-        dap_server_send_response(server, command, response.sequence, request_seq, false, NULL);
+        // If the command failed, send an error response carrying the handler's
+        // error message (previously the message was dropped and clients only
+        // saw an opaque success=false, rendered as "Unknown error").
+        dap_server_send_error_response(server, command, response.sequence, request_seq,
+                                       response.error_message);
     }
 
     // Clean up response
@@ -917,6 +930,77 @@ int dap_server_send_response(DAPServer *server, DAPCommandType command,
 
     // Log the full response content
     // DAP_SERVER_DEBUG_LOG("Sending response: %s", response_str);
+
+    if (dap_transport_send(server->transport, response_str) < 0)
+    {
+        dap_error_set(DAP_ERROR_TRANSPORT, "Failed to send response");
+        free(response_str);
+        return -1;
+    }
+
+    free(response_str);
+    return 0;
+}
+
+/**
+ * @brief Send an error response carrying a human-readable error message
+ *
+ * Builds a DAP ErrorResponse: success=false with the spec's top-level
+ * "message" field and a body.error Message object, so clients can show the
+ * actual reason a request was rejected instead of a generic failure.
+ *
+ * @param server Server instance
+ * @param command Command type the response is for
+ * @param sequence Response sequence number
+ * @param request_seq Sequence number of the request being answered
+ * @param error_message Human-readable error text (may be NULL)
+ * @return int 0 on success, -1 on error
+ */
+int dap_server_send_error_response(DAPServer *server, DAPCommandType command,
+                                   int sequence, int request_seq,
+                                   const char *error_message)
+{
+    if (!server)
+    {
+        dap_error_set(DAP_ERROR_INVALID_ARG, "Invalid server");
+        return -1;
+    }
+
+    const char *message = error_message ? error_message : "Command failed";
+
+    cJSON *response = cJSON_CreateObject();
+    if (!response)
+    {
+        return -1;
+    }
+
+    cJSON_AddStringToObject(response, "type", "response");
+    cJSON_AddNumberToObject(response, "seq", sequence);
+    cJSON_AddNumberToObject(response, "request_seq", request_seq);
+    cJSON_AddStringToObject(response, "command", get_command_string(command));
+    cJSON_AddBoolToObject(response, "success", false);
+    cJSON_AddStringToObject(response, "message", message);
+
+    cJSON *body = cJSON_CreateObject();
+    if (body)
+    {
+        cJSON *error_obj = cJSON_CreateObject();
+        if (error_obj)
+        {
+            cJSON_AddNumberToObject(error_obj, "id", (int)command);
+            cJSON_AddStringToObject(error_obj, "format", message);
+            cJSON_AddItemToObject(body, "error", error_obj);
+        }
+        cJSON_AddItemToObject(response, "body", body);
+    }
+
+    char *response_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    if (!response_str)
+    {
+        return -1;
+    }
 
     if (dap_transport_send(server->transport, response_str) < 0)
     {

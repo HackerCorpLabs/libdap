@@ -2517,15 +2517,25 @@ cleanup:
 
 int handle_attach(DAPServer *server, cJSON *args, DAPResponse *response)
 {
-    cJSON *pid = cJSON_GetObjectItem(args, "pid");
-    if (!pid || !cJSON_IsNumber(pid))
+    /* pid is optional: emulator/bare-metal targets have no OS process id.
+     * When absent, default to 1 (there is normally only one thread). */
+    int pid_value = 1;
+    cJSON *pid = args ? cJSON_GetObjectItem(args, "pid") : NULL;
+    if (pid)
     {
-        response->success = false;
-        response->error_message = strdup("Missing or invalid process ID");
-        return 0;
-    }    
+        if (!cJSON_IsNumber(pid))
+        {
+            response->success = false;
+            response->error_message = strdup("Invalid process ID (must be a number)");
+            return 0;
+        }
+        pid_value = pid->valueint;
+    }
+    DAP_SERVER_DEBUG_LOG("Attach: pid=%d%s", pid_value, pid ? "" : " (defaulted)");
+
     server->attached = true;
     server->debugger_state.has_stopped = true;
+    server->debugger_state.current_thread_id = 1;
 
     // Create a proper JSON object instead of using strdup
     cJSON *body = cJSON_CreateObject();
